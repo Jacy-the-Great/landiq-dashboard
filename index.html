@@ -1,0 +1,1924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Land iQ Performance</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  --navy:#1a3c5e; --navy2:#24527f; --acc:#2e8bc0; --acc2:#e8f3f9;
+  --sur:#f4f6f8; --wh:#fff; --tx:#1a2733; --tm:#4a5f70; --tl:#8a9fb0;
+  --bd:#dde5ec; --gr:#2a7a4b; --gr2:#e8f5ee; --wa:#c25a00; --wa2:#fdf0e6;
+  --re:#c0392b; --re2:#fdecea;
+  --shadow:0 1px 3px rgba(0,0,0,.08),0 4px 12px rgba(0,0,0,.06);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',system-ui,sans-serif;background:var(--sur);color:var(--tx);font-size:14px;min-height:100vh}
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+
+/* LOCK */
+#lock{position:fixed;inset:0;background:var(--navy);display:flex;align-items:center;justify-content:center;z-index:9999;flex-direction:column;gap:24px}
+.lock-card{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:40px;width:340px;display:flex;flex-direction:column;gap:16px;backdrop-filter:blur(10px)}
+.lock-logo{color:#fff;font-size:22px;font-weight:700;text-align:center;letter-spacing:-.02em}.lock-logo span{color:var(--acc)}
+.lock-sub{color:rgba(255,255,255,.4);font-size:12px;text-align:center;letter-spacing:.1em;text-transform:uppercase}
+.lock-input{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);color:#fff;padding:12px 16px;border-radius:8px;font-size:14px;width:100%;font-family:inherit;outline:none}
+.lock-input::placeholder{color:rgba(255,255,255,.3)}
+.lock-input:focus{border-color:var(--acc)}
+.lock-btn{background:var(--acc);color:#fff;border:none;padding:12px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:.2s}
+.lock-btn:hover{background:var(--navy2)}
+.lock-err{color:#ff6b6b;font-size:12px;text-align:center;min-height:18px}
+
+/* LAYOUT */
+#app{display:none;flex-direction:column;min-height:100vh}
+header{background:var(--navy);height:52px;display:flex;align-items:center;padding:0 24px;gap:12px;position:sticky;top:0;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.h-logo{color:#fff;font-weight:700;font-size:16px;letter-spacing:-.02em}.h-logo span{color:var(--acc)}
+.h-tag{font-size:9px;color:rgba(255,255,255,.35);border:1px solid rgba(255,255,255,.15);border-radius:3px;padding:2px 7px;letter-spacing:.1em;font-family:'DM Mono',monospace}
+.h-space{flex:1}
+.h-actions{display:flex;gap:8px;align-items:center}
+.h-link{font-size:12px;color:rgba(255,255,255,.5);background:none;border:none;cursor:pointer;padding:4px 10px;border-radius:4px;font-family:inherit;text-decoration:none;transition:.15s}
+.h-link:hover{color:#fff;background:rgba(255,255,255,.08)}
+
+nav{background:var(--wh);border-bottom:1px solid var(--bd);padding:0 24px;display:flex;overflow-x:auto;flex-shrink:0}
+.nav-btn{padding:13px 16px 11px;background:none;border:none;border-bottom:2px solid transparent;color:var(--tl);font-weight:400;font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap;transition:.15s;margin-bottom:-1px}
+.nav-btn:hover{color:var(--navy)}
+.nav-btn.active{color:var(--navy);font-weight:600;border-bottom-color:var(--acc)}
+
+main{flex:1;padding:24px;max-width:1100px;margin:0 auto;width:100%}
+
+/* CARDS */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin-bottom:18px}
+.card{background:var(--wh);border:1px solid var(--bd);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:4px;box-shadow:var(--shadow)}
+.card-label{font-size:11px;color:var(--tl);text-transform:uppercase;letter-spacing:.07em;font-weight:500}
+.card-value{font-size:24px;font-weight:700;color:var(--navy);letter-spacing:-.03em;line-height:1.1}
+.card-nodata{font-size:13px;color:var(--tl)}
+.card-change{font-size:11px;font-weight:600}
+.card-change.up{color:var(--gr)}.card-change.dn{color:var(--re)}
+.card-sub{font-size:11px;color:var(--tl)}
+
+/* BOXES */
+.box{background:var(--wh);border:1px solid var(--bd);border-radius:12px;padding:20px;margin-bottom:14px;box-shadow:var(--shadow)}
+.box-title{font-size:12px;font-weight:600;color:var(--navy);margin-bottom:14px;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+.box-title a{font-size:11px;color:var(--acc);font-weight:400;text-decoration:none}
+.box-title a:hover{text-decoration:underline}
+.no-data{text-align:center;color:var(--tl);font-size:13px;padding:40px 0}
+
+/* CALLOUT */
+.callout{border-radius:8px;padding:12px 16px;margin-bottom:14px}
+.callout.warn{background:var(--wa2);border:1px solid #e5b896}
+.callout.info{background:var(--acc2);border:1px solid #b3d4e8}
+.callout.good{background:var(--gr2);border:1px solid #a8d5b5}
+.callout-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+.callout.warn .callout-label{color:var(--wa)}
+.callout.info .callout-label{color:var(--acc)}
+.callout.good .callout-label{color:var(--gr)}
+.callout-text{font-size:13px;color:var(--tm);line-height:1.5}
+
+/* FORMS */
+.form-section{margin-bottom:14px}
+.add-btn{background:var(--navy);color:#fff;border:none;border-radius:7px;padding:9px 18px;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit;transition:.15s}
+.add-btn:hover{background:var(--navy2)}
+.add-btn.sec{background:none;color:var(--navy);border:1px solid var(--bd)}
+.add-btn.sec:hover{background:var(--sur)}
+.form-box{background:var(--wh);border:1px solid var(--bd);border-radius:12px;padding:20px;margin-top:10px;box-shadow:var(--shadow)}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:14px}
+.form-group{display:flex;flex-direction:column;gap:4px}
+label{font-size:11px;color:var(--tm);font-weight:500;letter-spacing:.02em}
+input,select,textarea{padding:8px 10px;border:1px solid var(--bd);border-radius:6px;font-size:13px;font-family:inherit;color:var(--tx);background:var(--wh);outline:none;transition:.15s;width:100%}
+input:focus,select:focus,textarea:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(46,139,192,.1)}
+textarea{resize:vertical;min-height:70px}
+.form-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.btn-save{background:var(--acc);color:#fff;border:none;border-radius:6px;padding:9px 20px;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit}
+.btn-save:hover{background:#2477a8}
+.btn-cancel{background:none;border:1px solid var(--bd);color:var(--tm);border-radius:6px;padding:9px 16px;font-size:13px;cursor:pointer;font-family:inherit}
+.form-divider{font-size:12px;color:var(--tl);padding:8px 0;border-top:1px solid var(--bd);margin-bottom:8px}
+.source-note{font-size:10px;color:var(--tl);margin-top:2px}
+.input-group-label{font-size:12px;font-weight:600;color:var(--navy);margin:14px 0 8px;padding-top:10px;border-top:1px solid var(--bd)}
+
+/* TABLE */
+.tbl-wrap{background:var(--wh);border:1px solid var(--bd);border-radius:12px;overflow:hidden;margin-bottom:14px;box-shadow:var(--shadow)}
+.tbl-head{font-size:11px;font-weight:600;color:var(--tl);text-transform:uppercase;letter-spacing:.07em;padding:10px 16px;border-bottom:1px solid var(--bd);background:#fafafa;display:flex;justify-content:space-between;align-items:center}
+.tbl-scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:8px 12px;color:var(--tl);font-weight:500;font-size:11px;border-bottom:1px solid var(--bd);background:#fafafa;white-space:nowrap}
+td{padding:8px 12px;color:var(--tm);border-bottom:1px solid var(--bd);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#fafcfe}
+.btn-del{background:none;border:none;color:var(--re);font-size:11px;cursor:pointer;font-family:inherit;padding:2px 6px}
+.show-all-btn{font-size:12px;color:var(--acc);background:none;border:none;cursor:pointer;padding:8px 16px;font-family:inherit}
+
+/* BADGES */
+.badge{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:3px;text-transform:uppercase;letter-spacing:.05em}
+.badge-linkedin{background:#e1f3ff;color:#0a66c2}
+.badge-youtube{background:#ffe1e1;color:#c0392b}
+.badge-edm{background:#e8f5ee;color:#2a7a4b}
+.badge-viva{background:#fff3e0;color:#c25a00}
+.badge-blog{background:#f3e5f5;color:#7b1fa2}
+.badge-speaking{background:#e0f2f1;color:#00796b}
+.badge-webinar{background:#e8eaf6;color:#3949ab}
+
+/* PIPELINE */
+.pipeline{display:grid;gap:0;margin-bottom:14px}
+.pipeline-stage{display:flex;align-items:center;gap:0;position:relative}
+.stage-bar-wrap{flex:1;background:var(--wh);border:1px solid var(--bd);padding:12px 16px;position:relative;overflow:hidden}
+.stage-bar-wrap:first-child{border-radius:8px 8px 0 0}
+.stage-bar-wrap:last-child{border-radius:0 0 8px 8px}
+.stage-bg{position:absolute;left:0;top:0;bottom:0;background:var(--acc2);transition:.5s}
+.stage-content{position:relative;display:flex;align-items:center;gap:12px}
+.stage-name{font-size:12px;font-weight:500;color:var(--navy);min-width:160px}
+.stage-count{font-size:20px;font-weight:700;color:var(--navy);min-width:50px;font-family:'DM Mono',monospace}
+.stage-conv{font-size:11px;color:var(--tm);display:flex;align-items:center;gap:4px}
+.stage-conv-arrow{font-size:10px;color:var(--tl)}
+.stage-target{font-size:11px;color:var(--tl);margin-left:auto}
+
+/* RANGE TOGGLE */
+.range-toggle{display:flex;gap:4px;background:var(--sur);border-radius:6px;padding:3px}
+.range-btn{background:none;border:none;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:inherit;color:var(--tl);font-weight:500}
+.range-btn.active{background:var(--wh);color:var(--navy);box-shadow:0 1px 3px rgba(0,0,0,.1)}
+
+/* FUNNEL CONV TABLE */
+.conv-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:12px}
+.conv-table th{text-align:left;padding:6px 10px;color:var(--tl);font-size:11px;font-weight:500;border-bottom:1px solid var(--bd)}
+.conv-table td{padding:6px 10px;border-bottom:1px solid var(--bd)}
+.conv-table tr:last-child td{border-bottom:none}
+.conv-pct{font-family:'DM Mono',monospace;font-weight:600}
+.conv-pct.good{color:var(--gr)}.conv-pct.mid{color:var(--wa)}.conv-pct.bad{color:var(--re)}
+
+/* OUTCOME ITEM */
+.outcome-item{font-size:13px;color:var(--tm);padding:8px 12px;border-left:3px solid var(--acc);margin-bottom:8px;line-height:1.5;background:var(--acc2);border-radius:0 6px 6px 0}
+
+/* FRESHNESS ROW */
+.fresh-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--bd);font-size:13px}
+.fresh-row:last-child{border-bottom:none}
+
+/* TABS WITHIN TAB */
+.sub-tabs{display:flex;gap:4px;margin-bottom:16px;background:var(--sur);padding:4px;border-radius:8px;width:fit-content}
+.sub-tab{background:none;border:none;padding:6px 14px;border-radius:5px;font-size:12px;cursor:pointer;font-family:inherit;color:var(--tl);font-weight:500}
+.sub-tab.active{background:var(--wh);color:var(--navy);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+
+/* TOAST */
+#toast{position:fixed;bottom:24px;right:24px;background:var(--navy);color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:500;z-index:9999;display:none;box-shadow:0 4px 16px rgba(0,0,0,.2);animation:slideup .2s ease}
+@keyframes slideup{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
+
+/* CHART WRAP */
+.chart-wrap{position:relative;width:100%}
+
+/* SOURCE LINK */
+.src-link{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--acc);text-decoration:none;padding:3px 8px;border:1px solid var(--bd);border-radius:4px;background:var(--wh)}
+.src-link:hover{background:var(--acc2)}
+
+/* SECTION HEADER */
+.section-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.section-title{font-size:18px;font-weight:700;color:var(--navy);letter-spacing:-.02em}
+.section-sub{font-size:12px;color:var(--tl);margin-top:2px}
+</style>
+</head>
+<body>
+
+<!-- LOCK SCREEN -->
+<div id="lock">
+  <div class="lock-card">
+    <div class="lock-logo">Land <span>iQ</span> Performance</div>
+    <div class="lock-sub">Internal · Restricted Access</div>
+    <input class="lock-input" type="password" id="lock-pass" placeholder="Enter password" autocomplete="off">
+    <button class="lock-btn" onclick="tryLogin()">Enter dashboard</button>
+    <div class="lock-err" id="lock-err"></div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <header>
+    <div class="h-logo">Land <span>iQ</span> Performance</div>
+    <div class="h-tag">INTERNAL</div>
+    <div class="h-space"></div>
+    <div class="h-actions">
+      <button class="h-link" onclick="exportData()">⬇ Export data</button>
+      <button class="h-link" onclick="confirmClear()">Clear all</button>
+    </div>
+  </header>
+
+  <nav id="main-nav"></nav>
+  <main id="main-content"></main>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ─────────────────────────────────────────
+// AUTH
+// ─────────────────────────────────────────
+const PASS = 'LiQ#Perf@2026';
+const TARGET_USERS = 600;
+const TARGET_ARR = 2400000;
+
+function tryLogin() {
+  const v = document.getElementById('lock-pass').value;
+  if (v === PASS) {
+    sessionStorage.setItem('liq_auth', '1');
+    document.getElementById('lock').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    init();
+  } else {
+    document.getElementById('lock-err').textContent = 'Incorrect password.';
+    document.getElementById('lock-pass').value = '';
+  }
+}
+
+document.getElementById('lock-pass').addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
+
+if (sessionStorage.getItem('liq_auth') === '1') {
+  document.getElementById('lock').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+}
+
+// ─────────────────────────────────────────
+// DATA LAYER
+// ─────────────────────────────────────────
+const KEYS = { sales:'liq_sales', trials:'liq_trials', website:'liq_website', training:'liq_training', content:'liq_content', webinars:'liq_webinars', linkedin_weekly:'liq_linkedin', edm_2m:'liq_edm2m', weekly_tracker:'liq_tracker' };
+
+function load(key) { try { return JSON.parse(localStorage.getItem(KEYS[key]) || '[]'); } catch { return []; } }
+function save(key, arr) { localStorage.setItem(KEYS[key], JSON.stringify(arr)); }
+
+function exportData() {
+  const data = {};
+  Object.keys(KEYS).forEach(k => data[k] = load(k));
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'landiq_dashboard_' + new Date().toISOString().slice(0,10) + '.json';
+  a.click();
+  toast('Data exported successfully.');
+}
+
+function importBackup(json) {
+  try {
+    const data = JSON.parse(json);
+    Object.keys(KEYS).forEach(k => { if (data[k]) save(k, data[k]); });
+    toast('Backup imported successfully.');
+    renderTab(activeTab);
+  } catch { toast('Import failed: invalid JSON.'); }
+}
+
+function confirmClear() {
+  if (confirm('Delete ALL dashboard data? This cannot be undone.')) {
+    Object.values(KEYS).forEach(k => localStorage.removeItem(k));
+    toast('All data cleared.');
+    renderTab(activeTab);
+  }
+}
+
+// ─────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────
+const fmtDate = d => d ? new Date(d).toLocaleDateString('en-AU', { day:'2-digit', month:'short', year:'numeric' }) : ':';
+const fmtNum  = n => n != null ? Number(n).toLocaleString() : ':';
+const fmtPct  = n => n != null ? Number(n).toFixed(1) + '%' : ':';
+const fmtDollar = n => n != null ? '$' + Number(n).toLocaleString() : ':';
+const pct = (a, b) => (a != null && b && b !== 0) ? (a / b * 100) : null;
+
+function thisMonth(arr, dateKey = 'week') {
+  const now = new Date();
+  return arr.filter(r => {
+    const d = new Date(r[dateKey]);
+    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  });
+}
+
+function monthKey(dateStr) {
+  const d = new Date(dateStr);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+function monthLabel(key) {
+  const [y, m] = key.split('-');
+  return new Date(y, m - 1).toLocaleString('default', { month: 'short', year: '2-digit' });
+}
+
+let charts = {};
+function destroyChart(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+
+function makeChart(id, config) {
+  destroyChart(id);
+  const canvas = document.getElementById(id);
+  if (!canvas) return;
+  charts[id] = new Chart(canvas, config);
+}
+
+const axStyle = { font: { family: 'DM Sans', size: 11 }, color: '#8a9fb0' };
+const gridStyle = { color: '#f0f2f4' };
+
+function toast(msg, dur = 3000) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(() => el.style.display = 'none', dur);
+}
+
+function delRow(key, id, dateKey = 'week') {
+  const label = dateKey === 'week' ? 'week of ' + fmtDate(id) : 'this entry';
+  if (!confirm('Delete ' + label + '?')) return;
+  save(key, load(key).filter(r => (r._id || r.week) !== id));
+  toast('Entry deleted.');
+  renderTab(activeTab);
+}
+
+// ─────────────────────────────────────────
+// TABS
+// ─────────────────────────────────────────
+const TABS = [
+  { id: 'home',     label: 'Home' },
+  { id: 'sales',    label: 'Sales Funnel' },
+  { id: 'trials',   label: 'Trials Pipeline' },
+  { id: 'website',  label: 'Website' },
+  { id: 'training', label: 'Training' },
+  { id: 'marketing', label: 'Marketing' },
+];
+
+let activeTab = 'home';
+let activeSub = {};
+
+function buildNav() {
+  const nav = document.getElementById('main-nav');
+  nav.innerHTML = TABS.map(t =>
+    `<button class="nav-btn${t.id === activeTab ? ' active' : ''}" onclick="switchTab('${t.id}')">${t.label}</button>`
+  ).join('');
+}
+
+function switchTab(id) {
+  activeTab = id;
+  buildNav();
+  renderTab(id);
+}
+
+function renderTab(id) {
+  const mc = document.getElementById('main-content');
+  destroyAllCharts();
+  const renderers = { home: renderHome, sales: renderSales, trials: renderTrials, website: renderWebsite, training: renderTraining, marketing: renderMarketing };
+  if (renderers[id]) renderers[id](mc);
+}
+
+function destroyAllCharts() {
+  Object.keys(charts).forEach(id => { charts[id].destroy(); delete charts[id]; });
+}
+
+// ─────────────────────────────────────────
+// SUMMARY CARD BUILDER
+// ─────────────────────────────────────────
+function cardHTML(label, value, prev, type, sub) {
+  let disp = value == null ? null : type === '$' ? fmtDollar(value) : type === '%' ? fmtPct(value) : fmtNum(value);
+  let changeHTML = '';
+  if (value != null && prev != null && prev !== 0) {
+    const d = ((value - prev) / prev * 100).toFixed(1);
+    const up = value >= prev;
+    changeHTML = `<div class="card-change ${up ? 'up' : 'dn'}">${up ? '▲' : '▼'} ${d}%</div>`;
+  }
+  return `<div class="card">
+    <div class="card-label">${label}</div>
+    ${disp ? `<div class="card-value">${disp}</div>` : '<div class="card-nodata">no data</div>'}
+    ${changeHTML}
+    ${sub ? `<div class="card-sub">${sub}</div>` : ''}
+  </div>`;
+}
+
+function cardsHTML(items) {
+  return `<div class="cards">${items.map(i => cardHTML(...i)).join('')}</div>`;
+}
+
+// ─────────────────────────────────────────
+// DATA TABLE BUILDER
+// ─────────────────────────────────────────
+function tableHTML(key, rows, cols, idField, showAllKey) {
+  const limit = activeSub[showAllKey || key + '_all'] ? rows.length : 8;
+  const visible = [...rows].reverse().slice(0, limit);
+  if (!rows.length) return `<div class="box"><div class="no-data">No entries yet.</div></div>`;
+  return `<div class="tbl-wrap">
+    <div class="tbl-head">Recent entries
+      ${rows.length > 8 ? `<button class="show-all-btn" onclick="toggleShowAll('${showAllKey || key + '_all'}')">${activeSub[showAllKey || key + '_all'] ? 'Show less' : 'Show all ' + rows.length}</button>` : ''}
+    </div>
+    <div class="tbl-scroll"><table>
+      <thead><tr>${cols.map(c => `<th>${c.label}</th>`).join('')}<th></th></tr></thead>
+      <tbody>${visible.map(row => `<tr>${cols.map(c => `<td>${c.render ? c.render(row) : (row[c.key] != null ? row[c.key] : ':')}</td>`).join('')}
+        <td><button class="btn-del" onclick="delRow('${key}','${row[idField] || row.week || row._id}','${idField}')"">Delete</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+  </div>`;
+}
+
+function toggleShowAll(key) {
+  activeSub[key] = !activeSub[key];
+  renderTab(activeTab);
+}
+
+// ─────────────────────────────────────────
+// HOME TAB
+// ─────────────────────────────────────────
+function renderHome(el) {
+  const sales    = load('sales');
+  const trials   = load('trials');
+  const website  = load('website');
+  const training = load('training');
+  const content  = load('content');
+
+  const sl = sales.length ? sales[sales.length - 1] : null;
+  const ul = trials.length ? trials[trials.length - 1] : null;
+  const wl = website.length ? website[website.length - 1] : null;
+  const trainedTotal = training.reduce((s, r) => s + (r.attendees || 0), 0);
+  const contentThisMonth = thisMonth(content, 'date').length;
+
+  const sdkPct = pct(ul?.sdkActive, ul?.trialsGranted);
+  const outcomes = content.filter(c => c.outcome && c.outcome.trim());
+
+  const mods = [
+    { name: 'Sales Funnel',    last: sl,                   dk: 'week' },
+    { name: 'Trials Pipeline', last: ul,                   dk: 'week' },
+    { name: 'Website',         last: wl,                   dk: 'week' },
+    { name: 'Training',        last: training[training.length - 1], dk: 'date' },
+    { name: 'Marketing',        last: content[content.length - 1],   dk: 'date' },
+  ];
+
+  const trendData = sales.slice(-12);
+
+  el.innerHTML = `
+    ${cardsHTML([
+      ['Revenue (month)', sl?.revenue, null, '$'],
+      ['Won deals (month)', sl?.won, null, null],
+      ['Win rate', sl?.winRate, null, '%'],
+      ['SDK active (trials)', sdkPct, null, '%'],
+      ['Website users', wl?.users, null, null],
+      ['People trained', trainedTotal, null, null],
+    ])}
+
+    <div class="box">
+      <div class="box-title">Combined trends: 12 weeks</div>
+      <div class="chart-wrap" style="height:240px"><canvas id="home-trend"></canvas></div>
+    </div>
+
+    <div class="box">
+      <div class="box-title">Data freshness</div>
+      ${mods.map(m => {
+        const dv = m.last ? m.last[m.dk] : null;
+        const stale = !dv || (Date.now() - new Date(dv).getTime() > 10 * 86400000);
+        return `<div class="fresh-row">
+          <span style="color:var(--navy);font-weight:500">${m.name}</span>
+          <span style="color:${stale ? 'var(--wa)' : 'var(--tm)'}">${dv ? (stale ? '⚠ ' : '') + fmtDate(dv) : 'No data yet'}</span>
+        </div>`;
+      }).join('')}
+    </div>
+
+    <div class="box">
+      <div class="box-title">Documented content outcomes</div>
+      ${outcomes.length ? outcomes.map(o => `<div class="outcome-item"><strong>${o.type}:</strong> ${o.title || 'Untitled'}: ${o.outcome}</div>`).join('')
+        : '<div style="font-size:13px;color:var(--tl);font-style:italic">No outcomes logged yet. Add a linked outcome to any content entry.</div>'}
+    </div>
+  `;
+
+  if (trendData.length) {
+    const trialData = load('trials');
+    makeChart('home-trend', {
+      type: 'line',
+      data: {
+        labels: trendData.map(r => fmtDate(r.week).slice(0, 6)),
+        datasets: [
+          { label: 'Website users', data: trendData.map(r => r.websiteUsers || 0), borderColor: '#2e8bc0', borderWidth: 2, dot: false, tension: .3, pointRadius: 2, yAxisID: 'y' },
+          { label: 'Trials active', data: trendData.map(r => { const u = trialData.find(t => t.week === r.week); return u ? (u.trialsGranted || 0) : 0; }), borderColor: '#1a3c5e', borderWidth: 2, tension: .3, pointRadius: 2, yAxisID: 'y' },
+          { label: 'Deals won', data: trendData.map(r => r.won || 0), borderColor: '#2a7a4b', borderWidth: 2, tension: .3, pointRadius: 3, yAxisID: 'y1' },
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, color: '#4a5f70', padding: 16, boxWidth: 12 } } },
+        scales: {
+          x: { grid: gridStyle, ticks: axStyle },
+          y: { type: 'linear', position: 'left', grid: gridStyle, ticks: axStyle, beginAtZero: true },
+          y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, ticks: axStyle, beginAtZero: true },
+        }
+      }
+    });
+  }
+}
+
+// ─────────────────────────────────────────
+// SALES FUNNEL TAB
+// ─────────────────────────────────────────
+const DEAL_STAGES = [
+  { key: 'contactMade',   label: 'Contact Made / Discovery' },
+  { key: 'meetingSched',  label: 'Meeting Scheduled' },
+  { key: 'negotiations',  label: 'Negotiations' },
+  { key: 'orderFormSent', label: 'Order Form Sent' },
+  { key: 'orderSigned',   label: 'Signed Order Form' },
+  { key: 'invoiceSent',   label: 'Invoice Sent' },
+  { key: 'won',           label: 'Won' },
+];
+
+function renderSales(el) {
+  el = el || document.getElementById('main-content');
+  const data = load('sales');
+  const sub = activeSub.sales_sub || 'pipeline';
+
+  const tm = thisMonth(data, 'week');
+  const sl = data.length ? data[data.length - 1] : null;
+  const sp = data.length > 1 ? data[data.length - 2] : null;
+
+  // Monthly aggregation for win/loss
+  const monthlyWL = {};
+  data.forEach(r => {
+    const k = monthKey(r.week);
+    if (!monthlyWL[k]) monthlyWL[k] = { won: 0, lost: 0, wonVal: 0, lostVal: 0 };
+    monthlyWL[k].won     += r.won     || 0;
+    monthlyWL[k].lost    += r.lost    || 0;
+    monthlyWL[k].wonVal  += r.wonVal  || 0;
+    monthlyWL[k].lostVal += r.lostVal || 0;
+  });
+  const wlMonths = Object.entries(monthlyWL).sort().slice(-6);
+
+  // Source aggregation
+  const sources = ['Webinar', 'Helpdesk EOI', 'Vendor initiative', 'Customer initiated', 'Emailed'];
+  const sourceMonth = {};
+  data.forEach(r => {
+    const k = monthKey(r.week);
+    if (!sourceMonth[k]) sourceMonth[k] = {};
+    sources.forEach(s => {
+      const sk = s.replace(/ /g, '_').toLowerCase();
+      sourceMonth[k][sk] = (sourceMonth[k][sk] || 0) + (r['src_' + sk] || 0);
+    });
+  });
+  const srcMonths = Object.entries(sourceMonth).sort().slice(-6);
+
+  el.innerHTML = `
+    <div class="section-header">
+      <div>
+        <div class="section-title">Sales Funnel</div>
+        <div class="section-sub">Pipedrive deal pipeline: Opt-Max conversion tracking</div>
+      </div>
+      <a class="src-link" href="https://app.pipedrive.com" target="_blank">↗ Pipedrive</a>
+    </div>
+
+    ${cardsHTML([
+      ['Won this month', sl?.won, sp?.won],
+      ['Revenue (month)', sl?.revenue, sp?.revenue, '$'],
+      ['Win rate', sl?.winRate, sp?.winRate, '%'],
+      ['Lost this month', sl?.lost, sp?.lost],
+      ['Avg deal value', sl?.avgDealVal, null, '$'],
+      ['New deals added', sl?.newDeals, sp?.newDeals],
+    ])}
+
+    <div class="sub-tabs">
+      ${['pipeline','winloss','sources','ratios'].map(s =>
+        `<button class="sub-tab${sub === s ? ' active' : ''}" onclick="setSalesSub('${s}')">${{pipeline:'Pipeline',winloss:'Win / Loss',sources:'Deal Sources',ratios:'Ratios'}[s]}</button>`
+      ).join('')}
+    </div>
+
+    <div id="sales-sub-content"></div>
+
+    <div class="form-section">
+      <button class="add-btn" onclick="toggleForm('sales-form')">+ Add week of data</button>
+      <div id="sales-form" style="display:none">
+        <div class="form-box">
+          <div class="form-grid">
+            <div class="form-group"><label>Week ending</label><input type="date" id="s-week"><div class="source-note">Monday of each week</div></div>
+            <div class="form-group"><label>New deals added</label><input type="number" id="s-newDeals"><div class="source-note">Pipedrive</div></div>
+            <div class="form-group"><label>Won</label><input type="number" id="s-won"><div class="source-note">Pipedrive</div></div>
+            <div class="form-group"><label>Won value ($)</label><input type="number" id="s-wonVal"></div>
+            <div class="form-group"><label>Lost</label><input type="number" id="s-lost"></div>
+            <div class="form-group"><label>Lost value ($)</label><input type="number" id="s-lostVal"></div>
+            <div class="form-group"><label>Win rate (%)</label><input type="number" id="s-winRate" step=".1"><div class="source-note">Pipedrive conversion report</div></div>
+            <div class="form-group"><label>Revenue ($)</label><input type="number" id="s-revenue"></div>
+            <div class="form-group"><label>Avg deal value ($)</label><input type="number" id="s-avgDealVal"></div>
+            <div class="form-group"><label>Website users</label><input type="number" id="s-websiteUsers"><div class="source-note">Looker Studio (for Home trend)</div></div>
+          </div>
+
+          <div class="input-group-label">Pipeline stage counts (from Pipedrive)</div>
+          <div class="form-grid">
+            ${DEAL_STAGES.map(s => `<div class="form-group"><label>${s.label}</label><input type="number" id="s-${s.key}"></div>`).join('')}
+          </div>
+
+          <div class="input-group-label">Deal sources (count of deals)</div>
+          <div class="form-grid">
+            ${sources.map(s => `<div class="form-group"><label>${s}</label><input type="number" id="s-src_${s.replace(/ /g,'_').toLowerCase()}"></div>`).join('')}
+          </div>
+
+          <div class="input-group-label">Conversion ratios</div>
+          <div class="form-grid">
+            <div class="form-group"><label>Trial → purchase (with trial, %)</label><input type="number" id="s-withTrial" step=".1"></div>
+            <div class="form-group"><label>Trial → purchase (no trial, %)</label><input type="number" id="s-noTrial" step=".1"></div>
+            <div class="form-group"><label>With custom demo (%)</label><input type="number" id="s-withDemo" step=".1"></div>
+            <div class="form-group"><label>Without custom demo (%)</label><input type="number" id="s-noDemo" step=".1"></div>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn-save" onclick="saveSales()">Save</button>
+            <button class="btn-cancel" onclick="toggleForm('sales-form')">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    ${tableHTML('sales', data, [
+      { key: 'week',    label: 'Week',    render: r => fmtDate(r.week) },
+      { key: 'won',     label: 'Won',     render: r => fmtNum(r.won) },
+      { key: 'lost',    label: 'Lost',    render: r => fmtNum(r.lost) },
+      { key: 'wonVal',  label: 'Won $',   render: r => fmtDollar(r.wonVal) },
+      { key: 'winRate', label: 'Win %',   render: r => fmtPct(r.winRate) },
+      { key: 'revenue', label: 'Revenue', render: r => fmtDollar(r.revenue) },
+    ], 'week')}
+  `;
+
+  setSalesSub(sub, false);
+}
+
+function setSalesSub(sub, rerender = true) {
+  activeSub.sales_sub = sub;
+  if (rerender) { renderSales(); return; }
+
+  const data = load('sales');
+  const sc = document.getElementById('sales-sub-content');
+  if (!sc) return;
+
+  const DEAL_STAGES_LOCAL = DEAL_STAGES;
+
+  if (sub === 'pipeline') {
+    const sl = data.length ? data[data.length - 1] : null;
+    const max = sl ? Math.max(...DEAL_STAGES_LOCAL.map(s => sl[s.key] || 0), 1) : 1;
+
+    sc.innerHTML = `
+      <div class="box">
+        <div class="box-title">Deal pipeline: current week
+          <span style="margin-left:auto;font-size:11px;color:var(--tl)">Win rate: ${sl ? fmtPct(sl.winRate) : 'no data'}</span>
+        </div>
+        ${sl ? `<div class="pipeline">
+          ${DEAL_STAGES_LOCAL.map((s, i) => {
+            const count = sl[s.key] || 0;
+            const prev = i > 0 ? (sl[DEAL_STAGES_LOCAL[i-1].key] || 0) : null;
+            const conv = prev ? pct(count, prev) : null;
+            const w = max > 0 ? (count / max * 100) : 0;
+            return `<div class="stage-bar-wrap" style="border-radius:${i===0?'8px 8px':'0'} 0 0${i===DEAL_STAGES_LOCAL.length-1?' 0 8px 8px':' 0 0'}">
+              <div class="stage-bg" style="width:${w}%"></div>
+              <div class="stage-content">
+                <div class="stage-name">${s.label}</div>
+                <div class="stage-count">${fmtNum(count)}</div>
+                ${conv != null ? `<div class="stage-conv"><span class="stage-conv-arrow">↑</span>${fmtPct(conv)} from prev</div>` : ''}
+              </div>
+            </div>`;
+          }).join('')}
+        </div>` : '<div class="no-data">No data yet. Add a week of data below.</div>'}
+
+        <canvas id="sales-pipeline-chart" height="220"></canvas>
+      </div>
+    `;
+
+    const chartData = data.slice(-8);
+    if (chartData.length) {
+      makeChart('sales-pipeline-chart', {
+        type: 'bar',
+        data: {
+          labels: chartData.map(r => fmtDate(r.week).slice(0, 6)),
+          datasets: [
+            { label: 'Won', data: chartData.map(r => r.won || 0), backgroundColor: '#2a7a4b', borderRadius: 3 },
+            { label: 'Lost', data: chartData.map(r => r.lost || 0), backgroundColor: '#e8d4d4', borderRadius: 3 },
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+          scales: { x: { grid: { display: false }, ticks: axStyle, stacked: false }, y: { grid: gridStyle, ticks: axStyle } }
+        }
+      });
+    }
+
+  } else if (sub === 'winloss') {
+    const monthlyWL = {};
+    data.forEach(r => {
+      const k = monthKey(r.week);
+      if (!monthlyWL[k]) monthlyWL[k] = { won: 0, lost: 0, wonVal: 0, lostVal: 0 };
+      monthlyWL[k].won     += r.won     || 0;
+      monthlyWL[k].lost    += r.lost    || 0;
+      monthlyWL[k].wonVal  += r.wonVal  || 0;
+      monthlyWL[k].lostVal += r.lostVal || 0;
+    });
+    const wlMonths = Object.entries(monthlyWL).sort().slice(-6);
+
+    sc.innerHTML = `
+      <div class="box">
+        <div class="box-title">Win / Loss by month</div>
+        ${wlMonths.length ? `<canvas id="wl-chart" height="220"></canvas>` : '<div class="no-data">No data yet.</div>'}
+      </div>
+      <div class="box">
+        <div class="box-title">Revenue won vs lost by month ($)</div>
+        ${wlMonths.length ? `<canvas id="wl-val-chart" height="200"></canvas>` : '<div class="no-data">No data yet.</div>'}
+        ${wlMonths.length ? `<table class="conv-table" style="margin-top:12px">
+          <thead><tr><th>Month</th><th>Won</th><th>Lost</th><th>Win rate</th><th>Won $</th><th>Lost $</th></tr></thead>
+          <tbody>${wlMonths.map(([k, v]) => {
+            const wr = pct(v.won, v.won + v.lost);
+            const cls = wr > 60 ? 'good' : wr > 40 ? 'mid' : 'bad';
+            return `<tr><td>${monthLabel(k)}</td><td>${fmtNum(v.won)}</td><td>${fmtNum(v.lost)}</td>
+              <td><span class="conv-pct ${cls}">${fmtPct(wr)}</span></td>
+              <td>${fmtDollar(v.wonVal)}</td><td>${fmtDollar(v.lostVal)}</td></tr>`;
+          }).join('')}</tbody>
+        </table>` : ''}
+      </div>
+    `;
+
+    if (wlMonths.length) {
+      makeChart('wl-chart', {
+        type: 'bar',
+        data: {
+          labels: wlMonths.map(([k]) => monthLabel(k)),
+          datasets: [
+            { label: 'Won', data: wlMonths.map(([,v]) => v.won), backgroundColor: '#2a7a4b', borderRadius: 4 },
+            { label: 'Lost', data: wlMonths.map(([,v]) => v.lost), backgroundColor: '#e8d4d4', borderRadius: 4 },
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+          scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: axStyle } }
+        }
+      });
+
+      makeChart('wl-val-chart', {
+        type: 'bar',
+        data: {
+          labels: wlMonths.map(([k]) => monthLabel(k)),
+          datasets: [
+            { label: 'Won ($)', data: wlMonths.map(([,v]) => v.wonVal), backgroundColor: '#2a7a4b', borderRadius: 4 },
+            { label: 'Lost ($)', data: wlMonths.map(([,v]) => v.lostVal), backgroundColor: '#f5b7b1', borderRadius: 4 },
+            { label: 'Monthly ARR target ($200k)', data: wlMonths.map(() => TARGET_ARR / 12), type: 'line', borderColor: '#c25a00', borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false },
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+          scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: { ...axStyle, callback: v => '$' + v.toLocaleString() } } }
+        }
+      });
+    }
+
+  } else if (sub === 'sources') {
+    const sources = ['Webinar', 'Helpdesk EOI', 'Vendor initiative', 'Customer initiated', 'Emailed'];
+    const srcColors = ['#1a3c5e', '#2e8bc0', '#2a7a4b', '#c25a00', '#7b1fa2'];
+    const sourceMonth = {};
+    data.forEach(r => {
+      const k = monthKey(r.week);
+      if (!sourceMonth[k]) sourceMonth[k] = {};
+      sources.forEach(s => {
+        const sk = 'src_' + s.replace(/ /g, '_').toLowerCase();
+        sourceMonth[k][sk] = (sourceMonth[k][sk] || 0) + (r[sk] || 0);
+      });
+    });
+    const srcMonths = Object.entries(sourceMonth).sort().slice(-6);
+
+    sc.innerHTML = `
+      <div class="box">
+        <div class="box-title">Deal sources by month</div>
+        ${srcMonths.length ? `<canvas id="src-chart" height="240"></canvas>` : '<div class="no-data">No data yet.</div>'}
+      </div>
+    `;
+
+    if (srcMonths.length) {
+      makeChart('src-chart', {
+        type: 'bar',
+        data: {
+          labels: srcMonths.map(([k]) => monthLabel(k)),
+          datasets: sources.map((s, i) => ({
+            label: s,
+            data: srcMonths.map(([, v]) => v['src_' + s.replace(/ /g, '_').toLowerCase()] || 0),
+            backgroundColor: srcColors[i],
+            borderRadius: 3,
+            stack: 'a',
+          }))
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+          scales: {
+            x: { stacked: true, grid: { display: false }, ticks: axStyle },
+            y: { stacked: true, grid: gridStyle, ticks: axStyle }
+          }
+        }
+      });
+    }
+
+  } else if (sub === 'ratios') {
+    const recent = data.slice(-12);
+    sc.innerHTML = `
+      <div class="box">
+        <div class="box-title">Trial → Purchase conversion ratios</div>
+        ${recent.length ? `<canvas id="ratio-chart" height="220"></canvas>` : '<div class="no-data">No data yet.</div>'}
+      </div>
+    `;
+    if (recent.length) {
+      makeChart('ratio-chart', {
+        type: 'line',
+        data: {
+          labels: recent.map(r => fmtDate(r.week).slice(0, 6)),
+          datasets: [
+            { label: 'With trial (%)', data: recent.map(r => r.withTrial), borderColor: '#2a7a4b', borderWidth: 2, tension: .3, pointRadius: 3 },
+            { label: 'Without trial (%)', data: recent.map(r => r.noTrial), borderColor: '#c0392b', borderWidth: 2, tension: .3, pointRadius: 3 },
+            { label: 'With demo (%)', data: recent.map(r => r.withDemo), borderColor: '#2e8bc0', borderWidth: 2, tension: .3, pointRadius: 3 },
+            { label: 'Without demo (%)', data: recent.map(r => r.noDemo), borderColor: '#c25a00', borderWidth: 2, tension: .3, pointRadius: 3 },
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+          scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: { ...axStyle, callback: v => v + '%' }, min: 0, max: 100 } }
+        }
+      });
+    }
+  }
+}
+
+function saveSales() {
+  const week = document.getElementById('s-week').value;
+  if (!week) { toast('Please select a week ending date.'); return; }
+
+  const entry = { week };
+  ['newDeals','won','wonVal','lost','lostVal','revenue','avgDealVal','websiteUsers','withTrial','noTrial','withDemo','noDemo'].forEach(f => {
+    const v = document.getElementById('s-' + f)?.value;
+    if (v !== '' && v != null) entry[f] = Number(v);
+  });
+  entry.winRate = entry.won != null && entry.lost != null ? pct(entry.won, entry.won + entry.lost) : (Number(document.getElementById('s-winRate')?.value) || null);
+
+  DEAL_STAGES.forEach(s => {
+    const v = document.getElementById('s-' + s.key)?.value;
+    if (v !== '' && v != null) entry[s.key] = Number(v);
+  });
+
+  const sources = ['webinar','helpdesk_eoi','vendor_initiative','customer_initiated','emailed'];
+  sources.forEach(s => {
+    const v = document.getElementById('s-src_' + s)?.value;
+    if (v !== '' && v != null) entry['src_' + s] = Number(v);
+  });
+
+  const arr = load('sales').filter(r => r.week !== week);
+  arr.push(entry);
+  arr.sort((a, b) => a.week > b.week ? 1 : -1);
+  save('sales', arr);
+  toggleForm('sales-form');
+  toast('Saved: week of ' + fmtDate(week));
+  renderSales();
+}
+
+// ─────────────────────────────────────────
+// TRIALS PIPELINE TAB
+// ─────────────────────────────────────────
+const TRIAL_STAGES = [
+  { key: 'lead',         label: 'Lead' },
+  { key: 'trialEoi',     label: 'Trial EOI' },
+  { key: 'trialsGranted',label: 'Trial Granted' },
+  { key: 'demoAttended', label: 'Demo / Training Attended' },
+  { key: 'sdkActive',    label: 'Active in Land iQ (5+ events)' },
+  { key: 'orderFormSent',label: 'Order Form Sent' },
+  { key: 'signed',       label: 'Signed' },
+];
+
+function renderTrials(el) {
+  el = el || document.getElementById('main-content');
+  const data = load('trials');
+  const tl = data.length ? data[data.length - 1] : null;
+  const tp = data.length > 1 ? data[data.length - 2] : null;
+  const max = tl ? Math.max(...TRIAL_STAGES.map(s => tl[s.key] || 0), 1) : 1;
+
+  const trendData = data.slice(-12);
+
+  el.innerHTML = `
+    <div class="section-header">
+      <div>
+        <div class="section-title">Trials Pipeline</div>
+        <div class="section-sub">Lead to signed: Opt-Max conversion tracking</div>
+      </div>
+      <a class="src-link" href="https://app.pipedrive.com" target="_blank">↗ Pipedrive</a>
+    </div>
+
+    ${cardsHTML([
+      ['Leads this week',   tl?.lead,          tp?.lead],
+      ['Trial EOIs',        tl?.trialEoi,      tp?.trialEoi],
+      ['Trials granted',    tl?.trialsGranted, tp?.trialsGranted],
+      ['Demo attended',     tl?.demoAttended,  tp?.demoAttended],
+      ['SDK active (5+ ev)',tl?.sdkActive,     tp?.sdkActive],
+      ['Signed',            tl?.signed,        tp?.signed],
+    ])}
+
+    <div class="box">
+      <div class="box-title">Trial pipeline: current week</div>
+      ${tl ? `<div class="pipeline">
+        ${TRIAL_STAGES.map((s, i) => {
+          const count = tl[s.key] || 0;
+          const prev = i > 0 ? (tl[TRIAL_STAGES[i-1].key] || 0) : null;
+          const conv = prev ? pct(count, prev) : null;
+          const w = max > 0 ? (count / max * 100) : 0;
+          const cls = conv == null ? '' : conv > 75 ? 'good' : conv > 50 ? 'mid' : 'bad';
+          return `<div class="stage-bar-wrap">
+            <div class="stage-bg" style="width:${w}%"></div>
+            <div class="stage-content">
+              <div class="stage-name">${s.label}</div>
+              <div class="stage-count">${fmtNum(count)}</div>
+              ${conv != null ? `<div class="stage-conv"><span class="conv-pct ${cls}">${fmtPct(conv)}</span> from prev stage</div>` : ''}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>` : '<div class="no-data">No data yet. Add a week of data below.</div>'}
+    </div>
+
+    <div class="box">
+      <div class="box-title">Trial pipeline trends: 12 weeks</div>
+      ${trendData.length ? `<div class="chart-wrap" style="height:240px"><canvas id="trials-trend"></canvas></div>` : '<div class="no-data">No data yet.</div>'}
+    </div>
+
+    <div class="box">
+      <div class="box-title">Stage conversion rates</div>
+      ${tl ? `<table class="conv-table">
+        <thead><tr><th>From</th><th>To</th><th>This week</th><th>Target</th></tr></thead>
+        <tbody>${TRIAL_STAGES.slice(1).map((s, i) => {
+          const from = TRIAL_STAGES[i];
+          const fromVal = tl[from.key] || 0;
+          const toVal = tl[s.key] || 0;
+          const cv = pct(toVal, fromVal);
+          const cls = cv == null ? '' : cv > 75 ? 'good' : cv > 50 ? 'mid' : 'bad';
+          return `<tr><td>${from.label}</td><td>${s.label}</td>
+            <td><span class="conv-pct ${cls}">${fmtPct(cv)}</span></td>
+            <td style="color:var(--tl)">:</td></tr>`;
+        }).join('')}</tbody>
+      </table>` : '<div class="no-data">No data yet.</div>'}
+    </div>
+
+    <div class="form-section">
+      <button class="add-btn" onclick="toggleForm('trials-form')">+ Add week of data</button>
+      <div id="trials-form" style="display:none">
+        <div class="form-box">
+          <div class="form-grid">
+            <div class="form-group"><label>Week ending</label><input type="date" id="t-week"></div>
+            ${TRIAL_STAGES.map(s => `<div class="form-group"><label>${s.label}</label><input type="number" id="t-${s.key}"><div class="source-note">Pipedrive</div></div>`).join('')}
+          </div>
+          <div class="form-actions">
+            <button class="btn-save" onclick="saveTrials()">Save</button>
+            <button class="btn-cancel" onclick="toggleForm('trials-form')">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    ${tableHTML('trials', data, [
+      { key: 'week',         label: 'Week',     render: r => fmtDate(r.week) },
+      { key: 'lead',         label: 'Leads',    render: r => fmtNum(r.lead) },
+      { key: 'trialsGranted',label: 'Granted',  render: r => fmtNum(r.trialsGranted) },
+      { key: 'sdkActive',    label: 'SDK 5+',   render: r => fmtNum(r.sdkActive) },
+      { key: 'signed',       label: 'Signed',   render: r => fmtNum(r.signed) },
+    ], 'week')}
+  `;
+
+  if (trendData.length) {
+    makeChart('trials-trend', {
+      type: 'line',
+      data: {
+        labels: trendData.map(r => fmtDate(r.week).slice(0, 6)),
+        datasets: [
+          ...TRIAL_STAGES.map((s, i) => ({
+            label: s.label,
+            data: trendData.map(r => r[s.key] || 0),
+            borderColor: ['#1a3c5e','#2e8bc0','#2a7a4b','#c25a00','#7b1fa2','#00796b','#c0392b'][i],
+            borderWidth: 2, tension: .3, pointRadius: 2, fill: false,
+          })),
+          { label: 'Target: 600 paid users', data: trendData.map(() => TARGET_USERS), borderColor: '#c25a00', borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false },
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 10, padding: 10 } } },
+        scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: axStyle } }
+      }
+    });
+  }
+}
+
+function saveTrials() {
+  const week = document.getElementById('t-week').value;
+  if (!week) { toast('Please select a week ending date.'); return; }
+  const entry = { week };
+  TRIAL_STAGES.forEach(s => {
+    const v = document.getElementById('t-' + s.key)?.value;
+    if (v !== '' && v != null) entry[s.key] = Number(v);
+  });
+  const arr = load('trials').filter(r => r.week !== week);
+  arr.push(entry);
+  arr.sort((a, b) => a.week > b.week ? 1 : -1);
+  save('trials', arr);
+  toggleForm('trials-form');
+  toast('Saved: week of ' + fmtDate(week));
+  renderTrials();
+}
+
+// ─────────────────────────────────────────
+// WEBSITE TAB
+// ─────────────────────────────────────────
+function renderWebsite(el) {
+  el = el || document.getElementById('main-content');
+  const data = load('website');
+  const range = activeSub.website_range || '6m';
+  const ranges = { '3m': 13, '6m': 26, '12m': 52, 'all': 9999 };
+  const recent = data.slice(-ranges[range]);
+  const tm = thisMonth(data);
+
+  const totalUsers = tm.reduce((s, r) => s + (r.users || 0), 0);
+  const totalSessions = tm.reduce((s, r) => s + (r.sessions || 0), 0);
+  const totalCta = tm.reduce((s, r) => s + (r.cta || 0), 0);
+  const ctaRate = pct(totalCta, totalUsers);
+  const bestWeek = tm.length ? tm.reduce((a, b) => (b.users || 0) > (a.users || 0) ? b : a) : null;
+
+  const rolling = recent.map((r, i) => {
+    const w = recent.slice(Math.max(0, i - 3), i + 1);
+    return Math.round(w.reduce((s, d) => s + (d.users || 0), 0) / w.length);
+  });
+
+  const months = {};
+  data.forEach(r => {
+    const k = monthKey(r.week);
+    months[k] = (months[k] || 0) + (r.views || 0);
+  });
+  const monthlyViews = Object.entries(months).sort().slice(-12);
+
+  el.innerHTML = `
+    <div class="section-header">
+      <div>
+        <div class="section-title">Website</div>
+        <div class="section-sub">Looker Studio traffic data</div>
+      </div>
+      <a class="src-link" href="https://lookerstudio.google.com" target="_blank">↗ Looker Studio</a>
+    </div>
+
+    ${cardsHTML([
+      ['Total users (month)', totalUsers || null],
+      ['Sessions (month)', totalSessions || null],
+      ['CTA clicks (month)', totalCta || null],
+      ['CTA click rate', ctaRate, null, '%'],
+    ])}
+
+    ${bestWeek ? `<div class="callout info"><div class="callout-label">Best week this month</div><div class="callout-text">${fmtDate(bestWeek.week)}: ${fmtNum(bestWeek.users)} users</div></div>` : ''}
+
+    <div class="box">
+      <div class="box-title">
+        Weekly users + 4-week rolling average
+        <div class="range-toggle" style="margin-left:auto">
+          ${['3m','6m','12m','all'].map(r => `<button class="range-btn${range===r?' active':''}" onclick="setWebsiteRange('${r}')">${r==='all'?'All':r}</button>`).join('')}
+        </div>
+      </div>
+      ${recent.length ? `<div class="chart-wrap" style="height:260px"><canvas id="web-users-chart"></canvas></div>` : '<div class="no-data">No data yet.</div>'}
+    </div>
+
+    <div class="box">
+      <div class="box-title">Monthly views (all time)</div>
+      ${monthlyViews.length ? `<div class="chart-wrap" style="height:200px"><canvas id="web-views-chart"></canvas></div>` : '<div class="no-data">No data yet.</div>'}
+    </div>
+
+    <div class="form-section">
+      <button class="add-btn" onclick="toggleForm('web-form')">+ Add website data</button>
+      <div id="web-form" style="display:none">
+        <div class="form-box">
+          <div class="form-group" style="margin-bottom:12px">
+            <label>Paste Looker Studio export (tab or comma separated)</label>
+            <textarea id="web-csv" placeholder="Date&#9;Views&#9;Total users&#9;Active users&#9;Sessions&#10;Apr 28, 2026&#9;30&#9;25&#9;20&#9;31" style="min-height:100px;font-family:'DM Mono',monospace;font-size:12px"></textarea>
+            <div class="source-note">Paste rows directly from Looker Studio. Header row is skipped automatically.</div>
+          </div>
+          <button class="btn-save" onclick="importWebsiteCSV()" style="margin-bottom:14px">Import CSV / TSV</button>
+          <div class="form-divider">Or enter manually:</div>
+          <div class="form-grid">
+            <div class="form-group"><label>Week ending</label><input type="date" id="web-week"></div>
+            <div class="form-group"><label>Views</label><input type="number" id="web-views"></div>
+            <div class="form-group"><label>Total users</label><input type="number" id="web-users"></div>
+            <div class="form-group"><label>Active users</label><input type="number" id="web-active"></div>
+            <div class="form-group"><label>Sessions</label><input type="number" id="web-sessions"></div>
+            <div class="form-group"><label>CTA clicks</label><input type="number" id="web-cta"></div>
+            <div class="form-group"><label>Trial EOI forms</label><input type="number" id="web-eoiform"></div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-save" onclick="saveWebsite()">Save</button>
+            <button class="btn-cancel" onclick="toggleForm('web-form')">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    ${tableHTML('website', data, [
+      { key: 'week',     label: 'Week',     render: r => fmtDate(r.week) },
+      { key: 'views',    label: 'Views',    render: r => fmtNum(r.views) },
+      { key: 'users',    label: 'Users',    render: r => fmtNum(r.users) },
+      { key: 'sessions', label: 'Sessions', render: r => fmtNum(r.sessions) },
+      { key: 'cta',      label: 'CTA',      render: r => fmtNum(r.cta) },
+    ], 'week')}
+  `;
+
+  if (recent.length) {
+    makeChart('web-users-chart', {
+      type: 'line',
+      data: {
+        labels: recent.map(r => fmtDate(r.week).slice(0, 6)),
+        datasets: [
+          { label: 'Weekly users', data: recent.map(r => r.users), borderColor: '#2e8bc0', backgroundColor: 'rgba(46,139,192,.06)', borderWidth: 2, pointRadius: 2, tension: .3, fill: true },
+          { label: '4-week avg',   data: rolling, borderColor: '#1a3c5e', borderWidth: 2, pointRadius: 0, borderDash: [5, 5], tension: .3, fill: false },
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12, padding: 16 } } },
+        scales: { x: { grid: { display: false }, ticks: { ...axStyle, maxTicksLimit: 16, maxRotation: 35 } }, y: { grid: gridStyle, ticks: axStyle, beginAtZero: true } }
+      }
+    });
+  }
+
+  if (monthlyViews.length) {
+    makeChart('web-views-chart', {
+      type: 'bar',
+      data: {
+        labels: monthlyViews.map(([k]) => monthLabel(k)),
+        datasets: [{ label: 'Views', data: monthlyViews.map(([,v]) => v), backgroundColor: '#2e8bc0', borderRadius: 4 }]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: axStyle } }
+      }
+    });
+  }
+}
+
+function setWebsiteRange(r) { activeSub.website_range = r; renderWebsite(); }
+
+function importWebsiteCSV() {
+  const raw = document.getElementById('web-csv').value;
+  const lines = raw.split('\n').map(l => l.trim()).filter(l => l);
+  const entries = {};
+  lines.forEach(row => {
+    const sep = row.includes('\t') ? '\t' : ',';
+    const p = row.split(sep).map(x => x.trim());
+    if (!p[0] || p[0].toLowerCase() === 'date') return;
+    const dt = new Date(p[0]);
+    if (isNaN(dt.getTime())) return;
+    const we = new Date(dt);
+    while (we.getDay() !== 0) we.setDate(we.getDate() + 1);
+    const k = we.toISOString().split('T')[0];
+    if (!entries[k]) entries[k] = { views: 0, users: 0, active: 0, sessions: 0 };
+    entries[k].views    += parseInt(p[1]) || 0;
+    entries[k].users    += parseInt(p[2]) || 0;
+    entries[k].active   += parseInt(p[3]) || 0;
+    entries[k].sessions += parseInt(p[4]) || 0;
+  });
+  const newRows = Object.entries(entries).map(([week, m]) => ({ week, ...m }));
+  const merged = load('website');
+  newRows.forEach(nr => {
+    const idx = merged.findIndex(r => r.week === nr.week);
+    if (idx >= 0) merged[idx] = { ...merged[idx], ...nr };
+    else merged.push(nr);
+  });
+  save('website', merged.sort((a, b) => a.week > b.week ? 1 : -1));
+  document.getElementById('web-csv').value = '';
+  toggleForm('web-form');
+  toast('Imported ' + newRows.length + ' weeks of website data.');
+  renderWebsite();
+}
+
+function saveWebsite() {
+  const week = document.getElementById('web-week').value;
+  if (!week) { toast('Please select a week ending date.'); return; }
+  const entry = { week };
+  ['views','users','active','sessions','cta','eoiform'].forEach(f => {
+    const v = document.getElementById('web-' + f)?.value;
+    if (v !== '' && v != null) entry[f] = Number(v);
+  });
+  const arr = load('website').filter(r => r.week !== week);
+  arr.push(entry);
+  arr.sort((a, b) => a.week > b.week ? 1 : -1);
+  save('website', arr);
+  toggleForm('web-form');
+  toast('Saved: week of ' + fmtDate(week));
+  renderWebsite();
+}
+
+// ─────────────────────────────────────────
+// TRAINING TAB
+// ─────────────────────────────────────────
+function renderTraining(el) {
+  el = el || document.getElementById('main-content');
+  const data = load('training');
+  const webinars = load('webinars');
+  const sub = activeSub.training_sub || 'sessions';
+  const tm = thisMonth(data, 'date');
+  const trainedThisMonth = tm.reduce((s, r) => s + (r.attendees || 0), 0);
+  const cumulative = data.reduce((s, r) => s + (r.attendees || 0), 0);
+
+  const hist = { '2025-11':19,'2025-12':25,'2026-01':12,'2026-02':32,'2026-03':20,'2026-04':71,'2026-05':14,'2026-06':8 };
+  const months = { ...hist };
+  data.forEach(r => {
+    const k = monthKey(r.date);
+    months[k] = (months[k] || 0) + (r.attendees || 0);
+  });
+  const barData = Object.entries(months).sort().slice(-12);
+
+  el.innerHTML = `
+    <div class="section-header">
+      <div>
+        <div class="section-title">Training</div>
+        <div class="section-sub">Session tracking and webinar analytics</div>
+      </div>
+      <a class="src-link" href="https://app.pipedrive.com" target="_blank">↗ Pipedrive</a>
+    </div>
+
+    ${cardsHTML([
+      ['Trained this month', trainedThisMonth || null],
+      ['Trained (total)',    cumulative || null],
+    ])}
+
+    <div id="training-sub-content"></div>
+  `;
+
+  setTrainingSub('sessions', false, barData, data, webinars);
+}
+
+function setTrainingSub(sub, rerender = true, barData, data, webinars) {
+  activeSub.training_sub = sub;
+  if (rerender) { renderTraining(); return; }
+
+  const sc = document.getElementById('training-sub-content');
+  if (!sc) return;
+
+  if (sub === 'sessions') {
+    sc.innerHTML = `
+      <div class="box">
+        <div class="box-title">People trained per month (12 months, includes historical data)</div>
+        <div class="chart-wrap" style="height:240px"><canvas id="training-bar"></canvas></div>
+      </div>
+
+      <div class="form-section">
+        <button class="add-btn" onclick="toggleForm('training-form')">+ Add training session</button>
+        <div id="training-form" style="display:none">
+          <div class="form-box">
+            <div class="form-grid">
+              <div class="form-group"><label>Session date</label><input type="date" id="tr-date"></div>
+              <div class="form-group"><label>Session type</label><select id="tr-type"><option value="">Select</option><option>Webinar</option><option>1:1</option><option>Group onsite</option><option>Self-serve</option></select></div>
+              <div class="form-group"><label>Attendees</label><input type="number" id="tr-attendees"></div>
+              <div class="form-group"><label>Organisation</label><input type="text" id="tr-org"></div>
+              <div class="form-group"><label>Customer type</label><select id="tr-custtype"><option value="">Select</option><option>Trial</option><option>Licensed</option><option>Government</option><option>Council</option><option>Consultant</option></select></div>
+              <div class="form-group"><label>Trainer</label><input type="text" id="tr-trainer"></div>
+              <div class="form-group"><label>SDK activity after?</label><select id="tr-sdk"><option value="">Not checked</option><option>Yes</option><option>No</option></select></div>
+            </div>
+            <div class="form-group"><label>Notes</label><textarea id="tr-notes"></textarea></div>
+            <div class="form-actions">
+              <button class="btn-save" onclick="saveTrainingSession()">Save</button>
+              <button class="btn-cancel" onclick="toggleForm('training-form')">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      ${tableHTML('training', data, [
+        { key: 'date',      label: 'Date',      render: r => fmtDate(r.date) },
+        { key: 'type',      label: 'Type' },
+        { key: 'org',       label: 'Org' },
+        { key: 'attendees', label: 'Attendees', render: r => fmtNum(r.attendees) },
+        { key: 'custtype',  label: 'Customer' },
+        { key: 'sdk',       label: 'SDK after' },
+      ], '_id')}
+    `;
+
+    makeChart('training-bar', {
+      type: 'bar',
+      data: {
+        labels: barData.map(([k]) => monthLabel(k)),
+        datasets: [{ label: 'People trained', data: barData.map(([,v]) => v), backgroundColor: '#2a7a4b', borderRadius: 4 }]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: axStyle } }
+      }
+    });
+
+  }
+}
+
+function saveTrainingSession() {
+  const date = document.getElementById('tr-date').value;
+  if (!date) { toast('Please select a date.'); return; }
+  const entry = {
+    _id: 't' + Date.now(), date,
+    type: document.getElementById('tr-type').value,
+    attendees: Number(document.getElementById('tr-attendees').value) || null,
+    org: document.getElementById('tr-org').value,
+    custtype: document.getElementById('tr-custtype').value,
+    trainer: document.getElementById('tr-trainer').value,
+    sdk: document.getElementById('tr-sdk').value,
+    notes: document.getElementById('tr-notes').value,
+  };
+  save('training', [...load('training'), entry]);
+  toggleForm('training-form');
+  toast('Training session saved.');
+  renderTraining();
+}
+
+function saveWebinar() {
+  const date = document.getElementById('wb-date').value;
+  if (!date) { toast('Please select a date.'); return; }
+  const numFields = ['regPageViews','registered','attended','cancelled','reactions'];
+  const txtFields = ['title','avgTime'];
+  const entry = { _id: 'w' + Date.now(), date };
+  numFields.forEach(f => { const v = document.getElementById('wb-' + f)?.value; if (v !== '' && v != null) entry[f] = Number(v); });
+  txtFields.forEach(f => { const v = document.getElementById('wb-' + f)?.value; if (v) entry[f] = v; });
+  save('webinars', [...load('webinars'), entry]);
+  toggleForm('webinar-form');
+  toast('Webinar saved.');
+  renderMarketing();
+}
+
+// ─────────────────────────────────────────
+// CONTENT TAB
+// ─────────────────────────────────────────
+// ─────────────────────────────────────────
+// MARKETING TAB (replaces Content)
+// ─────────────────────────────────────────
+function renderMarketing(el) {
+  el = el || document.getElementById('main-content');
+  const data = load('content');
+  const sub = activeSub.content_sub || 'log';
+  const tm = thisMonth(data, 'date');
+
+  const liImp  = tm.filter(r => r.type === 'LinkedIn').reduce((s, r) => s + (r.impressions || 0), 0);
+  const edmRec  = tm.filter(r => r.type === 'EDM').reduce((s, r) => s + (r.recipients || 0), 0);
+  const ytViews = tm.filter(r => r.type === 'YouTube').reduce((s, r) => s + (r.ytviews || 0), 0);
+
+  const types = ['LinkedIn','YouTube','EDM','Viva Engage','Webinar','Blog','Speaking'];
+  const typeColors = { LinkedIn:'#0a66c2', YouTube:'#c0392b', EDM:'#2a7a4b', 'Viva Engage':'#c25a00', Webinar:'#3949ab', Blog:'#7b1fa2', Speaking:'#00796b' };
+  const months = {};
+  data.forEach(r => {
+    const k = monthKey(r.date);
+    if (!months[k]) months[k] = {};
+    months[k][r.type] = (months[k][r.type] || 0) + 1;
+  });
+  const volData = Object.entries(months).sort().slice(-6);
+
+  const outcomes = data.filter(c => c.outcome && c.outcome.trim());
+
+  el.innerHTML = `
+    <div class="section-header">
+      <div>
+        <div class="section-title">Marketing</div>
+        <div class="section-sub">LinkedIn · EDM · Webinars · YouTube · Viva Engage · Speaking</div>
+      </div>
+    </div>
+
+    ${cardsHTML([
+      ['Content items (month)', tm.length || null],
+      ['LinkedIn impressions',  liImp || null],
+      ['EDM recipients (month)',edmRec || null],
+      ['YouTube views (month)', ytViews || null],
+    ])}
+
+    <div class="sub-tabs">
+      ${['linkedin','webinars','edm','log','correlation','outcomes','tracker'].map(s =>
+        `<button class="sub-tab${sub===s?' active':''}" onclick="setContentSub('${s}')">${
+          {linkedin:'LinkedIn',webinars:'Webinars',edm:'EDM',log:'All Content',correlation:'Correlation',outcomes:'Outcomes',tracker:'Weekly Tracker'}[s]
+        }</button>`
+      ).join('')}
+    </div>
+
+    <div class="box">
+      <div class="box-title">Content published by type (6 months)</div>
+      ${volData.length ? `<div class="chart-wrap" style="height:220px"><canvas id="content-vol"></canvas></div>` : '<div class="no-data">No data yet.</div>'}
+    </div>
+
+    <div id="content-sub-content"></div>
+
+    <div class="form-section">
+      <button class="add-btn" onclick="toggleForm('content-form')">+ Add content item</button>
+      <div id="content-form" style="display:none">
+        <div class="form-box">
+          <div class="form-grid">
+            <div class="form-group"><label>Publish date</label><input type="date" id="c-date"></div>
+            <div class="form-group"><label>Content type</label>
+              <select id="c-type" onchange="updateContentFields()">
+                <option value="">Select</option>
+                ${types.map(t => `<option value="${t}">${t}</option>`).join('')}
+              </select>
+            </div>
+            <div class="form-group"><label>Title / description</label><input type="text" id="c-title" maxlength="100"></div>
+          </div>
+
+          <div id="c-linkedin-fields" style="display:none">
+            <div class="input-group-label">LinkedIn metrics</div>
+            <div class="form-grid">
+              <div class="form-group"><label>Impressions</label><input type="number" id="c-impressions"></div>
+              <div class="form-group"><label>Reactions</label><input type="number" id="c-reactions"></div>
+              <div class="form-group"><label>Comments</label><input type="number" id="c-comments"></div>
+              <div class="form-group"><label>Shares</label><input type="number" id="c-shares"></div>
+              <div class="form-group"><label>Link clicks</label><input type="number" id="c-clicks"></div>
+            </div>
+          </div>
+
+          <div id="c-youtube-fields" style="display:none">
+            <div class="input-group-label">YouTube metrics</div>
+            <div class="form-grid">
+              <div class="form-group"><label>Views</label><input type="number" id="c-ytviews"></div>
+              <div class="form-group"><label>Watch time (hrs)</label><input type="number" id="c-watchtime" step=".1"></div>
+              <div class="form-group"><label>Subscribers gained</label><input type="number" id="c-subs"></div>
+            </div>
+          </div>
+
+          <div id="c-edm-fields" style="display:none">
+            <div class="input-group-label">EDM metrics</div>
+            <div class="form-grid">
+              <div class="form-group"><label>Recipients</label><input type="number" id="c-recipients"></div>
+              <div class="form-group"><label>Opens</label><input type="number" id="c-opens"></div>
+              <div class="form-group"><label>Clicks</label><input type="number" id="c-edmclicks"></div>
+              <div class="form-group"><label>Unsubscribes</label><input type="number" id="c-unsub"></div>
+            </div>
+          </div>
+
+          <div id="c-viva-fields" style="display:none">
+            <div class="input-group-label">Viva Engage metrics</div>
+            <div class="form-grid">
+              <div class="form-group"><label>Views</label><input type="number" id="c-vivaviews"></div>
+              <div class="form-group"><label>Reactions</label><input type="number" id="c-vivareactions"></div>
+            </div>
+          </div>
+
+          <div id="c-speaking-fields" style="display:none">
+            <div class="input-group-label">Speaking engagement</div>
+            <div class="form-grid">
+              <div class="form-group"><label>Event name</label><input type="text" id="c-event"></div>
+              <div class="form-group"><label>Audience size</label><input type="number" id="c-audience"></div>
+              <div class="form-group"><label>Leads generated</label><input type="number" id="c-leads"></div>
+            </div>
+          </div>
+
+          <div class="input-group-label">Commercial impact</div>
+          <div class="form-grid">
+            <div class="form-group" style="grid-column:1/-1"><label>Linked outcome <span style="font-weight:400;color:var(--tl)">(optional: e.g. "Led to Nathan Laird inbound inquiry")</span></label>
+              <textarea id="c-outcome" maxlength="300" style="min-height:56px"></textarea>
+            </div>
+            <div class="form-group"><label>Tags</label><input type="text" id="c-tags" placeholder="e.g. product launch, council"></div>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn-save" onclick="saveContent()">Save</button>
+            <button class="btn-cancel" onclick="toggleForm('content-form')">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    ${tableHTML('content', data, [
+      { key: 'date',    label: 'Date',    render: r => fmtDate(r.date) },
+      { key: 'type',    label: 'Type',    render: r => `<span class="badge badge-${r.type.toLowerCase().replace(' ','-')}">${r.type}</span>` },
+      { key: 'title',   label: 'Title',   render: r => r.title || ':' },
+      { key: 'metric',  label: 'Primary', render: r => {
+        if (r.type==='LinkedIn') return fmtNum(r.impressions) + ' imp';
+        if (r.type==='YouTube') return fmtNum(r.ytviews) + ' views';
+        if (r.type==='EDM') return fmtNum(r.opens) + ' opens';
+        if (r.type==='Viva Engage') return fmtNum(r.vivaviews) + ' views';
+        if (r.type==='Speaking') return fmtNum(r.leads) + ' leads';
+        return ':';
+      }},
+      { key: 'outcome', label: 'Outcome', render: r => r.outcome ? r.outcome.substring(0,40)+'…' : ':' },
+    ], '_id')}
+  `;
+
+  if (volData.length) {
+    makeChart('content-vol', {
+      type: 'bar',
+      data: {
+        labels: volData.map(([k]) => monthLabel(k)),
+        datasets: types.map(t => ({
+          label: t, stack: 'a',
+          data: volData.map(([,v]) => v[t] || 0),
+          backgroundColor: typeColors[t],
+          borderRadius: 2,
+        }))
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 10, padding: 10 } } },
+        scales: {
+          x: { stacked: true, grid: { display: false }, ticks: axStyle },
+          y: { stacked: true, grid: gridStyle, ticks: axStyle }
+        }
+      }
+    });
+  }
+
+  setContentSub(sub, false, data, outcomes);
+}
+
+function setContentSub(sub, rerender = true, data, outcomes) {
+  activeSub.content_sub = sub;
+  if (rerender) { renderMarketing(); return; }
+
+  const sc = document.getElementById('content-sub-content');
+  if (!sc) return;
+
+  if (sub === 'linkedin') {
+    // LinkedIn by person
+    const liData = load('linkedin_weekly');
+    const recent = liData.slice(-12);
+    sc.innerHTML = `
+      <div class="box">
+        <div class="box-title">LinkedIn impressions by team member: 12 weeks</div>
+        ${recent.length ? `<div class="chart-wrap" style="height:240px"><canvas id="li-chart"></canvas></div>` : '<div class="no-data">No data yet.</div>'}
+      </div>
+      ${recent.length ? `<div class="box">
+        <div class="box-title">Weekly detail</div>
+        <div class="tbl-scroll"><table>
+          <thead><tr><th>Week</th><th>Jacy</th><th>James</th><th>Lucy</th><th>Total</th><th></th></tr></thead>
+          <tbody>${[...liData].reverse().slice(0,8).map(r => `<tr>
+            <td>${fmtDate(r.week)}</td>
+            <td>${fmtNum(r.jacy)}</td><td>${fmtNum(r.james)}</td><td>${fmtNum(r.lucy)}</td>
+            <td><strong>${fmtNum((r.jacy||0)+(r.james||0)+(r.lucy||0))}</strong></td>
+            <td><button class="btn-del" onclick="delLinkedIn('${r.week}')">Delete</button></td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>` : ''}
+      <div class="form-section">
+        <button class="add-btn" onclick="toggleForm('li-form')">+ Add LinkedIn week</button>
+        <div id="li-form" style="display:none"><div class="form-box">
+          <div class="form-grid">
+            <div class="form-group"><label>Week ending</label><input type="date" id="li-week"></div>
+            <div class="form-group"><label>Jacy: impressions</label><input type="number" id="li-jacy"><div class="source-note">LinkedIn Analytics</div></div>
+            <div class="form-group"><label>James: impressions</label><input type="number" id="li-james"></div>
+            <div class="form-group"><label>Lucy: impressions</label><input type="number" id="li-lucy"></div>
+            <div class="form-group"><label>Jacy: post title / description</label><input type="text" id="li-jacy-title"></div>
+            <div class="form-group"><label>James: post title / description</label><input type="text" id="li-james-title"></div>
+            <div class="form-group"><label>Lucy: post title / description</label><input type="text" id="li-lucy-title"></div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-save" onclick="saveLinkedIn()">Save</button>
+            <button class="btn-cancel" onclick="toggleForm('li-form')">Cancel</button>
+          </div>
+        </div></div>
+      </div>
+    `;
+    if (recent.length) {
+      makeChart('li-chart', {
+        type: 'bar',
+        data: {
+          labels: recent.map(r => fmtDate(r.week).slice(0,6)),
+          datasets: [
+            { label: 'Jacy',  data: recent.map(r => r.jacy||0),  backgroundColor: '#1a3c5e', borderRadius: 3, stack: 'a' },
+            { label: 'James', data: recent.map(r => r.james||0), backgroundColor: '#2e8bc0', borderRadius: 3, stack: 'a' },
+            { label: 'Lucy',  data: recent.map(r => r.lucy||0),  backgroundColor: '#90c4e0', borderRadius: 3, stack: 'a' },
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+          scales: {
+            x: { stacked: true, grid: { display: false }, ticks: axStyle },
+            y: { stacked: true, grid: gridStyle, ticks: axStyle }
+          }
+        }
+      });
+    }
+
+  } else if (sub === 'webinars') {
+    const webinars = load('webinars');
+    sc.innerHTML = `
+      <div class="box">
+        <div class="box-title">Webinar performance: by event</div>
+        ${webinars.length ? `
+          <div class="tbl-scroll"><table>
+            <thead><tr>
+              <th>Date</th><th>Title</th>
+              <th>Viewed reg. page</th><th>Registered</th><th>Attended</th>
+              <th>Attend rate</th><th>Cancelled</th>
+              <th>Avg attendance time</th><th>Total reactions</th>
+              <th></th>
+            </tr></thead>
+            <tbody>${[...webinars].reverse().map(w => {
+              const ar = pct(w.attended, w.registered);
+              return `<tr>
+                <td>${fmtDate(w.date)}</td>
+                <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${w.title||''}">${w.title || ':'}</td>
+                <td>${fmtNum(w.regPageViews)}</td>
+                <td>${fmtNum(w.registered)}</td>
+                <td>${fmtNum(w.attended)}</td>
+                <td><span class="conv-pct ${ar>70?'good':ar>50?'mid':'bad'}">${fmtPct(ar)}</span></td>
+                <td>${fmtNum(w.cancelled)}</td>
+                <td>${w.avgTime || ':'}</td>
+                <td>${fmtNum(w.reactions)}</td>
+                <td><button class="btn-del" onclick="delRow('webinars','${w._id}','_id')">Delete</button></td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table></div>
+        ` : '<div class="no-data">No webinars logged yet.</div>'}
+      </div>
+      <div class="form-section">
+        <button class="add-btn" onclick="toggleForm('webinar-form')">+ Add webinar</button>
+        <div id="webinar-form" style="display:none"><div class="form-box">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Webinar date</label>
+              <input type="date" id="wb-date">
+            </div>
+            <div class="form-group">
+              <label>Title</label>
+              <input type="text" id="wb-title">
+            </div>
+            <div class="form-group">
+              <label>Viewed registration page</label>
+              <input type="number" id="wb-regPageViews">
+              <div class="source-note">Teams attendance tab: "Viewed registration page"</div>
+            </div>
+            <div class="form-group">
+              <label>Registered</label>
+              <input type="number" id="wb-registered">
+              <div class="source-note">Teams attendance tab: "Registered"</div>
+            </div>
+            <div class="form-group">
+              <label>Attended</label>
+              <input type="number" id="wb-attended">
+              <div class="source-note">Teams attendance tab: "Attended"</div>
+            </div>
+            <div class="form-group">
+              <label>Cancelled registrations</label>
+              <input type="number" id="wb-cancelled">
+              <div class="source-note">Teams attendance tab: "Cancelled registrations"</div>
+            </div>
+            <div class="form-group">
+              <label>Average attendance time</label>
+              <input type="text" id="wb-avgTime" placeholder="e.g. 49m 34s">
+              <div class="source-note">Teams attendance tab: "Average attendance time"</div>
+            </div>
+            <div class="form-group">
+              <label>Total reactions</label>
+              <input type="number" id="wb-reactions">
+              <div class="source-note">Teams engagement tab: "Total reactions"</div>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-save" onclick="saveWebinar()">Save</button>
+            <button class="btn-cancel" onclick="toggleForm('webinar-form')">Cancel</button>
+          </div>
+        </div></div>
+      </div>
+    `;
+
+  } else if (sub === 'edm') {
+    const edms = (data || load('content')).filter(r => r.type === 'EDM').reverse();
+    const growth2m = load('edm_2m');
+    sc.innerHTML = `
+      <div class="box">
+        <div class="box-title">Campaign sends</div>
+        ${edms.length ? `<table class="conv-table">
+          <thead><tr><th>Date</th><th>Campaign</th><th>Recipients</th><th>Opens</th><th>Open rate</th><th>Clicks</th><th>Click rate</th><th>Unsubs</th></tr></thead>
+          <tbody>${edms.map(e => {
+            const or = pct(e.opens, e.recipients);
+            const cr = pct(e.edmclicks, e.opens);
+            return `<tr><td>${fmtDate(e.date)}</td><td>${e.title||':'}</td><td>${fmtNum(e.recipients)}</td>
+              <td>${fmtNum(e.opens)}</td><td><span class="conv-pct ${or>30?'good':or>20?'mid':'bad'}">${fmtPct(or)}</span></td>
+              <td>${fmtNum(e.edmclicks)}</td><td><span class="conv-pct ${cr>10?'good':cr>5?'mid':'bad'}">${fmtPct(cr)}</span></td>
+              <td>${fmtNum(e.unsub)}</td></tr>`;
+          }).join('')}</tbody>
+        </table>` : '<div class="no-data">No EDM campaigns logged yet. Add via the content form below and select "EDM" as type.</div>'}
+      </div>
+      <div class="box">
+        <div class="box-title">2-Month Growth Email: automated onboarding sequence
+          <span style="font-size:11px;color:var(--tl);font-weight:400;margin-left:4px">Sent to new users at 2-month mark</span>
+        </div>
+        ${growth2m.length ? `<table class="conv-table">
+          <thead><tr><th>Cohort date</th><th>Sent to</th><th>Open rate</th><th>Click rate</th><th>Notes</th><th></th></tr></thead>
+          <tbody>${[...growth2m].reverse().map(r => {
+            const or = Number(r.openRate);
+            const cr = Number(r.clickRate);
+            return `<tr><td>${fmtDate(r.date)}</td><td>${fmtNum(r.sent)}</td>
+              <td><span class="conv-pct ${or>30?'good':or>20?'mid':'bad'}">${fmtPct(or)}</span></td>
+              <td><span class="conv-pct ${cr>10?'good':cr>5?'mid':'bad'}">${fmtPct(cr)}</span></td>
+              <td style="color:var(--tl)">${r.notes||':'}</td>
+              <td><button class="btn-del" onclick="delRow('edm_2m','${r._id}','_id')">Delete</button></td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>` : '<div class="no-data">No 2M growth email data logged yet.</div>'}
+        <div style="margin-top:12px">
+          <button class="add-btn" onclick="toggleForm('edm2m-form')">+ Add 2M growth email cohort</button>
+          <div id="edm2m-form" style="display:none;margin-top:10px"><div class="form-box">
+            <div class="form-grid">
+              <div class="form-group"><label>Cohort send date</label><input type="date" id="edm2m-date"></div>
+              <div class="form-group"><label>Number sent to</label><input type="number" id="edm2m-sent"></div>
+              <div class="form-group"><label>Open rate (%)</label><input type="number" id="edm2m-open" step=".1"></div>
+              <div class="form-group"><label>Click-through rate (%)</label><input type="number" id="edm2m-ctr" step=".1"></div>
+              <div class="form-group"><label>Notes</label><input type="text" id="edm2m-notes"></div>
+            </div>
+            <div class="form-actions">
+              <button class="btn-save" onclick="save2MGrowth()">Save</button>
+              <button class="btn-cancel" onclick="toggleForm('edm2m-form')">Cancel</button>
+            </div>
+          </div></div>
+        </div>
+      </div>
+    `;
+
+  } else if (sub === 'log') {
+    sc.innerHTML = '';
+
+  } else if (sub === 'correlation') {
+    sc.innerHTML = `<div class="box">
+      <div class="box-title">Content events vs website traffic</div>
+      <div style="font-size:13px;color:var(--tl);padding:10px 0 16px">Orange dots mark weeks where content was published. Hover for detail.</div>
+      <div id="corr-chart-wrap"></div>
+    </div>`;
+    const website = load('website').slice(-16);
+    const allContent = data || load('content');
+    if (website.length) {
+      document.getElementById('corr-chart-wrap').innerHTML = `<canvas id="corr-chart" height="220"></canvas>`;
+      makeChart('corr-chart', {
+        type: 'line',
+        data: {
+          labels: website.map(r => fmtDate(r.week).slice(0, 6)),
+          datasets: [{
+            label: 'Website users', data: website.map(r => r.users || 0),
+            borderColor: '#2e8bc0', backgroundColor: 'rgba(46,139,192,.07)',
+            borderWidth: 2, fill: true, tension: .3,
+            pointRadius: website.map(w => { const wd = new Date(w.week); return allContent.some(c => Math.abs(new Date(c.date) - wd) < 7 * 86400000) ? 8 : 3; }),
+            pointBackgroundColor: website.map(w => { const wd = new Date(w.week); return allContent.some(c => Math.abs(new Date(c.date) - wd) < 7 * 86400000) ? '#c25a00' : '#2e8bc0'; }),
+          }]
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false },
+            tooltip: { callbacks: { afterLabel: ctx => {
+              const w = website[ctx.dataIndex]; const wd = new Date(w.week);
+              const matches = allContent.filter(c => Math.abs(new Date(c.date) - wd) < 7 * 86400000);
+              return matches.length ? '\nContent this week:\n' + matches.map(c => '• ' + c.type + ': ' + (c.title||'Untitled')).join('\n') : '';
+            }}}
+          },
+          scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: axStyle } }
+        }
+      });
+    }
+
+  } else if (sub === 'outcomes') {
+    const outs = outcomes || (data || load('content')).filter(c => c.outcome && c.outcome.trim());
+    sc.innerHTML = `<div class="box">
+      <div class="box-title">Documented content outcomes</div>
+      ${outs.length ? outs.map(o => `<div class="outcome-item"><strong>${o.type}:</strong> ${o.title||'Untitled'}: ${o.outcome}</div>`).join('')
+        : '<div class="no-data">No outcomes logged yet.</div>'}
+    </div>`;
+
+  } else if (sub === 'tracker') {
+    // Lucy's weekly tracker
+    const tracker = load('weekly_tracker');
+    sc.innerHTML = `
+      <div class="box">
+        <div class="box-title">Weekly marketing tracker
+          <span style="font-size:11px;color:var(--tl);font-weight:400;margin-left:4px">Based on Lucy's spreadsheet: enter weekly actuals</span>
+        </div>
+        <div class="tbl-scroll">
+          <table>
+            <thead><tr>
+              <th>Week</th>
+              <th>JS Post Impr.</th><th>JM Post Impr.</th><th>LB Post Impr.</th>
+              <th>EDM Open %</th><th>EDM CTR %</th>
+              <th>Webinar Email Send</th><th>Webinar Email Open %</th><th>Webinar CTR %</th>
+              <th>Webinar Reg. page</th><th>Registrations</th>
+              <th>Purchase Enq.</th><th>EOI tickets</th><th>Trials started</th>
+              <th></th>
+            </tr></thead>
+            <tbody>
+              ${tracker.length ? [...tracker].reverse().slice(0,8).map(r => `<tr>
+                <td>${fmtDate(r.week)}</td>
+                <td>${fmtNum(r.jsImp)}</td><td>${fmtNum(r.jmImp)}</td><td>${fmtNum(r.lbImp)}</td>
+                <td>${fmtPct(r.edmOpen)}</td><td>${fmtPct(r.edmCtr)}</td>
+                <td>${fmtNum(r.wbEmailSend)}</td><td>${fmtPct(r.wbEmailOpen)}</td><td>${fmtPct(r.wbEmailCtr)}</td>
+                <td>${fmtPct(r.wbRegPage)}</td><td>${fmtNum(r.wbReg)}</td>
+                <td>${fmtNum(r.purchaseEnq)}</td><td>${fmtNum(r.eoiTickets)}</td><td>${fmtNum(r.trialsStarted)}</td>
+                <td><button class="btn-del" onclick="delRow('weekly_tracker','${r._id}','_id')">Delete</button></td>
+              </tr>`).join('') : '<tr><td colspan="15" style="text-align:center;color:var(--tl);padding:24px">No tracker entries yet.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="form-section">
+        <button class="add-btn" onclick="toggleForm('tracker-form')">+ Add tracker week</button>
+        <div id="tracker-form" style="display:none"><div class="form-box">
+          <div class="form-grid">
+            <div class="form-group"><label>Week ending</label><input type="date" id="tr2-week"></div>
+            <div class="form-group"><label>JS (Jacy) post impressions</label><input type="number" id="tr2-jsImp"></div>
+            <div class="form-group"><label>JM (James) post impressions</label><input type="number" id="tr2-jmImp"></div>
+            <div class="form-group"><label>LB (Lucy) post impressions</label><input type="number" id="tr2-lbImp"></div>
+            <div class="form-group"><label>EDM open rate (%)</label><input type="number" id="tr2-edmOpen" step=".1"></div>
+            <div class="form-group"><label>EDM click-through rate (%)</label><input type="number" id="tr2-edmCtr" step=".1"></div>
+            <div class="form-group"><label>Webinar email sends</label><input type="number" id="tr2-wbEmailSend"></div>
+            <div class="form-group"><label>Webinar email open rate (%)</label><input type="number" id="tr2-wbEmailOpen" step=".1"></div>
+            <div class="form-group"><label>Webinar email CTR (%)</label><input type="number" id="tr2-wbEmailCtr" step=".1"></div>
+            <div class="form-group"><label>Webinar reg. page visits (%)</label><input type="number" id="tr2-wbRegPage" step=".1"></div>
+            <div class="form-group"><label>Webinar registrations</label><input type="number" id="tr2-wbReg"></div>
+            <div class="form-group"><label>Purchase enquiries</label><input type="number" id="tr2-purchaseEnq"></div>
+            <div class="form-group"><label>EOI tickets</label><input type="number" id="tr2-eoiTickets"></div>
+            <div class="form-group"><label>Trials started</label><input type="number" id="tr2-trialsStarted"></div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-save" onclick="saveTrackerWeek()">Save</button>
+            <button class="btn-cancel" onclick="toggleForm('tracker-form')">Cancel</button>
+          </div>
+        </div></div>
+      </div>
+    `;
+  }
+}
+
+function saveLinkedIn() {
+  const week = document.getElementById('li-week').value;
+  if (!week) { toast('Select a week.'); return; }
+  const entry = {
+    week,
+    jacy:  Number(document.getElementById('li-jacy').value)  || null,
+    james: Number(document.getElementById('li-james').value) || null,
+    lucy:  Number(document.getElementById('li-lucy').value)  || null,
+    jacyTitle:  document.getElementById('li-jacy-title').value  || null,
+    jamesTitle: document.getElementById('li-james-title').value || null,
+    lucyTitle:  document.getElementById('li-lucy-title').value  || null,
+  };
+  const arr = load('linkedin_weekly').filter(r => r.week !== week);
+  arr.push(entry);
+  arr.sort((a, b) => a.week > b.week ? 1 : -1);
+  save('linkedin_weekly', arr);
+  toggleForm('li-form');
+  toast('LinkedIn week saved.');
+  renderMarketing();
+}
+
+function delLinkedIn(week) {
+  if (!confirm('Delete LinkedIn entry for ' + fmtDate(week) + '?')) return;
+  save('linkedin_weekly', load('linkedin_weekly').filter(r => r.week !== week));
+  toast('Deleted.');
+  renderMarketing();
+}
+
+function save2MGrowth() {
+  const date = document.getElementById('edm2m-date').value;
+  if (!date) { toast('Select a date.'); return; }
+  const entry = {
+    _id: 'edm2m-' + Date.now(), date,
+    sent: Number(document.getElementById('edm2m-sent').value) || null,
+    openRate: Number(document.getElementById('edm2m-open').value) || null,
+    clickRate: Number(document.getElementById('edm2m-ctr').value) || null,
+    notes: document.getElementById('edm2m-notes').value || null,
+  };
+  save('edm_2m', [...load('edm_2m'), entry]);
+  toggleForm('edm2m-form');
+  toast('2M growth email cohort saved.');
+  renderMarketing();
+}
+
+function saveTrackerWeek() {
+  const week = document.getElementById('tr2-week').value;
+  if (!week) { toast('Select a week.'); return; }
+  const fields = ['jsImp','jmImp','lbImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','purchaseEnq','eoiTickets','trialsStarted'];
+  const entry = { _id: 'trk-' + Date.now(), week };
+  fields.forEach(f => {
+    const v = document.getElementById('tr2-' + f)?.value;
+    if (v !== '' && v != null && v !== undefined) entry[f] = Number(v);
+  });
+  const arr = load('weekly_tracker').filter(r => r.week !== week);
+  arr.push(entry);
+  arr.sort((a, b) => a.week > b.week ? 1 : -1);
+  save('weekly_tracker', arr);
+  toggleForm('tracker-form');
+  toast('Tracker week saved.');
+  renderMarketing();
+}
+
+function updateContentFields() {
+  const type = document.getElementById('c-type').value;
+  ['linkedin','youtube','edm','viva','speaking'].forEach(t => {
+    const el = document.getElementById('c-' + t + '-fields');
+    if (el) el.style.display = 'none';
+  });
+  const map = { LinkedIn: 'linkedin', YouTube: 'youtube', EDM: 'edm', 'Viva Engage': 'viva', Speaking: 'speaking' };
+  if (map[type]) {
+    const el = document.getElementById('c-' + map[type] + '-fields');
+    if (el) el.style.display = 'block';
+  }
+}
+
+function saveContent() {
+  const date = document.getElementById('c-date').value;
+  const type = document.getElementById('c-type').value;
+  if (!date || !type) { toast('Please select date and content type.'); return; }
+  const entry = { _id: 'c' + Date.now(), date, type, title: document.getElementById('c-title').value };
+  const numFields = ['impressions','reactions','comments','shares','clicks','ytviews','watchtime','subs','recipients','opens','edmclicks','unsub','vivaviews','vivareactions','audience','leads'];
+  const txtFields = ['event','outcome','tags'];
+  numFields.forEach(f => { const v = document.getElementById('c-' + f)?.value; if (v !== '' && v != null) entry[f] = Number(v); });
+  txtFields.forEach(f => { const v = document.getElementById('c-' + f)?.value; if (v) entry[f] = v; });
+  save('content', [...load('content'), entry]);
+  toggleForm('content-form');
+  toast('Content item saved.');
+  renderMarketing();
+}
+
+// ─────────────────────────────────────────
+// SHARED UI HELPERS
+// ─────────────────────────────────────────
+function toggleForm(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+// ─────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────
+function init() {
+  buildNav();
+  renderTab('home');
+}
+
+if (sessionStorage.getItem('liq_auth') === '1') {
+  window.addEventListener('DOMContentLoaded', init);
+}
+</script>
+</body>
+</html>
