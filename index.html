@@ -6,6 +6,7 @@
 <title>Land iQ Performance</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <style>
 :root {
   --navy:#1a3c5e; --navy2:#24527f; --acc:#2e8bc0; --acc2:#e8f3f9;
@@ -246,12 +247,24 @@ const KEYS = { sales:'sales', trials:'trials', website:'website', training:'trai
 
 // In-memory cache — loaded from Supabase on init, kept in sync on every save
 const _cache = {};
+let _pd_deals = [];
+let _pd_people = [];
+let _pd_deals_imported_at = null;
+let _pd_people_imported_at = null;
 
 async function loadAll() {
   try {
-    const { data, error } = await sb.from('dashboard_data').select('key, value');
-    if (error) throw error;
-    data.forEach(row => { _cache[row.key] = row.value || []; });
+    const [mainRes, dealsRes, peopleRes] = await Promise.all([
+      sb.from('dashboard_data').select('key, value'),
+      sb.from('liq_pipedrive_deals').select('raw, imported_at').order('imported_at', { ascending: false }),
+      sb.from('liq_pipedrive_people').select('raw, imported_at').order('imported_at', { ascending: false })
+    ]);
+    if (mainRes.error) throw mainRes.error;
+    mainRes.data.forEach(row => { _cache[row.key] = row.value || []; });
+    _pd_deals = dealsRes.data ? dealsRes.data.map(r => r.raw) : [];
+    _pd_people = peopleRes.data ? peopleRes.data.map(r => r.raw) : [];
+    if (dealsRes.data && dealsRes.data.length) _pd_deals_imported_at = dealsRes.data[0].imported_at;
+    if (peopleRes.data && peopleRes.data.length) _pd_people_imported_at = peopleRes.data[0].imported_at;
   } catch (e) {
     console.error('Supabase load failed:', e);
     toast('Could not connect to database. Check your connection.');
@@ -363,11 +376,12 @@ function delRow(key, id, dateKey = 'week') {
 // TABS
 // ─────────────────────────────────────────
 const TABS = [
-  { id: 'home',     label: 'Home' },
-  { id: 'sales',    label: 'Sales Funnel' },
-  { id: 'trials',   label: 'Trials Pipeline' },
-  { id: 'website',  label: 'Website' },
-  { id: 'training', label: 'Training' },
+  { id: 'home',      label: 'Home' },
+  { id: 'sales',     label: 'Sales Funnel' },
+  { id: 'trials',    label: 'Trials Pipeline' },
+  { id: 'pipedrive', label: 'Pipedrive' },
+  { id: 'website',   label: 'Website' },
+  { id: 'training',  label: 'Training' },
   { id: 'marketing', label: 'Marketing' },
 ];
 
@@ -390,7 +404,7 @@ function switchTab(id) {
 function renderTab(id) {
   const mc = document.getElementById('main-content');
   destroyAllCharts();
-  const renderers = { home: renderHome, sales: renderSales, trials: renderTrials, website: renderWebsite, training: renderTraining, marketing: renderMarketing };
+  const renderers = { home: renderHome, sales: renderSales, trials: renderTrials, pipedrive: renderPipedrive, website: renderWebsite, training: renderTraining, marketing: renderMarketing };
   if (renderers[id]) renderers[id](mc);
 }
 
@@ -1474,6 +1488,18 @@ function renderMarketing(el) {
             </div>
           </div>
 
+          <div id="c-webinar-fields" style="display:none">
+            <div class="input-group-label">Webinar metrics</div>
+            <div class="form-grid">
+              <div class="form-group"><label>Viewed registration page</label><input type="number" id="c-wbRegPageViews"></div>
+              <div class="form-group"><label>Registered</label><input type="number" id="c-wbRegistered"></div>
+              <div class="form-group"><label>Attended</label><input type="number" id="c-wbAttended"></div>
+              <div class="form-group"><label>Cancelled registrations</label><input type="number" id="c-wbCancelled"></div>
+              <div class="form-group"><label>Average attendance time</label><input type="text" id="c-wbAvgTime" placeholder="e.g. 49m 34s"></div>
+              <div class="form-group"><label>Total reactions</label><input type="number" id="c-wbReactions"></div>
+            </div>
+          </div>
+
           <div class="input-group-label">Commercial impact</div>
           <div class="form-grid">
             <div class="form-group" style="grid-column:1/-1"><label>Linked outcome <span style="font-weight:400;color:var(--tl)">(optional: e.g. "Led to Nathan Laird inbound inquiry")</span></label>
@@ -1908,11 +1934,11 @@ function saveTrackerWeek() {
 
 function updateContentFields() {
   const type = document.getElementById('c-type').value;
-  ['linkedin','youtube','edm','viva','speaking'].forEach(t => {
+  ['linkedin','youtube','edm','viva','speaking','webinar'].forEach(t => {
     const el = document.getElementById('c-' + t + '-fields');
     if (el) el.style.display = 'none';
   });
-  const map = { LinkedIn: 'linkedin', YouTube: 'youtube', EDM: 'edm', 'Viva Engage': 'viva', Speaking: 'speaking' };
+  const map = { LinkedIn: 'linkedin', YouTube: 'youtube', EDM: 'edm', 'Viva Engage': 'viva', Speaking: 'speaking', Webinar: 'webinar' };
   if (map[type]) {
     const el = document.getElementById('c-' + map[type] + '-fields');
     if (el) el.style.display = 'block';
@@ -1928,10 +1954,547 @@ function saveContent() {
   const txtFields = ['event','outcome','tags'];
   numFields.forEach(f => { const v = document.getElementById('c-' + f)?.value; if (v !== '' && v != null) entry[f] = Number(v); });
   txtFields.forEach(f => { const v = document.getElementById('c-' + f)?.value; if (v) entry[f] = v; });
+  if (type === 'Webinar') {
+    ['wbRegPageViews','wbRegistered','wbAttended','wbCancelled','wbReactions'].forEach(f => {
+      const v = document.getElementById('c-' + f)?.value;
+      if (v !== '' && v != null) entry[f] = Number(v);
+    });
+    const avg = document.getElementById('c-wbAvgTime')?.value;
+    if (avg) entry.wbAvgTime = avg;
+  }
   save('content', [...load('content'), entry]);
   toggleForm('content-form');
   toast('Content item saved.');
   renderMarketing();
+}
+
+// ─────────────────────────────────────────
+// PIPEDRIVE TAB
+// ─────────────────────────────────────────
+const pdParseDate = s => (s && s.trim()) ? new Date(s) : null;
+const pdValidDate = d => d && !isNaN(d.getTime());
+const pd12Months = () => {
+  const months = [];
+  const now = new Date();
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push(d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'));
+  }
+  return months;
+};
+
+function renderPipedrive(el) {
+  el = el || document.getElementById('main-content');
+  const sub = activeSub.pd_sub || 'import';
+  const wonDeals  = _pd_deals.filter(d => d['Deal - Status'] === 'Won'  && d['Deal - Pipeline'] === '2026 Sales');
+  const lostDeals = _pd_deals.filter(d => d['Deal - Status'] === 'Lost' && d['Deal - Pipeline'] === '2026 Sales');
+  const openDeals = _pd_deals.filter(d => d['Deal - Status'] === 'Open' && d['Deal - Pipeline'] === '2026 Sales');
+  const paidSubs  = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
+
+  el.innerHTML = `
+    <div class="section-header">
+      <div><div class="section-title">Pipedrive Analytics</div>
+      <div class="section-sub">Deals · People · Trial pipeline — powered by Pipedrive CSV import</div></div>
+    </div>
+    ${cardsHTML([
+      ['Won deals (total)', wonDeals.length || null],
+      ['Open deals (Sales)', openDeals.length || null],
+      ['Win rate', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%'],
+      ['Paid subscribers', paidSubs.length || null],
+      ['People (total)', _pd_people.length || null],
+    ])}
+    <div class="sub-tabs">
+      ${['import','sales','users','trials'].map(s =>
+        `<button class="sub-tab${sub===s?' active':''}" onclick="setPdSub('${s}')">${{import:'Import Data',sales:'Sales',users:'Users & Licences',trials:'Trial Pipeline'}[s]}</button>`
+      ).join('')}
+    </div>
+    <div id="pd-sub-content"></div>`;
+  setPdSub(sub, false);
+}
+
+function setPdSub(sub, rerender = true) {
+  activeSub.pd_sub = sub;
+  if (rerender) { renderPipedrive(); return; }
+  const sc = document.getElementById('pd-sub-content');
+  if (!sc) return;
+  if (sub === 'import')  renderPdImport(sc);
+  else if (sub === 'sales')  renderPdSales(sc);
+  else if (sub === 'users')  renderPdUsers(sc);
+  else if (sub === 'trials') renderPdTrials(sc);
+}
+
+function renderPdImport(sc) {
+  const importedStr = _pd_deals_imported_at ? ' · ' + fmtDate(_pd_deals_imported_at) : '';
+  sc.innerHTML = `
+    <div class="box">
+      <div class="box-title">Import Pipedrive data</div>
+      <p style="font-size:13px;color:var(--tm);margin-bottom:16px">Export CSVs from Pipedrive → ··· → Export → CSV. Import Deals and People separately. Re-importing replaces all existing data.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div style="border:2px dashed var(--bd);border-radius:10px;padding:24px;text-align:center">
+          <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:8px">Deals CSV</div>
+          ${_pd_deals.length
+            ? `<div style="font-size:12px;color:var(--gr);margin-bottom:12px">✓ ${_pd_deals.length.toLocaleString()} deals${importedStr}</div>`
+            : `<div style="font-size:12px;color:var(--tl);margin-bottom:12px">No data yet</div>`}
+          <label style="cursor:pointer">
+            <span class="btn-save" style="display:inline-block">${_pd_deals.length ? 'Re-import deals' : 'Choose deals CSV'}</span>
+            <input type="file" accept=".csv" style="display:none" onchange="handleDealsImport(this)">
+          </label>
+        </div>
+        <div style="border:2px dashed var(--bd);border-radius:10px;padding:24px;text-align:center">
+          <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:8px">People CSV</div>
+          ${_pd_people.length
+            ? `<div style="font-size:12px;color:var(--gr);margin-bottom:12px">✓ ${_pd_people.length.toLocaleString()} people${importedStr}</div>`
+            : `<div style="font-size:12px;color:var(--tl);margin-bottom:12px">No data yet</div>`}
+          <label style="cursor:pointer">
+            <span class="btn-save" style="display:inline-block">${_pd_people.length ? 'Re-import people' : 'Choose people CSV'}</span>
+            <input type="file" accept=".csv" style="display:none" onchange="handlePeopleImport(this)">
+          </label>
+        </div>
+      </div>
+    </div>
+    ${(_pd_deals.length || _pd_people.length)
+      ? `<div class="callout good"><div class="callout-label">Data loaded</div><div class="callout-text">${_pd_deals.length.toLocaleString()} deals and ${_pd_people.length.toLocaleString()} people imported. Use the tabs above to explore charts.</div></div>`
+      : `<div class="callout info"><div class="callout-label">Getting started</div><div class="callout-text">In Pipedrive: Deals → ··· → Export all deals as CSV. Repeat for People. Then upload both files above.</div></div>`}`;
+}
+
+async function handleDealsImport(input) {
+  const file = input.files[0];
+  if (!file) return;
+  toast('Parsing deals CSV…');
+  Papa.parse(file, {
+    header: true, skipEmptyLines: true,
+    complete: async (results) => {
+      const rows = results.data;
+      toast('Uploading ' + rows.length + ' deals…');
+      await sb.from('liq_pipedrive_deals').delete().gte('imported_at', '1970-01-01T00:00:00Z');
+      const batchSize = 100;
+      for (let i = 0; i < rows.length; i += batchSize) {
+        const { error } = await sb.from('liq_pipedrive_deals').insert(rows.slice(i, i + batchSize).map(r => ({ raw: r })));
+        if (error) { toast('Upload error: ' + error.message); return; }
+      }
+      _pd_deals = rows;
+      _pd_deals_imported_at = new Date().toISOString();
+      toast('✓ Imported ' + rows.length + ' deals');
+      renderPipedrive();
+    },
+    error: err => toast('CSV parse error: ' + err.message)
+  });
+}
+
+async function handlePeopleImport(input) {
+  const file = input.files[0];
+  if (!file) return;
+  toast('Parsing people CSV…');
+  Papa.parse(file, {
+    header: true, skipEmptyLines: true,
+    complete: async (results) => {
+      const rows = results.data;
+      toast('Uploading ' + rows.length + ' people…');
+      await sb.from('liq_pipedrive_people').delete().gte('imported_at', '1970-01-01T00:00:00Z');
+      const batchSize = 100;
+      for (let i = 0; i < rows.length; i += batchSize) {
+        const { error } = await sb.from('liq_pipedrive_people').insert(rows.slice(i, i + batchSize).map(r => ({ raw: r })));
+        if (error) { toast('Upload error: ' + error.message); return; }
+      }
+      _pd_people = rows;
+      _pd_people_imported_at = new Date().toISOString();
+      toast('✓ Imported ' + rows.length + ' people');
+      renderPipedrive();
+    },
+    error: err => toast('CSV parse error: ' + err.message)
+  });
+}
+
+// ── PIPEDRIVE: SALES CHARTS ─────────────────────────────────────────────────
+function renderPdSales(sc) {
+  const salesDeals = _pd_deals.filter(d => d['Deal - Pipeline'] === '2026 Sales');
+  const wonDeals   = salesDeals.filter(d => d['Deal - Status'] === 'Won');
+  const lostDeals  = salesDeals.filter(d => d['Deal - Status'] === 'Lost');
+  const months12   = pd12Months();
+
+  // Won by month (count + value)
+  const wonByMonth = {};
+  wonDeals.forEach(d => {
+    const dt = pdParseDate(d['Deal - Won time']);
+    if (!pdValidDate(dt)) return;
+    const k = monthKey(dt.toISOString());
+    if (!wonByMonth[k]) wonByMonth[k] = { count: 0, value: 0 };
+    wonByMonth[k].count++;
+    wonByMonth[k].value += parseFloat(d['Deal - Value']) || 0;
+  });
+
+  // Lost by month
+  const lostByMonth = {};
+  lostDeals.forEach(d => {
+    const dt = pdParseDate(d['Deal - Lost time']);
+    if (!pdValidDate(dt)) return;
+    const k = monthKey(dt.toISOString());
+    lostByMonth[k] = (lostByMonth[k] || 0) + 1;
+  });
+
+  // Avg sales cycle by month
+  const cycleByMonth = {};
+  wonDeals.forEach(d => {
+    const c = pdParseDate(d['Deal - Deal created']);
+    const w = pdParseDate(d['Deal - Won time']);
+    if (!pdValidDate(c) || !pdValidDate(w)) return;
+    const days = Math.round((w - c) / 86400000);
+    const k = monthKey(w.toISOString());
+    if (!cycleByMonth[k]) cycleByMonth[k] = { total: 0, count: 0 };
+    cycleByMonth[k].total += days;
+    cycleByMonth[k].count++;
+  });
+
+  // Win rate by month
+  const winRateByMonth = {};
+  months12.forEach(m => {
+    const w = wonByMonth[m]?.count || 0;
+    const l = lostByMonth[m] || 0;
+    winRateByMonth[m] = (w + l > 0) ? pct(w, w + l) : null;
+  });
+
+  // Deals closed same month opened
+  const sameMonth = wonDeals.filter(d => {
+    const c = pdParseDate(d['Deal - Deal created']);
+    const w = pdParseDate(d['Deal - Won time']);
+    return pdValidDate(c) && pdValidDate(w) && monthKey(c.toISOString()) === monthKey(w.toISOString());
+  });
+
+  // Source performance
+  const srcPerf = {};
+  salesDeals.filter(d => d['Deal - Status'] !== 'Open').forEach(d => {
+    const src = d['Deal - Source channel'] || 'Unknown';
+    if (!srcPerf[src]) srcPerf[src] = { won: 0, lost: 0, wonVal: 0 };
+    if (d['Deal - Status'] === 'Won') { srcPerf[src].won++; srcPerf[src].wonVal += parseFloat(d['Deal - Value']) || 0; }
+    else srcPerf[src].lost++;
+  });
+
+  // Category donut (won only)
+  const catPerf = {};
+  wonDeals.forEach(d => { const c = d['Deal - Category'] || 'Other'; catPerf[c] = (catPerf[c] || 0) + 1; });
+
+  // Owner bar (won only)
+  const ownerPerf = {};
+  wonDeals.forEach(d => { const o = d['Deal - Owner'] || 'Unknown'; ownerPerf[o] = (ownerPerf[o] || 0) + 1; });
+
+  // Pipeline snapshot
+  const SALES_STAGES = ['Contact Made/Discovery','Meeting Scheduled','Negotiations','Order Form Sent','Signed Order Form Returned','Invoice Sent','Payment Received'];
+  const openByStage = {};
+  SALES_STAGES.forEach(s => openByStage[s] = 0);
+  salesDeals.filter(d => d['Deal - Status'] === 'Open').forEach(d => {
+    const st = d['Deal - Stage'];
+    if (openByStage.hasOwnProperty(st)) openByStage[st]++;
+    else if (st === 'Contact Made') openByStage['Contact Made/Discovery']++;
+  });
+
+  // Avg sales cycle overall
+  const allCycle = Object.values(cycleByMonth);
+  const avgCycleTotal = allCycle.reduce((s,v) => s+v.total, 0);
+  const avgCycleCount = allCycle.reduce((s,v) => s+v.count, 0);
+  const avgCycleDays = avgCycleCount ? Math.round(avgCycleTotal / avgCycleCount) : null;
+
+  const avgWinRate12 = (() => { const r = months12.map(m => winRateByMonth[m]).filter(v => v != null); return r.length ? r.reduce((a,b)=>a+b,0)/r.length : null; })();
+
+  sc.innerHTML = `
+    ${!wonDeals.length && !_pd_deals.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive deals CSV first.</div></div>' : ''}
+    <div class="cards" style="margin-bottom:18px">
+      <div class="card"><div class="card-label">Won deals (total)</div><div class="card-value">${wonDeals.length || 0}</div></div>
+      <div class="card"><div class="card-label">Closed same month</div>
+        ${sameMonth.length ? `<div class="card-value">${sameMonth.length}</div><div class="card-sub">${fmtPct(pct(sameMonth.length, wonDeals.length))} of won deals</div>` : '<div class="card-nodata">no data</div>'}
+      </div>
+      <div class="card"><div class="card-label">Avg win rate (12m)</div>
+        ${avgWinRate12 != null ? `<div class="card-value">${fmtPct(avgWinRate12)}</div>` : '<div class="card-nodata">no data</div>'}
+      </div>
+      <div class="card"><div class="card-label">Avg sales cycle</div>
+        ${avgCycleDays != null ? `<div class="card-value">${avgCycleDays}d</div><div class="card-sub">created → won</div>` : '<div class="card-nodata">no data</div>'}
+      </div>
+    </div>
+
+    <div class="box"><div class="box-title">Won deals &amp; revenue by month (12 months)</div>
+      <div class="chart-wrap" style="height:260px"><canvas id="pd-won-month"></canvas></div></div>
+
+    <div class="box"><div class="box-title">Win rate by month</div>
+      <div class="chart-wrap" style="height:210px"><canvas id="pd-winrate"></canvas></div></div>
+
+    <div class="box"><div class="box-title">Won vs Lost by month (12 months)</div>
+      <div class="chart-wrap" style="height:210px"><canvas id="pd-wl-month"></canvas></div></div>
+
+    <div class="box"><div class="box-title">Average sales cycle — days from created to won</div>
+      <div class="chart-wrap" style="height:200px"><canvas id="pd-cycle"></canvas></div></div>
+
+    <div class="box"><div class="box-title">Deal source performance (won vs lost)</div>
+      ${Object.keys(srcPerf).length ? `<div class="chart-wrap" style="height:${Math.max(200, Object.keys(srcPerf).length * 42)}px"><canvas id="pd-sources"></canvas></div>` : '<div class="no-data">No source data.</div>'}</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div class="box" style="margin-bottom:0"><div class="box-title">Won deals by category</div>
+        <div class="chart-wrap" style="height:240px"><canvas id="pd-category"></canvas></div></div>
+      <div class="box" style="margin-bottom:0"><div class="box-title">Won deals by owner</div>
+        <div class="chart-wrap" style="height:240px"><canvas id="pd-owner"></canvas></div></div>
+    </div>
+
+    <div class="box"><div class="box-title">Pipeline stage snapshot — open deals · 2026 Sales</div>
+      ${salesDeals.filter(d=>d['Deal - Status']==='Open').length ? `<div class="pipeline">${(() => {
+        const maxV = Math.max(...Object.values(openByStage), 1);
+        return SALES_STAGES.map(stage => {
+          const count = openByStage[stage] || 0;
+          return `<div class="stage-bar-wrap"><div class="stage-bg" style="width:${maxV>0?(count/maxV*100):0}%"></div>
+            <div class="stage-content"><div class="stage-name">${stage}</div><div class="stage-count">${count}</div></div></div>`;
+        }).join('');
+      })()}</div>` : '<div class="no-data">No open deals in 2026 Sales pipeline.</div>'}</div>`;
+
+  if (wonDeals.length) {
+    makeChart('pd-won-month', {
+      type: 'bar',
+      data: {
+        labels: months12.map(m => monthLabel(m)),
+        datasets: [
+          { label: 'Won deals', data: months12.map(m => wonByMonth[m]?.count||0), backgroundColor:'#2a7a4b', borderRadius:3, yAxisID:'y' },
+          { label: 'Revenue ($)', data: months12.map(m => wonByMonth[m]?.value||0), type:'line', borderColor:'#1a3c5e', borderWidth:2, pointRadius:3, tension:.3, fill:false, yAxisID:'y1' },
+          { label: 'Target $200k/mo', data: months12.map(()=>TARGET_ARR/12), type:'line', borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false, yAxisID:'y1' },
+        ]
+      },
+      options: { responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{position:'left',grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true}, y1:{position:'right',grid:{drawOnChartArea:false},ticks:{...axStyle,callback:v=>'$'+(v/1000).toFixed(0)+'k'},beginAtZero:true} }
+      }
+    });
+    makeChart('pd-winrate', {
+      type: 'line',
+      data: {
+        labels: months12.map(m => monthLabel(m)),
+        datasets: [
+          { label:'Win rate', data:months12.map(m=>winRateByMonth[m]), borderColor:'#2e8bc0', borderWidth:2, tension:.3, pointRadius:3, fill:false, spanGaps:true },
+          { label:'50% target', data:months12.map(()=>50), borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false },
+        ]
+      },
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,callback:v=>v+'%'},min:0,max:100} }
+      }
+    });
+    makeChart('pd-wl-month', {
+      type:'bar',
+      data:{ labels:months12.map(m=>monthLabel(m)), datasets:[
+        {label:'Won', data:months12.map(m=>wonByMonth[m]?.count||0), backgroundColor:'#2a7a4b', borderRadius:3},
+        {label:'Lost', data:months12.map(m=>lostByMonth[m]||0), backgroundColor:'#e8d4d4', borderRadius:3},
+      ]},
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true} }
+      }
+    });
+    makeChart('pd-cycle', {
+      type:'line',
+      data:{ labels:months12.map(m=>monthLabel(m)), datasets:[{
+        label:'Avg days to close', spanGaps:true, fill:false,
+        data:months12.map(m=>cycleByMonth[m]?Math.round(cycleByMonth[m].total/cycleByMonth[m].count):null),
+        borderColor:'#7b1fa2', borderWidth:2, tension:.3, pointRadius:3
+      }]},
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{display:false} },
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,callback:v=>v+'d'},beginAtZero:true} }
+      }
+    });
+    const srcEntries = Object.entries(srcPerf).filter(([k])=>k&&k!=='Unknown').sort((a,b)=>b[1].won-a[1].won);
+    if (srcEntries.length) makeChart('pd-sources', {
+      type:'bar', data:{
+        labels:srcEntries.map(([k])=>k),
+        datasets:[
+          {label:'Won', data:srcEntries.map(([,v])=>v.won), backgroundColor:'#2a7a4b', borderRadius:3},
+          {label:'Lost', data:srcEntries.map(([,v])=>v.lost), backgroundColor:'#e8d4d4', borderRadius:3},
+        ]
+      },
+      options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
+        scales:{ x:{grid:gridStyle,ticks:axStyle}, y:{grid:{display:false},ticks:axStyle} }
+      }
+    });
+    const catEntries = Object.entries(catPerf).filter(([k])=>k&&k!=='').sort((a,b)=>b[1]-a[1]);
+    if (catEntries.length) makeChart('pd-category', {
+      type:'doughnut',
+      data:{ labels:catEntries.map(([k])=>k), datasets:[{ data:catEntries.map(([,v])=>v), backgroundColor:['#1a3c5e','#2e8bc0','#2a7a4b','#c25a00','#7b1fa2','#00796b'], borderWidth:2 }] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:10, padding:10 } } }
+      }
+    });
+    const ownerEntries = Object.entries(ownerPerf).sort((a,b)=>b[1]-a[1]);
+    if (ownerEntries.length) makeChart('pd-owner', {
+      type:'bar',
+      data:{ labels:ownerEntries.map(([k])=>k.split(' ')[0]), datasets:[{label:'Won deals', data:ownerEntries.map(([,v])=>v), backgroundColor:'#2e8bc0', borderRadius:3}] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{display:false} },
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true} }
+      }
+    });
+  }
+}
+
+// ── PIPEDRIVE: USERS & LICENCES ──────────────────────────────────────────────
+function renderPdUsers(sc) {
+  // Chart 11: Paid subscriber growth (cumulative by access granted date)
+  const paidByMonth = {};
+  _pd_people.forEach(p => {
+    const dt = pdParseDate(p['Person - Date Access Granted']);
+    if (!pdValidDate(dt)) return;
+    const k = monthKey(dt.toISOString());
+    paidByMonth[k] = (paidByMonth[k] || 0) + 1;
+  });
+  const paidMonths = Object.keys(paidByMonth).sort();
+  let cum = 0;
+  const cumData = paidMonths.map(m => { cum += paidByMonth[m]; return cum; });
+
+  // Chart 12: Customer type breakdown
+  const ctypes = {};
+  _pd_people.forEach(p => { const ct = p['Person - Customer Type']||'Unknown'; ctypes[ct]=(ctypes[ct]||0)+1; });
+
+  // Chart 13: Top 15 orgs
+  const orgs = {};
+  _pd_people.forEach(p => { const o=p['Person - Organisation']; if(o&&o.trim()) orgs[o]=(orgs[o]||0)+1; });
+  const topOrgs = Object.entries(orgs).sort((a,b)=>b[1]-a[1]).slice(0,15);
+
+  // Chart 14: New people by month (12m)
+  const months12 = pd12Months();
+  const newByMonth = {};
+  _pd_people.forEach(p => {
+    const dt = pdParseDate(p['Person - Person created']);
+    if (!pdValidDate(dt)) return;
+    const k = monthKey(dt.toISOString());
+    newByMonth[k] = (newByMonth[k]||0)+1;
+  });
+
+  // Chart 15: Access revoked
+  const revokedByMonth = {};
+  _pd_people.forEach(p => {
+    const dt = pdParseDate(p['Person - Date Access Removed']);
+    if (!pdValidDate(dt)) return;
+    const k = monthKey(dt.toISOString());
+    revokedByMonth[k] = (revokedByMonth[k]||0)+1;
+  });
+  const revokedMonths = Object.keys(revokedByMonth).sort().slice(-12);
+
+  sc.innerHTML = `
+    ${!_pd_people.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive people CSV first.</div></div>' : ''}
+    <div class="cards" style="margin-bottom:18px">
+      <div class="card"><div class="card-label">Paid subscribers</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='Paid Subscription').length}</div><div class="card-sub">Target: 600</div></div>
+      <div class="card"><div class="card-label">2-week trials</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='2 Week Trial Licence').length}</div></div>
+      <div class="card"><div class="card-label">Contact register</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='Contact Register').length.toLocaleString()}</div></div>
+      <div class="card"><div class="card-label">Access revoked</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='Access Revoked').length.toLocaleString()}</div></div>
+    </div>
+
+    <div class="box"><div class="box-title">Paid subscriber growth — cumulative (by access granted date)</div>
+      ${paidMonths.length ? `<div class="chart-wrap" style="height:240px"><canvas id="pd-sub-growth"></canvas></div>` : '<div class="no-data">No access granted dates found.</div>'}</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div class="box" style="margin-bottom:0"><div class="box-title">Customer type breakdown</div>
+        <div class="chart-wrap" style="height:260px"><canvas id="pd-ctype"></canvas></div></div>
+      <div class="box" style="margin-bottom:0"><div class="box-title">New people added by month (12m)</div>
+        <div class="chart-wrap" style="height:260px"><canvas id="pd-new-users"></canvas></div></div>
+    </div>
+
+    <div class="box"><div class="box-title">Top 15 organisations by user count</div>
+      ${topOrgs.length ? `<div class="chart-wrap" style="height:${Math.max(300,topOrgs.length*28)}px"><canvas id="pd-top-orgs"></canvas></div>` : '<div class="no-data">No org data.</div>'}</div>
+
+    <div class="box"><div class="box-title">Access revoked by month — churn indicator</div>
+      ${revokedMonths.length ? `<div class="chart-wrap" style="height:200px"><canvas id="pd-revoked"></canvas></div>` : '<div class="no-data">No revocation data.</div>'}</div>`;
+
+  if (_pd_people.length) {
+    if (paidMonths.length) makeChart('pd-sub-growth', {
+      type:'line',
+      data:{ labels:paidMonths.map(m=>monthLabel(m)), datasets:[
+        {label:'Cumulative paid subscribers', data:cumData, borderColor:'#2e8bc0', backgroundColor:'rgba(46,139,192,.08)', borderWidth:2, tension:.3, pointRadius:2, fill:true},
+        {label:'Target: 600', data:paidMonths.map(()=>TARGET_USERS), borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false},
+      ]},
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
+        scales:{ x:{grid:{display:false},ticks:{...axStyle,maxTicksLimit:12}}, y:{grid:gridStyle,ticks:axStyle,beginAtZero:true} }
+      }
+    });
+    const ctEntries = Object.entries(ctypes).filter(([k])=>k&&k!=='Unknown').sort((a,b)=>b[1]-a[1]);
+    if (ctEntries.length) makeChart('pd-ctype', {
+      type:'doughnut',
+      data:{ labels:ctEntries.map(([k])=>k), datasets:[{ data:ctEntries.map(([,v])=>v), backgroundColor:['#1a3c5e','#2e8bc0','#2a7a4b','#c25a00','#7b1fa2','#00796b','#c0392b','#e8d4d4','#90c4e0'], borderWidth:2 }] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:10}, boxWidth:10, padding:8 } } }
+      }
+    });
+    makeChart('pd-new-users', {
+      type:'bar',
+      data:{ labels:months12.map(m=>monthLabel(m)), datasets:[{label:'New people', data:months12.map(m=>newByMonth[m]||0), backgroundColor:'#2a7a4b', borderRadius:3}] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{display:false} },
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:axStyle,beginAtZero:true} }
+      }
+    });
+    if (topOrgs.length) makeChart('pd-top-orgs', {
+      type:'bar',
+      data:{ labels:topOrgs.map(([k])=>k.length>50?k.slice(0,50)+'…':k), datasets:[{label:'Users', data:topOrgs.map(([,v])=>v), backgroundColor:'#2e8bc0', borderRadius:3}] },
+      options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{display:false} },
+        scales:{ x:{grid:gridStyle,ticks:axStyle,beginAtZero:true}, y:{grid:{display:false},ticks:{...axStyle,font:{family:'DM Sans',size:10}}} }
+      }
+    });
+    if (revokedMonths.length) makeChart('pd-revoked', {
+      type:'bar',
+      data:{ labels:revokedMonths.map(m=>monthLabel(m)), datasets:[{label:'Access revoked', data:revokedMonths.map(m=>revokedByMonth[m]||0), backgroundColor:'#c0392b', borderRadius:3}] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{display:false} },
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:axStyle,beginAtZero:true} }
+      }
+    });
+  }
+}
+
+// ── PIPEDRIVE: TRIAL PIPELINE ────────────────────────────────────────────────
+function renderPdTrials(sc) {
+  const trialDeals = _pd_deals.filter(d => d['Deal - Pipeline'] === 'Trial Pipeline');
+  const openTrials = trialDeals.filter(d => d['Deal - Status'] === 'Open');
+  const lostTrials = trialDeals.filter(d => d['Deal - Status'] === 'Lost');
+  const closedLost = trialDeals.filter(d => d['Deal - Stage'] === 'Closed Lost' || d['Deal - Status'] === 'Lost').length;
+
+  const TRIAL_STAGES_PD = ['Follow Up','Demo Scheduled','Demo Booked','Trial in Progress','Trial Mid Point','Trial Complete','Pending Onboarding','Awaiting Onboarding','Closed Lost'];
+  const stageCount = {};
+  TRIAL_STAGES_PD.forEach(s => stageCount[s] = 0);
+  trialDeals.forEach(d => { const s = d['Deal - Stage']; if (stageCount.hasOwnProperty(s)) stageCount[s]++; });
+
+  const lostReasons = {};
+  lostTrials.forEach(d => { const r = d['Deal - Lost reason']; if (r && r.trim()) lostReasons[r] = (lostReasons[r]||0)+1; });
+
+  sc.innerHTML = `
+    ${!trialDeals.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive deals CSV first.</div></div>' : ''}
+    <div class="cards" style="margin-bottom:18px">
+      <div class="card"><div class="card-label">Total trial deals</div><div class="card-value">${trialDeals.length}</div></div>
+      <div class="card"><div class="card-label">Open trials</div><div class="card-value">${openTrials.length}</div></div>
+      <div class="card"><div class="card-label">Closed Lost</div><div class="card-value" style="color:var(--re)">${closedLost}</div>
+        <div class="card-sub">${trialDeals.length ? fmtPct(pct(closedLost, trialDeals.length)) + ' of all trial deals' : ''}</div></div>
+      <div class="card"><div class="card-label">Lost (total)</div><div class="card-value">${lostTrials.length}</div></div>
+    </div>
+    ${closedLost > 0 ? `<div class="callout warn"><div class="callout-label">Conversion concern</div><div class="callout-text">${closedLost} of ${trialDeals.length} trial deals (${fmtPct(pct(closedLost, trialDeals.length))}) are Closed Lost. This is a significant conversion problem worth investigating urgently.</div></div>` : ''}
+
+    <div class="box"><div class="box-title">Trial pipeline — all deals by stage</div>
+      ${trialDeals.length ? `<div class="pipeline">${(() => {
+        const maxV = Math.max(...Object.values(stageCount), 1);
+        return TRIAL_STAGES_PD.filter(s => stageCount[s] > 0).map(stage => {
+          const count = stageCount[stage];
+          const isLost = stage === 'Closed Lost';
+          return `<div class="stage-bar-wrap"><div class="stage-bg" style="width:${(count/maxV*100)}%;background:${isLost?'var(--re2)':'var(--acc2)'}"></div>
+            <div class="stage-content"><div class="stage-name" style="color:${isLost?'var(--re)':'var(--navy)'}">${stage}</div><div class="stage-count">${count}</div></div></div>`;
+        }).join('');
+      })()}</div>` : '<div class="no-data">No trial pipeline data.</div>'}</div>
+
+    <div class="box"><div class="box-title">Trial lost reasons</div>
+      ${Object.keys(lostReasons).length ? `<div class="chart-wrap" style="height:${Math.max(200,Object.keys(lostReasons).length*40)}px"><canvas id="pd-trial-lost"></canvas></div>` : '<div class="no-data">No lost reason data.</div>'}</div>`;
+
+  if (Object.keys(lostReasons).length) {
+    const lrEntries = Object.entries(lostReasons).sort((a,b)=>b[1]-a[1]);
+    makeChart('pd-trial-lost', {
+      type:'bar',
+      data:{ labels:lrEntries.map(([k])=>k.length>45?k.slice(0,45)+'…':k), datasets:[{label:'Lost deals', data:lrEntries.map(([,v])=>v), backgroundColor:'#c0392b', borderRadius:3}] },
+      options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{display:false} },
+        scales:{ x:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true}, y:{grid:{display:false},ticks:{...axStyle,font:{family:'DM Sans',size:10}}} }
+      }
+    });
+  }
 }
 
 // ─────────────────────────────────────────
