@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Land iQ Performance</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root {
   --navy:#1a3c5e; --navy2:#24527f; --acc:#2e8bc0; --acc2:#e8f3f9;
@@ -233,12 +234,36 @@ if (sessionStorage.getItem('liq_auth') === '1') {
 }
 
 // ─────────────────────────────────────────
-// DATA LAYER
+// DATA LAYER (Supabase)
 // ─────────────────────────────────────────
-const KEYS = { sales:'liq_sales', trials:'liq_trials', website:'liq_website', training:'liq_training', content:'liq_content', webinars:'liq_webinars', linkedin_weekly:'liq_linkedin', edm_2m:'liq_edm2m', weekly_tracker:'liq_tracker' };
+const SUPABASE_URL = 'https://ysdonnjezvoyrrizadik.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlzZG9ubmplenZveXJyaXphZGlrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2ODY4MzYsImV4cCI6MjA5MzI2MjgzNn0.9bJ2FPEqV6NEtrnS567HBbwx0zcyQfshfcqWVRvH7RQ';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-function load(key) { try { return JSON.parse(localStorage.getItem(KEYS[key]) || '[]'); } catch { return []; } }
-function save(key, arr) { localStorage.setItem(KEYS[key], JSON.stringify(arr)); }
+const KEYS = { sales:'sales', trials:'trials', website:'website', training:'training', content:'content', webinars:'webinars', linkedin_weekly:'linkedin_weekly', edm_2m:'edm_2m', weekly_tracker:'weekly_tracker' };
+
+// In-memory cache — loaded from Supabase on init, kept in sync on every save
+const _cache = {};
+
+async function loadAll() {
+  try {
+    const { data, error } = await sb.from('dashboard_data').select('key, value');
+    if (error) throw error;
+    data.forEach(row => { _cache[row.key] = row.value || []; });
+  } catch (e) {
+    console.error('Supabase load failed:', e);
+    toast('Could not connect to database. Check your connection.');
+  }
+}
+
+function load(key) { return _cache[KEYS[key]] || []; }
+
+function save(key, arr) {
+  _cache[KEYS[key]] = arr;
+  sb.from('dashboard_data')
+    .upsert({ key: KEYS[key], value: arr, updated_at: new Date().toISOString() })
+    .then(({ error }) => { if (error) console.error('Supabase save failed:', error); });
+}
 
 function exportData() {
   const data = {};
@@ -262,7 +287,7 @@ function importBackup(json) {
 
 function confirmClear() {
   if (confirm('Delete ALL dashboard data? This cannot be undone.')) {
-    Object.values(KEYS).forEach(k => localStorage.removeItem(k));
+    Object.keys(KEYS).forEach(k => save(k, []));
     toast('All data cleared.');
     renderTab(activeTab);
   }
@@ -1911,7 +1936,8 @@ function toggleForm(id) {
 // ─────────────────────────────────────────
 // INIT
 // ─────────────────────────────────────────
-function init() {
+async function init() {
+  await loadAll();
   buildNav();
   renderTab('home');
 }
