@@ -252,19 +252,32 @@ let _pd_people = [];
 let _pd_deals_imported_at = null;
 let _pd_people_imported_at = null;
 
+async function fetchAllRows(table, columns) {
+  const PAGE = 1000;
+  let all = [], offset = 0, done = false;
+  while (!done) {
+    const { data, error } = await sb.from(table).select(columns).range(offset, offset + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) { done = true; break; }
+    all = all.concat(data);
+    if (data.length < PAGE) { done = true; } else { offset += PAGE; }
+  }
+  return all;
+}
+
 async function loadAll() {
   try {
-    const [mainRes, dealsRes, peopleRes] = await Promise.all([
+    const [mainRes, dealsRows, peopleRows] = await Promise.all([
       sb.from('dashboard_data').select('key, value'),
-      sb.from('liq_pipedrive_deals').select('raw, imported_at').order('imported_at', { ascending: false }).limit(10000),
-      sb.from('liq_pipedrive_people').select('raw, imported_at').order('imported_at', { ascending: false }).limit(10000)
+      fetchAllRows('liq_pipedrive_deals', 'raw, imported_at'),
+      fetchAllRows('liq_pipedrive_people', 'raw, imported_at')
     ]);
     if (mainRes.error) throw mainRes.error;
     mainRes.data.forEach(row => { _cache[row.key] = row.value || []; });
-    _pd_deals = dealsRes.data ? dealsRes.data.map(r => r.raw) : [];
-    _pd_people = peopleRes.data ? peopleRes.data.map(r => r.raw) : [];
-    if (dealsRes.data && dealsRes.data.length) _pd_deals_imported_at = dealsRes.data[0].imported_at;
-    if (peopleRes.data && peopleRes.data.length) _pd_people_imported_at = peopleRes.data[0].imported_at;
+    _pd_deals  = dealsRows.map(r => r.raw);
+    _pd_people = peopleRows.map(r => r.raw);
+    if (dealsRows.length)  _pd_deals_imported_at  = dealsRows[0].imported_at;
+    if (peopleRows.length) _pd_people_imported_at = peopleRows[0].imported_at;
   } catch (e) {
     console.error('Supabase load failed:', e);
     toast('Could not connect to database. Check your connection.');
