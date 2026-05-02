@@ -2017,10 +2017,10 @@ function renderPipedrive(el) {
       <div class="section-sub">Deals · People · Trial pipeline — powered by Pipedrive CSV import</div></div>
     </div>
     ${cardsHTML([
-      ['Won deals (total)', wonDeals.length || null],
-      ['Open deals (Sales)', openDeals.length || null],
-      ['Win rate', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%'],
-      ['Active paid subscribers', activePaidSubs.length || null, 'Target: 600'],
+      ['Won deals (2026 Sales)', wonDeals.length || null],
+      ['Lost deals (2026 Sales)', lostDeals.length || null],
+      ['Win rate (2026 Sales)', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%', 'Won ÷ (Won + Lost) deals'],
+      ['Active paid subscribers', activePaidSubs.length || null, null, null, 'Target: 600'],
       ['People (total)', _pd_people.length || null],
     ])}
     <div class="sub-tabs">
