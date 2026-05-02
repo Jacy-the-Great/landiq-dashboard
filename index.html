@@ -194,7 +194,9 @@ tr:hover td{background:#fafcfe}
     <div class="h-tag">INTERNAL</div>
     <div class="h-space"></div>
     <div class="h-actions">
-      <button class="h-link" onclick="exportData()">⬇ Export data</button>
+      <button class="h-link" onclick="exportData()">⬇ Export</button>
+      <button class="h-link" onclick="document.getElementById('import-file').click()">⬆ Import</button>
+      <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(this)">
       <button class="h-link" onclick="confirmClear()">Clear all</button>
     </div>
   </header>
@@ -283,6 +285,14 @@ function importBackup(json) {
     toast('Backup imported successfully.');
     renderTab(activeTab);
   } catch { toast('Import failed: invalid JSON.'); }
+}
+
+function handleImportFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => { importBackup(e.target.result); input.value = ''; };
+  reader.readAsText(file);
 }
 
 function confirmClear() {
