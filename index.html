@@ -256,8 +256,8 @@ async function loadAll() {
   try {
     const [mainRes, dealsRes, peopleRes] = await Promise.all([
       sb.from('dashboard_data').select('key, value'),
-      sb.from('liq_pipedrive_deals').select('raw, imported_at').order('imported_at', { ascending: false }),
-      sb.from('liq_pipedrive_people').select('raw, imported_at').order('imported_at', { ascending: false })
+      sb.from('liq_pipedrive_deals').select('raw, imported_at').order('imported_at', { ascending: false }).limit(10000),
+      sb.from('liq_pipedrive_people').select('raw, imported_at').order('imported_at', { ascending: false }).limit(10000)
     ]);
     if (mainRes.error) throw mainRes.error;
     mainRes.data.forEach(row => { _cache[row.key] = row.value || []; });
