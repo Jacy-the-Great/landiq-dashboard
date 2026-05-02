@@ -2967,166 +2967,215 @@ function toggleForm(id) {
 function renderPdOptimax(sc) {
   const OM_KEY = 'liq_optimax';
   const OM_DEF = {
-    // Stage 1 – Leads (manual, not in Pipedrive)
     leads_curr: 50000, leads_target: 60000,
-    // Stage 2 – Deal funnel targets (%)
-    contact_pct_target: 65,   // % of total leads → Contact Made deal created
-    meeting_pct_target: 80,   // % of Contact Made → Meeting Scheduled
-    neg_pct_target: 95,       // % of Meeting Scheduled → Negotiations
-    order_pct_target: 82,     // % of Negotiations → Order Form Sent
-    invoice_pct_target: 90,   // % of Order Form Sent → Invoice Sent
-    won_pct_target: 90,       // % of Invoice Sent → Won
-    // Stage 4 – Value targets
-    upsell_pct_target: 10,    // % of clients who upsell
-    price_increase: 42,       // annual price increase ($)
-    // Velocity targets
-    cycle_30d_target: 50,     // % of won deals ≤30 days
-    avg_cycle_target: 45,     // avg days to close target
+    contact_pct_target: 65,
+    meeting_pct_target: 80,
+    neg_pct_target: 95,
+    order_pct_target: 82,
+    invoice_pct_target: 90,
+    won_pct_target: 90,
+    upsell_pct_curr: 5, upsell_pct_target: 10,
+    price_curr: 0,      price_target: 42,
+    cycle_30d_target: 50,
+    avg_cycle_target: 45,
   };
 
   function loadOM() { try { return {...OM_DEF,...JSON.parse(localStorage.getItem(OM_KEY)||'{}')}; } catch { return {...OM_DEF}; } }
-  function saveOM(k, v) { const t=loadOM(); t[k]=parseFloat(v)||0; localStorage.setItem(OM_KEY,JSON.stringify(t)); renderPdOptimax(sc); }
-  window.omSave = saveOM;
+  function saveOM(k, v) { const o=loadOM(); o[k]=parseFloat(v)||0; localStorage.setItem(OM_KEY,JSON.stringify(o)); renderPdOptimax(sc); }
+  window.omSave  = saveOM;
   window.omReset = () => { localStorage.removeItem(OM_KEY); renderPdOptimax(sc); };
-
   const t = loadOM();
 
-  // Pull actuals from Pipedrive (all-time, all sales deals)
+  // ── Pipedrive actuals (all-time) ─────────────────────────────────────────
   const sDeals = _pd_deals.filter(d => d['Deal - Pipeline']==='2026 Sales');
-  const FSALL = ['Contact Made/Discovery','Meeting Scheduled','Negotiations','Order Form Sent','Signed Order Form Returned','Invoice Sent','Payment Received'];
-  const fsIdx = Object.fromEntries(FSALL.map((s,i)=>[s,i]));
+  const FSALL  = ['Contact Made/Discovery','Meeting Scheduled','Negotiations','Order Form Sent','Signed Order Form Returned','Invoice Sent','Payment Received'];
+  const fsIdx  = Object.fromEntries(FSALL.map((s,i)=>[s,i]));
   function reached(d, idx) {
     if (d['Deal - Status']==='Won') return true;
     let stg=d['Deal - Stage']||''; if(stg==='Contact Made')stg='Contact Made/Discovery';
     const di=fsIdx[stg]; return di!=null&&di>=idx;
   }
-  const fCnts = FSALL.map((_,i)=>sDeals.filter(d=>reached(d,i)).length);
-  const fRates= FSALL.map((_,i)=>i===0?null:(fCnts[i-1]>0?pct(fCnts[i],fCnts[i-1]):null));
+  const fCnts  = FSALL.map((_,i) => sDeals.filter(d=>reached(d,i)).length);
+  const fRates = FSALL.map((_,i) => i===0?null:(fCnts[i-1]>0?pct(fCnts[i],fCnts[i-1]):null));
   const wonAll = sDeals.filter(d=>d['Deal - Status']==='Won');
 
-  // Average deal value from won deals (mix of $8000 full price + $4000 discounted)
-  const dealValues = wonAll.map(d=>parseFloat(d['Deal - Value'])||0).filter(v=>v>0);
-  const avgDealVal = dealValues.length ? Math.round(dealValues.reduce((a,b)=>a+b,0)/dealValues.length) : 8000;
-  const fullPriceCount = dealValues.filter(v=>v>=7000).length;
-  const discountCount  = dealValues.filter(v=>v>0&&v<7000).length;
+  // Open deals per stage (current snapshot)
+  const openByStg = Object.fromEntries(FSALL.map(s=>[s,0]));
+  sDeals.filter(d=>d['Deal - Status']==='Open').forEach(d=>{
+    let stg=d['Deal - Stage']||''; if(stg==='Contact Made')stg='Contact Made/Discovery';
+    if(openByStg.hasOwnProperty(stg)) openByStg[stg]++;
+  });
 
-  // Sales velocity actuals
-  const wonDealsAll = wonAll;
+  // Avg deal value from won deals
+  const dealVals = wonAll.map(d=>parseFloat(d['Deal - Value'])||0).filter(v=>v>0);
+  const avgDealVal  = dealVals.length ? Math.round(dealVals.reduce((a,b)=>a+b,0)/dealVals.length) : 8000;
+  const fullPriceCnt = dealVals.filter(v=>v>=7000).length;
+  const discountCnt  = dealVals.filter(v=>v>0&&v<7000).length;
+
+  // Sales velocity
   function cdDays(d){const c=pdParseDate(d['Deal - Deal created']),w=pdParseDate(d['Deal - Won time']);if(!pdValidDate(c)||!pdValidDate(w))return null;return Math.round((w-c)/86400000);}
-  const cycleDaysAll = wonDealsAll.map(cdDays).filter(v=>v!=null);
-  const avgCycleAll  = cycleDaysAll.length ? Math.round(cycleDaysAll.reduce((a,b)=>a+b,0)/cycleDaysAll.length) : null;
-  const w30All = cycleDaysAll.filter(d=>d<=30).length;
-  const w30Pct = cycleDaysAll.length ? pct(w30All,cycleDaysAll.length) : null;
+  const cycleDays  = wonAll.map(cdDays).filter(v=>v!=null);
+  const avgCycle   = cycleDays.length ? Math.round(cycleDays.reduce((a,b)=>a+b,0)/cycleDays.length) : null;
+  const w30Cnt     = cycleDays.filter(d=>d<=30).length;
+  const w30Pct     = cycleDays.length ? pct(w30Cnt,cycleDays.length) : null;
 
-  // Build OPTI-MAX model rows
+  // ── OPTI-MAX model rows ──────────────────────────────────────────────────
   const ROWS = [
     { isHdr:true, label:'STAGE 1 — INCREASE LEADS & DRIVE MORE TRAFFIC' },
-    { id:'leads',   label:'Total leads reached', desc:'Webinars, EDMs, posts, events, calls · manual input',
-      currKey:'leads_curr', tgtKey:'leads_target', isCount:true,
-      curr: t.leads_curr, tgt: t.leads_target },
-    { id:'contact', label:'Contact Made / Discovery', desc:'CRM deals created · live from Pipedrive',
-      tgtKey:'contact_pct_target', isCount:false,
+    { id:'leads',
+      label:'Total leads reached',
+      desc:`${t.leads_curr.toLocaleString()} total outbound touches (webinars, EDMs, events, calls) · edit current below`,
+      currEditable:true, currKey:'leads_curr', currStep:1000,
+      tgtKey:'leads_target', isCurrCount:true,
+      curr: t.leads_curr, tgt: t.leads_target, currPct:null },
+    { id:'contact',
+      label:'Contact Made / Discovery',
+      desc:`${fCnts[0]} deals entered the CRM · live from Pipedrive`,
+      currEditable:false, tgtKey:'contact_pct_target',
       curr: fCnts[0], currPct: t.leads_curr>0?pct(fCnts[0],t.leads_curr):null, tgtPct: t.contact_pct_target },
     { isHdr:true, label:'STAGE 2 — INCREASE EFFECTIVENESS OF SALES PROCESS' },
-    { id:'meeting', label:'Meeting Scheduled', desc:'% of Contact Made deals · live from Pipedrive',
-      tgtKey:'meeting_pct_target', isCount:false,
+    { id:'meeting',
+      label:'Meetings Scheduled',
+      desc:`${fCnts[1]} deals progressed to meeting stage · ${openByStg['Meeting Scheduled']} currently open · Pipedrive`,
+      currEditable:false, tgtKey:'meeting_pct_target',
       curr: fCnts[1], currPct: fRates[1], tgtPct: t.meeting_pct_target },
-    { id:'neg',     label:'Negotiations', desc:'% of Meeting Scheduled · live from Pipedrive',
-      tgtKey:'neg_pct_target', isCount:false,
+    { id:'neg',
+      label:'Negotiations',
+      desc:`${fCnts[2]} deals in active negotiations · ${openByStg['Negotiations']} currently open · Pipedrive`,
+      currEditable:false, tgtKey:'neg_pct_target',
       curr: fCnts[2], currPct: fRates[2], tgtPct: t.neg_pct_target },
-    { id:'order',   label:'Order Form Sent', desc:'% of Negotiations · live from Pipedrive',
-      tgtKey:'order_pct_target', isCount:false,
+    { id:'order',
+      label:'Order Form Sent',
+      desc:`${fCnts[3]} deals with order form sent · ${openByStg['Order Form Sent']} currently open · Pipedrive`,
+      currEditable:false, tgtKey:'order_pct_target',
       curr: fCnts[3], currPct: fRates[3], tgtPct: t.order_pct_target },
     { isHdr:true, label:'STAGE 3 — INCREASE SALES CONVERSIONS' },
-    { id:'invoice', label:'Invoice Sent', desc:'% of Order Form Sent · live from Pipedrive',
-      tgtKey:'invoice_pct_target', isCount:false,
+    { id:'invoice',
+      label:'Invoice Sent',
+      desc:`${fCnts[5]} deals with invoice sent · ${openByStg['Invoice Sent']} currently open · Pipedrive`,
+      currEditable:false, tgtKey:'invoice_pct_target',
       curr: fCnts[5], currPct: fRates[5], tgtPct: t.invoice_pct_target },
-    { id:'won',     label:'Won (Paid Subscription)', desc:'% of Invoice Sent · live from Pipedrive',
-      tgtKey:'won_pct_target', isCount:false,
+    { id:'won',
+      label:'Won (Paid Subscription)',
+      desc:`${wonAll.length} deals closed as won · avg deal value ${fmtDollar(avgDealVal)} (${fullPriceCnt} full · ${discountCnt} discounted) · Pipedrive`,
+      currEditable:false, tgtKey:'won_pct_target',
       curr: wonAll.length, currPct: fCnts[5]>0?pct(wonAll.length,fCnts[5]):null, tgtPct: t.won_pct_target },
     { isHdr:true, label:'STAGE 4 — INCREASE TRANSACTION VALUE' },
-    { id:'upsell',  label:'Upsell rate', desc:'% of clients who purchase additional licences · target only',
-      tgtKey:'upsell_pct_target', isCount:false,
-      curr: null, currPct: null, tgtPct: t.upsell_pct_target },
-    { id:'price',   label:'Price increase', desc:'Annual price increase per licence ($)',
-      currKey:'price_increase', tgtKey:'price_increase', isCount:true,
-      curr: t.price_increase, tgt: t.price_increase },
+    { id:'upsell',
+      label:'Upsell rate',
+      desc:`${t.upsell_pct_curr}% of clients currently take additional licences · edit current below`,
+      currEditable:true, currKey:'upsell_pct_curr', currStep:1, currMax:100,
+      tgtKey:'upsell_pct_target', isCurrPct:true,
+      curr: null, currPct: t.upsell_pct_curr||null, tgtPct: t.upsell_pct_target },
+    { id:'price',
+      label:'Annual price increase per licence',
+      desc:`Current increase: $${t.price_curr||0}/year · edit current below`,
+      currEditable:true, currKey:'price_curr', currStep:10, currPrefix:'$',
+      tgtKey:'price_target', isCurrCount:true,
+      curr: t.price_curr||0, tgt: t.price_target||0, currPct:null },
   ];
 
-  // Build projected counts iteratively
+  // ── Build projections ────────────────────────────────────────────────────
   const proj = {};
   let prevProj = t.leads_target;
   for (const r of ROWS) {
     if (r.isHdr) continue;
-    if (r.id==='leads')   { proj[r.id]=t.leads_target; prevProj=t.leads_target; }
-    else if (r.id==='contact') { proj[r.id]=Math.round(prevProj*t.contact_pct_target/100); prevProj=proj[r.id]; }
-    else if (r.id==='meeting') { proj[r.id]=Math.round(prevProj*t.meeting_pct_target/100); prevProj=proj[r.id]; }
-    else if (r.id==='neg')     { proj[r.id]=Math.round(prevProj*t.neg_pct_target/100);     prevProj=proj[r.id]; }
-    else if (r.id==='order')   { proj[r.id]=Math.round(prevProj*t.order_pct_target/100);   prevProj=proj[r.id]; }
-    else if (r.id==='invoice') { proj[r.id]=Math.round(prevProj*t.invoice_pct_target/100); prevProj=proj[r.id]; }
-    else if (r.id==='won')     { proj[r.id]=Math.round(prevProj*t.won_pct_target/100);     prevProj=proj[r.id]; }
-    else proj[r.id]=null;
+    if      (r.id==='leads')   { proj.leads   = t.leads_target;                                         prevProj=proj.leads; }
+    else if (r.id==='contact') { proj.contact = Math.round(prevProj*t.contact_pct_target/100);          prevProj=proj.contact; }
+    else if (r.id==='meeting') { proj.meeting = Math.round(prevProj*t.meeting_pct_target/100);          prevProj=proj.meeting; }
+    else if (r.id==='neg')     { proj.neg     = Math.round(prevProj*t.neg_pct_target/100);              prevProj=proj.neg; }
+    else if (r.id==='order')   { proj.order   = Math.round(prevProj*t.order_pct_target/100);            prevProj=proj.order; }
+    else if (r.id==='invoice') { proj.invoice = Math.round(prevProj*t.invoice_pct_target/100);          prevProj=proj.invoice; }
+    else if (r.id==='won')     { proj.won     = Math.round(prevProj*t.won_pct_target/100);              prevProj=proj.won; }
+    else proj[r.id] = null;
   }
-  const projWon = proj.won;
+  const projWon    = proj.won;
   const projImpPct = wonAll.length>0&&projWon!=null ? Math.round((projWon-wonAll.length)/wonAll.length*100) : null;
-  const currRevMo  = wonAll.length * avgDealVal / 12;
-  const projRevMo  = projWon!=null ? projWon * avgDealVal / 12 : null;
+
+  // ── Revenue projection (36-month ARR trajectory) ─────────────────────────
+  const firstDealDt = sDeals.reduce((min,d)=>{const dt=pdParseDate(d['Deal - Deal created']);return pdValidDate(dt)&&(!min||dt<min)?dt:min;},null);
+  const monthsElapsed = firstDealDt ? Math.max(1,(new Date()-firstDealDt)/(1000*60*60*24*30.44)) : 12;
+  const currMoRate = wonAll.length / monthsElapsed;
+  const projMoRate = projWon!=null ? projWon/monthsElapsed : currMoRate;
+  // Cumulative ARR: each won deal = avgDealVal added to base ARR (annual licence, 0-churn projection)
+  const proj36M    = Array.from({length:36},(_,i)=>i+1);
+  const currCumARR = proj36M.map(m => currMoRate * m * avgDealVal);
+  const targCumARR = proj36M.map(m => projMoRate * m * avgDealVal);
+  const currARR1y  = Math.round(currCumARR[11]);
+  const targARR1y  = Math.round(targCumARR[11]);
+  const currARR3y  = Math.round(currCumARR[35]);
+  const targARR3y  = Math.round(targCumARR[35]);
 
   function fmtD(v) { return v!=null?'$'+(v/1000).toFixed(0)+'k':'—'; }
+  function fmtM(v) { return v>=1000000?'$'+(v/1000000).toFixed(2)+'M':'$'+(v/1000).toFixed(0)+'k'; }
 
+  // ── Render ────────────────────────────────────────────────────────────────
   sc.innerHTML = `
   <div class="box">
     <div class="box-title">OPTI-MAX Sales Growth Model
       <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">
-        Pipedrive actuals are live · targets save automatically to your browser
+        Pipedrive actuals are live · edits save automatically
       </span>
     </div>
     <p style="font-size:12px;color:var(--tm);margin-bottom:16px;line-height:1.6">
-      The <strong>OPTI-MAX framework</strong> shows how small % improvements at each stage of your sales funnel
-      <strong>compound</strong> into significantly more won deals. Stage 1 is manual (pre-CRM reach).
-      Stages 2–3 pull live from Pipedrive. Edit any <span style="color:var(--acc);font-weight:500">Target %</span> field — the projections update instantly.
+      The <strong>OPTI-MAX framework</strong> shows how small % improvements at each stage
+      <strong>compound</strong> into significantly more won deals. White cells = Pipedrive live data.
+      <span style="color:var(--acc);font-weight:500">Blue input cells</span> are editable — changes update projections instantly.
     </p>
 
     <div class="cards" style="margin-bottom:18px">
-      <div class="card"><div class="card-label">Current won deals (all time)</div><div class="card-value">${wonAll.length}</div><div class="card-sub">2026 Sales pipeline</div></div>
-      <div class="card"><div class="card-label">Projected won (targets)</div><div class="card-value" style="color:var(--gr)">${projWon??'—'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">+${projImpPct}% improvement</div>`:''}
-      </div>
-      <div class="card"><div class="card-label">Avg deal value</div><div class="card-value">${fmtDollar(avgDealVal)}</div>
-        <div class="card-sub">${fullPriceCount} full price · ${discountCount} discounted</div></div>
-      ${projRevMo!=null?`<div class="card"><div class="card-label">Projected MRR uplift</div><div class="card-value" style="color:var(--gr)">+${fmtD(projRevMo-currRevMo)}</div><div class="card-sub">vs current ~${fmtD(currRevMo)}/mo</div></div>`:''}
+      <div class="card"><div class="card-label">Won deals (all time)</div><div class="card-value">${wonAll.length}</div><div class="card-sub">2026 Sales pipeline</div></div>
+      <div class="card"><div class="card-label">Projected won (targets)</div><div class="card-value" style="color:var(--gr)">${projWon??'—'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">+${projImpPct}% improvement</div>`:''}</div>
+      <div class="card"><div class="card-label">Avg deal value</div><div class="card-value">${fmtDollar(avgDealVal)}</div><div class="card-sub">${fullPriceCnt} full · ${discountCnt} discounted</div></div>
+      <div class="card"><div class="card-label">ARR uplift (Year 1)</div><div class="card-value" style="color:var(--gr)">+${fmtM(targARR1y-currARR1y)}</div><div class="card-sub">current ${fmtM(currARR1y)} → target ${fmtM(targARR1y)}</div></div>
     </div>
 
     <div style="overflow-x:auto">
       <table class="om-table">
         <thead><tr>
-          <th style="min-width:220px">Stage</th>
-          <th style="text-align:right">Current #</th>
-          <th style="text-align:right">Current %</th>
-          <th style="text-align:right;min-width:100px">Target</th>
+          <th style="min-width:240px">Stage</th>
+          <th style="text-align:right;min-width:110px">Current #</th>
+          <th style="text-align:right">Conv %</th>
+          <th style="text-align:right;min-width:110px">Target</th>
           <th style="text-align:right">Projected #</th>
-          <th style="text-align:right">Δ vs current</th>
-          <th style="text-align:right">% uplift</th>
+          <th style="text-align:right">Δ</th>
+          <th style="text-align:right">Uplift</th>
         </tr></thead>
         <tbody>
         ${ROWS.map(r => {
           if (r.isHdr) return `<tr class="om-stage-hdr"><td colspan="7">${r.label}</td></tr>`;
-          const prj = proj[r.id];
-          const curr = r.curr;
-          const delta = prj!=null&&curr!=null ? prj-curr : null;
-          const uplift= curr>0&&delta!=null ? +((delta/curr)*100).toFixed(1) : null;
-          let tgtInput;
-          if (r.id==='price') {
-            tgtInput = `<div style="display:flex;align-items:center;gap:4px;justify-content:flex-end">$<input class="om-input" type="number" min="0" step="10" value="${t[r.tgtKey]||0}" onchange="omSave('${r.tgtKey}',this.value)"></div>`;
-          } else if (r.isCount) {
-            tgtInput = `<input class="om-input om-input-wide" type="number" min="0" step="1000" value="${r.tgt||0}" onchange="omSave('${r.tgtKey}',this.value)">`;
+          const prj    = proj[r.id];
+          const curr   = r.isCurrPct ? null : r.curr;
+          const delta  = prj!=null&&curr!=null&&!r.isCurrPct ? prj-curr : null;
+          const uplift = curr>0&&delta!=null ? +((delta/curr)*100).toFixed(1) : null;
+
+          // Current cell: editable for manual rows, readonly for Pipedrive rows
+          let currCell;
+          if (r.currEditable && r.isCurrPct) {
+            currCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end">
+              <input class="om-input" type="number" min="0" max="${r.currMax||100}" step="${r.currStep||1}" value="${t[r.currKey]||0}" onchange="omSave('${r.currKey}',this.value)">%</div>`;
+          } else if (r.currEditable && r.isCurrCount) {
+            const prefix = r.currPrefix||'';
+            currCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end">${prefix?prefix+' ':''}<input class="om-input${r.currStep>=1000?' om-input-wide':''}" type="number" min="0" step="${r.currStep||1}" value="${t[r.currKey]||0}" onchange="omSave('${r.currKey}',this.value)"></div>`;
           } else {
-            tgtInput = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="100" step="1" value="${r.tgtPct||0}" onchange="omSave('${r.tgtKey}',this.value)">%</div>`;
+            currCell = `<span style="font-weight:500">${curr!=null?curr.toLocaleString():'—'}</span>`;
           }
+
+          // Target cell
+          let tgtCell;
+          if (r.id==='price') {
+            tgtCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end">$<input class="om-input" type="number" min="0" step="10" value="${t[r.tgtKey]||0}" onchange="omSave('${r.tgtKey}',this.value)"></div>`;
+          } else if (r.id==='leads') {
+            tgtCell = `<input class="om-input om-input-wide" type="number" min="0" step="1000" value="${t[r.tgtKey]||0}" onchange="omSave('${r.tgtKey}',this.value)">`;
+          } else {
+            tgtCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="100" step="1" value="${r.tgtPct||0}" onchange="omSave('${r.tgtKey}',this.value)">%</div>`;
+          }
+
           return `<tr>
-            <td><div style="font-weight:500">${r.label}</div>${r.desc?`<div style="font-size:11px;color:var(--tl)">${r.desc}</div>`:''}</td>
-            <td style="text-align:right;font-weight:500">${curr!=null?curr.toLocaleString():'—'}</td>
-            <td style="text-align:right">${r.currPct!=null?`<span class="conv-pct ${r.currPct>=70?'good':r.currPct>=40?'mid':'bad'}">${fmtPct(r.currPct)}</span>`:'—'}</td>
-            <td style="text-align:right">${tgtInput}</td>
+            <td><div style="font-weight:500">${r.label}</div>${r.desc?`<div style="font-size:11px;color:var(--tl);margin-top:2px">${r.desc}</div>`:''}</td>
+            <td style="text-align:right">${currCell}</td>
+            <td style="text-align:right">${r.currPct!=null?`<span class="conv-pct ${r.currPct>=70?'good':r.currPct>=40?'mid':'bad'}">${fmtPct(r.currPct)}</span>`:r.id==='contact'?'<span style="color:var(--tl);font-size:11px">of leads</span>':'—'}</td>
+            <td style="text-align:right">${tgtCell}</td>
             <td style="text-align:right;font-weight:500;color:var(--gr)">${prj!=null?prj.toLocaleString():'—'}</td>
             <td style="text-align:right">${delta!=null?`<span style="color:${delta>=0?'var(--gr)':'var(--re)'}">${delta>=0?'+':''}${delta.toLocaleString()}</span>`:'—'}</td>
             <td style="text-align:right">${uplift!=null?`<span class="conv-pct ${uplift>=0?'good':'bad'}">${uplift>=0?'+':''}${uplift}%</span>`:'—'}</td>
@@ -3135,58 +3184,130 @@ function renderPdOptimax(sc) {
         </tbody>
       </table>
     </div>
-
-    <div style="margin-top:22px;padding-top:18px;border-top:2px solid var(--bd)">
-      <div class="box-title">Sales Velocity Targets</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:480px">
-        <div>
-          <label style="font-size:12px;font-weight:500;color:var(--navy);display:block;margin-bottom:5px">
-            Target: % won within 30 days
-            <span style="font-weight:400;color:var(--tl)">&nbsp;(now: ${w30Pct!=null?fmtPct(w30Pct):'no data'})</span>
-          </label>
-          <div style="display:flex;align-items:center;gap:5px">
-            <input class="om-input" type="number" min="0" max="100" step="5" value="${t.cycle_30d_target}" onchange="omSave('cycle_30d_target',this.value)">
-            <span style="font-size:12px;color:var(--tl)">%</span>
-          </div>
-        </div>
-        <div>
-          <label style="font-size:12px;font-weight:500;color:var(--navy);display:block;margin-bottom:5px">
-            Target: avg days to close
-            <span style="font-weight:400;color:var(--tl)">&nbsp;(now: ${avgCycleAll!=null?avgCycleAll+'d':'no data'})</span>
-          </label>
-          <div style="display:flex;align-items:center;gap:5px">
-            <input class="om-input" type="number" min="1" max="365" step="1" value="${t.avg_cycle_target}" onchange="omSave('avg_cycle_target',this.value)">
-            <span style="font-size:12px;color:var(--tl)">days</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div style="margin-top:18px">
-      <button class="btn-cancel" onclick="omReset()">↺ Reset all targets to defaults</button>
+    <div style="margin-top:14px">
+      <button class="btn-cancel" onclick="omReset()">↺ Reset all to defaults</button>
     </div>
   </div>
 
+  <!-- Revenue projection chart -->
   <div class="box">
-    <div class="box-title">OPTI-MAX: Current vs Projected at each deal stage</div>
-    <div style="font-size:12px;color:var(--tl);margin-bottom:10px">Blue = current Pipedrive actuals · Green = projected if all targets are met</div>
-    <div class="chart-wrap" style="height:260px"><canvas id="pd-om-chart"></canvas></div>
+    <div class="box-title">Revenue trajectory — current vs target (3-year projection)</div>
+    <p style="font-size:12px;color:var(--tm);margin-bottom:12px;line-height:1.5">
+      Cumulative annual contract value based on ${currMoRate.toFixed(1)} won deals/month (current) vs ${projMoRate.toFixed(1)}/month (target).
+      Assumes annual licences at avg ${fmtDollar(avgDealVal)}, 0% churn.
+    </p>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:16px">
+      <div class="card" style="margin:0"><div class="card-label">Year 1 · current</div><div class="card-value" style="font-size:20px">${fmtM(currARR1y)}</div></div>
+      <div class="card" style="margin:0"><div class="card-label">Year 1 · target</div><div class="card-value" style="font-size:20px;color:var(--gr)">${fmtM(targARR1y)}</div><div class="card-sub" style="color:var(--gr)">+${fmtM(targARR1y-currARR1y)}</div></div>
+      <div class="card" style="margin:0"><div class="card-label">Year 3 · current</div><div class="card-value" style="font-size:20px">${fmtM(currARR3y)}</div></div>
+      <div class="card" style="margin:0"><div class="card-label">Year 3 · target</div><div class="card-value" style="font-size:20px;color:var(--gr)">${fmtM(targARR3y)}</div><div class="card-sub" style="color:var(--gr)">+${fmtM(targARR3y-currARR3y)}</div></div>
+    </div>
+    <div class="chart-wrap" style="height:280px"><canvas id="pd-om-rev"></canvas></div>
+  </div>
+
+  <!-- Sales velocity -->
+  <div class="box">
+    <div class="box-title">Sales Velocity Targets</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div>
+            <div style="font-size:13px;font-weight:500;color:var(--navy)">% won within 30 days</div>
+            <div style="font-size:11px;color:var(--tl)">${w30Cnt} of ${cycleDays.length} won deals · all time</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:4px">
+            <span style="font-size:11px;color:var(--tl)">Target:</span>
+            <input class="om-input" style="width:54px" type="number" min="0" max="100" step="5" value="${t.cycle_30d_target}" onchange="omSave('cycle_30d_target',this.value)">
+            <span style="font-size:11px;color:var(--tl)">%</span>
+          </div>
+        </div>
+        <div class="chart-wrap" style="height:130px"><canvas id="pd-om-vel30"></canvas></div>
+      </div>
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div>
+            <div style="font-size:13px;font-weight:500;color:var(--navy)">Avg days to close</div>
+            <div style="font-size:11px;color:var(--tl)">${avgCycle!=null?avgCycle+'d actual':'no data yet'} · created → won</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:4px">
+            <span style="font-size:11px;color:var(--tl)">Target:</span>
+            <input class="om-input" style="width:54px" type="number" min="1" max="365" step="1" value="${t.avg_cycle_target}" onchange="omSave('avg_cycle_target',this.value)">
+            <span style="font-size:11px;color:var(--tl)">d</span>
+          </div>
+        </div>
+        <div class="chart-wrap" style="height:130px"><canvas id="pd-om-velcyc"></canvas></div>
+      </div>
+    </div>
   </div>`;
 
-  // OPTI-MAX comparison chart
-  const omRows = ROWS.filter(r=>!r.isHdr && r.id!=='upsell' && r.id!=='price' && proj[r.id]!=null);
-  makeChart('pd-om-chart', {
-    type:'bar',
+  // ── Revenue projection line chart ────────────────────────────────────────
+  const moLabels = proj36M.map(m => {
+    if (m===1)  return 'Mo 1';
+    if (m===6)  return 'Mo 6';
+    if (m===12) return 'Yr 1';
+    if (m===18) return 'Mo 18';
+    if (m===24) return 'Yr 2';
+    if (m===30) return 'Mo 30';
+    if (m===36) return 'Yr 3';
+    return '';
+  });
+  makeChart('pd-om-rev', {
+    type:'line',
     data:{
-      labels: omRows.map(r=>r.label.split(' ').slice(0,3).join(' ')),
+      labels: moLabels,
       datasets:[
-        {label:'Current (Pipedrive)', data:omRows.map(r=>r.curr??0), backgroundColor:'#2e8bc0', borderRadius:4},
-        {label:'Projected (targets)', data:omRows.map(r=>proj[r.id]??0), backgroundColor:'rgba(42,122,75,0.75)', borderRadius:4},
+        { label:'Current trajectory', data:currCumARR, borderColor:'#2e8bc0', borderWidth:2.5, tension:.3, pointRadius:0, fill:false,
+          pointRadius: proj36M.map(m=>[1,12,24,36].includes(m)?4:0) },
+        { label:'Target trajectory (OPTI-MAX)', data:targCumARR, borderColor:'#2a7a4b', borderWidth:2.5, tension:.3, pointRadius:0, fill:false,
+          pointRadius: proj36M.map(m=>[1,12,24,36].includes(m)?4:0) },
       ]
     },
-    options:{responsive:true, maintainAspectRatio:false,
-      plugins:{legend:{position:'bottom',labels:{font:{family:'DM Sans',size:11},boxWidth:12}}},
-      scales:{x:{grid:{display:false},ticks:axStyle},y:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true}}
+    options:{ responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
+      scales:{
+        x:{ grid:{display:false}, ticks:{ ...axStyle, callback:(v,i)=>moLabels[i]||null } },
+        y:{ grid:gridStyle, ticks:{ ...axStyle, callback:v=>v>=1000000?'$'+(v/1000000).toFixed(1)+'M':'$'+(v/1000).toFixed(0)+'k' }, beginAtZero:true }
+      }
+    }
+  });
+
+  // ── Velocity: % within 30d (horizontal bar: actual vs target) ────────────
+  makeChart('pd-om-vel30', {
+    type:'bar',
+    data:{
+      labels:['Actual','Target'],
+      datasets:[{
+        data:[w30Pct??0, t.cycle_30d_target],
+        backgroundColor:[w30Pct!=null&&w30Pct>=t.cycle_30d_target?'#2a7a4b':'#2e8bc0', 'rgba(196,94,0,0.25)'],
+        borderColor:[w30Pct!=null&&w30Pct>=t.cycle_30d_target?'#2a7a4b':'#2e8bc0','#c25a00'],
+        borderWidth:2, borderRadius:4
+      }]
+    },
+    options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false},
+        tooltip:{ callbacks:{ label:ctx=>' '+ctx.raw.toFixed(1)+'%' } } },
+      scales:{ x:{ grid:gridStyle, ticks:{...axStyle,callback:v=>v+'%'}, min:0, max:100 }, y:{grid:{display:false},ticks:axStyle} }
+    }
+  });
+
+  // ── Velocity: avg cycle days (horizontal bar: actual vs target) ───────────
+  const maxCycleBar = Math.max((avgCycle||0), t.avg_cycle_target) * 1.3;
+  makeChart('pd-om-velcyc', {
+    type:'bar',
+    data:{
+      labels:['Actual','Target'],
+      datasets:[{
+        data:[avgCycle??0, t.avg_cycle_target],
+        backgroundColor:[avgCycle!=null&&avgCycle<=t.avg_cycle_target?'#2a7a4b':'#2e8bc0','rgba(196,94,0,0.25)'],
+        borderColor:[avgCycle!=null&&avgCycle<=t.avg_cycle_target?'#2a7a4b':'#2e8bc0','#c25a00'],
+        borderWidth:2, borderRadius:4
+      }]
+    },
+    options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false},
+        tooltip:{ callbacks:{ label:ctx=>' '+ctx.raw+' days' } } },
+      scales:{ x:{ grid:gridStyle, ticks:{...axStyle,callback:v=>v+'d'}, min:0, max:Math.ceil(maxCycleBar) }, y:{grid:{display:false},ticks:axStyle} }
     }
   });
 }
