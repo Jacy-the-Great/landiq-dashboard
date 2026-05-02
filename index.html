@@ -146,6 +146,15 @@ tr:hover td{background:#fafcfe}
 .conv-pct{font-family:'DM Mono',monospace;font-weight:600}
 .conv-pct.good{color:var(--gr)}.conv-pct.mid{color:var(--wa)}.conv-pct.bad{color:var(--re)}
 
+/* OPTI-MAX TABLE */
+.om-table{width:100%;border-collapse:collapse;font-size:13px}
+.om-table th{padding:9px 12px;font-size:11px;font-weight:600;color:var(--tl);text-transform:uppercase;letter-spacing:.06em;background:#f5f7fa;border-bottom:2px solid var(--bd);text-align:left}
+.om-table td{padding:8px 12px;border-bottom:1px solid var(--bd);vertical-align:middle}
+.om-table tr.om-stage-hdr td{background:#1a3c5e;color:#fff;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:7px 12px}
+.om-table tr:last-child td{border-bottom:none}
+.om-input{padding:4px 7px;border:1.5px solid var(--acc);border-radius:5px;font-size:12px;font-family:'DM Mono',monospace;text-align:right;background:var(--wh);width:72px;color:var(--navy);font-weight:600}
+.om-input:focus{outline:none;border-color:var(--navy)}
+.om-input-wide{width:100px}
 /* OUTCOME ITEM */
 .outcome-item{font-size:13px;color:var(--tm);padding:8px 12px;border-left:3px solid var(--acc);margin-bottom:8px;line-height:1.5;background:var(--acc2);border-radius:0 6px 6px 0}
 
@@ -2119,8 +2128,8 @@ function renderPipedrive(el) {
       ['People (total)', _pd_people.length || null],
     ])}
     <div class="sub-tabs">
-      ${['import','sales','users','trials'].map(s =>
-        `<button class="sub-tab${sub===s?' active':''}" onclick="setPdSub('${s}')">${{import:'Import Data',sales:'Sales',users:'Users & Licences',trials:'Trial Pipeline'}[s]}</button>`
+      ${['import','sales','users','trials','optimax'].map(s =>
+        `<button class="sub-tab${sub===s?' active':''}" onclick="setPdSub('${s}')">${{import:'Import Data',sales:'Sales',users:'Users & Licences',trials:'Trial Pipeline',optimax:'OPTI-MAX'}[s]}</button>`
       ).join('')}
     </div>
     <div id="pd-sub-content"></div>`;
@@ -2136,6 +2145,7 @@ function setPdSub(sub, rerender = true) {
   else if (sub === 'sales')  renderPdSales(sc);
   else if (sub === 'users')  renderPdUsers(sc);
   else if (sub === 'trials') renderPdTrials(sc);
+  else if (sub === 'optimax') renderPdOptimax(sc);
 }
 
 function renderPdImport(sc) {
@@ -2316,6 +2326,73 @@ function renderPdSales(sc) {
 
   const avgWinRate12 = (() => { const r = months12.map(m => winRateByMonth[m]).filter(v => v != null); return r.length ? r.reduce((a,b)=>a+b,0)/r.length : null; })();
 
+  // ── CONVERSION FUNNEL (OPTI-MAX stages) ─────────────────────────────────────
+  const FUNNEL_S = [
+    'Contact Made/Discovery','Meeting Scheduled','Negotiations',
+    'Order Form Sent','Signed Order Form Returned','Invoice Sent','Payment Received'
+  ];
+  const funnelSIdx = Object.fromEntries(FUNNEL_S.map((s,i)=>[s,i]));
+  function dealReachedS(d, idx) {
+    if (d['Deal - Status'] === 'Won') return true;
+    let stg = d['Deal - Stage'] || '';
+    if (stg === 'Contact Made') stg = 'Contact Made/Discovery';
+    const di = funnelSIdx[stg]; return di != null && di >= idx;
+  }
+  // Use deals created in current range for funnel
+  const funnelDeals = salesDeals.filter(d =>
+    range.from ? pdInRange(d['Deal - Deal created'], range) : true
+  );
+  const funnelCnts  = FUNNEL_S.map((_,i) => funnelDeals.filter(d => dealReachedS(d,i)).length);
+  const funnelRates = FUNNEL_S.map((_,i) =>
+    i===0 ? null : (funnelCnts[i-1]>0 ? pct(funnelCnts[i], funnelCnts[i-1]) : null)
+  );
+  const funnelWon   = funnelDeals.filter(d => d['Deal - Status']==='Won').length;
+  const funnelOvr   = funnelCnts[0]>0 ? pct(funnelWon, funnelCnts[0]) : null;
+
+  // Load OPTI-MAX targets for reference lines
+  function omTargets() {
+    try { return { meeting:80,neg:95,order:82,invoice:90,won:90,...JSON.parse(localStorage.getItem('liq_optimax')||'{}') }; }
+    catch { return {meeting:80,neg:95,order:82,invoice:90,won:90}; }
+  }
+  const omt = omTargets();
+  const funnelTargets = [null, omt.meeting, omt.neg, omt.order, null, omt.invoice, omt.won];
+
+  // Month-by-month stage-to-stage conversion rates
+  const stageConvByMonth = FUNNEL_S.slice(1).map((_, si) =>
+    months12.map(m => {
+      const mDeals = salesDeals.filter(d => {
+        const dt = pdParseDate(d['Deal - Deal created']);
+        return pdValidDate(dt) && monthKey(dt.toISOString())===m;
+      });
+      const prev = mDeals.filter(d=>dealReachedS(d,si)).length;
+      const curr = mDeals.filter(d=>dealReachedS(d,si+1)).length;
+      return prev>0 ? pct(curr,prev) : null;
+    })
+  );
+
+  // ── SALES VELOCITY ───────────────────────────────────────────────────────────
+  const CYCLE_BKTS = [{lo:0,hi:14,lbl:'0–14d'},{lo:15,hi:30,lbl:'15–30d'},{lo:31,hi:60,lbl:'31–60d'},{lo:61,hi:90,lbl:'61–90d'},{lo:91,hi:Infinity,lbl:'90d+'}];
+  function dealCycleDays(d) {
+    const c=pdParseDate(d['Deal - Deal created']), w=pdParseDate(d['Deal - Won time']);
+    if (!pdValidDate(c)||!pdValidDate(w)) return null;
+    return Math.round((w-c)/86400000);
+  }
+  const cycleDistrib = CYCLE_BKTS.map(b => ({...b, count: wonDeals.filter(d=>{const dy=dealCycleDays(d);return dy!=null&&dy>=b.lo&&dy<=b.hi;}).length}));
+  const within30Cnt  = cycleDistrib[0].count + cycleDistrib[1].count;
+  const within30Pct  = wonDeals.length ? pct(within30Cnt, wonDeals.length) : null;
+  const within30ByMo = {};
+  months12.forEach(m => {
+    const mw = wonDeals.filter(d=>{const dt=pdParseDate(d['Deal - Won time']);return pdValidDate(dt)&&monthKey(dt.toISOString())===m;});
+    const mw30 = mw.filter(d=>{const dy=dealCycleDays(d);return dy!=null&&dy<=30;});
+    within30ByMo[m] = mw.length>0 ? pct(mw30.length,mw.length) : null;
+  });
+  const velTarget30 = (() => {
+    try { return JSON.parse(localStorage.getItem('liq_optimax')||'{}').cycle_30d_target ?? 50; } catch { return 50; }
+  })();
+  const velTargetCycle = (() => {
+    try { return JSON.parse(localStorage.getItem('liq_optimax')||'{}').avg_cycle_target ?? 45; } catch { return 45; }
+  })();
+
   sc.innerHTML = `
     ${!wonDeals.length && !_pd_deals.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive deals CSV first.</div></div>' : ''}
     <div class="cards" style="margin-bottom:18px">
@@ -2354,7 +2431,55 @@ function renderPdSales(sc) {
     </div>
 
     <div class="box"><div class="box-title">Pipeline stage snapshot — 2026 Sales (Open · Won · Lost)</div>
-      <div class="chart-wrap" style="height:${SALES_STAGES.length * 38 + 60}px"><canvas id="pd-stage-snap"></canvas></div></div>`;
+      <div class="chart-wrap" style="height:${SALES_STAGES.length * 38 + 60}px"><canvas id="pd-stage-snap"></canvas></div></div>
+
+    <div class="box" style="margin-top:14px">
+      <div class="box-title">Sales conversion funnel — ${range.label}
+        <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">"Reached stage" · deals created in period · overall conversion: ${funnelOvr!=null?fmtPct(funnelOvr):'—'}</span>
+      </div>
+      <div class="chart-wrap" style="height:260px"><canvas id="pd-funnel"></canvas></div>
+      <table class="conv-table" style="margin-top:14px">
+        <thead><tr><th>Stage</th><th style="text-align:right">Deals</th><th style="text-align:right">Conv%</th><th style="text-align:right">Target%</th><th style="text-align:right">Gap</th></tr></thead>
+        <tbody>
+          ${FUNNEL_S.map((s,i)=>{
+            const cnt=funnelCnts[i], rate=funnelRates[i], tgt=funnelTargets[i];
+            const gap=rate!=null&&tgt!=null ? +(rate-tgt).toFixed(1) : null;
+            const cls=gap==null?'':gap>=0?'good':'bad';
+            return `<tr><td>${s}</td>
+              <td style="text-align:right;font-weight:500">${cnt}</td>
+              <td style="text-align:right">${rate!=null?`<span class="conv-pct ${rate>=70?'good':rate>=50?'mid':'bad'}">${fmtPct(rate)}</span>`:i===0?'<span style="color:var(--tl)">entry</span>':'—'}</td>
+              <td style="text-align:right">${tgt!=null?tgt+'%':'—'}</td>
+              <td style="text-align:right">${gap!=null?`<span class="conv-pct ${cls}">${gap>=0?'+':''}${gap}%</span>`:'—'}</td>
+            </tr>`;
+          }).join('')}
+          <tr style="border-top:2px solid var(--bd);font-weight:600"><td>Won (total)</td><td style="text-align:right">${funnelWon}</td>
+            <td style="text-align:right">${funnelOvr!=null?`<span class="conv-pct ${funnelOvr>=40?'good':funnelOvr>=25?'mid':'bad'}">${fmtPct(funnelOvr)}</span>`:'—'}</td>
+            <td colspan="2" style="text-align:right;font-size:11px;color:var(--tl)">overall entry→won</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="box" style="margin-top:14px">
+      <div class="box-title">Stage-to-stage conversion rates by month — ${range.label}</div>
+      <div style="font-size:12px;color:var(--tl);margin-bottom:8px">Conversion % at each stage, for deals created each month. Set targets in the OPTI-MAX tab.</div>
+      <div class="chart-wrap" style="height:280px"><canvas id="pd-conv-month"></canvas></div>
+    </div>
+
+    <div class="box" style="margin-top:14px">
+      <div class="box-title">Sales velocity — time from deal creation to won</div>
+      <div class="cards" style="margin-bottom:14px">
+        ${within30Pct!=null ? `<div class="card"><div class="card-label">Won within 30 days</div><div class="card-value">${fmtPct(within30Pct)}</div><div class="card-sub">${within30Cnt} of ${wonDeals.length} won deals · target ${velTarget30}%</div></div>`
+          : `<div class="card"><div class="card-label">Won within 30 days</div><div class="card-nodata">no data</div></div>`}
+        ${avgCycleDays!=null ? `<div class="card"><div class="card-label">Avg days to close</div><div class="card-value ${avgCycleDays<=velTargetCycle?'':''}">  ${avgCycleDays}d</div><div class="card-sub">target ≤${velTargetCycle}d · created→won</div></div>`
+          : `<div class="card"><div class="card-label">Avg days to close</div><div class="card-nodata">no data</div></div>`}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div><div style="font-size:12px;font-weight:500;color:var(--navy);margin-bottom:8px">Cycle time distribution</div>
+          <div class="chart-wrap" style="height:200px"><canvas id="pd-cycle-dist"></canvas></div></div>
+        <div><div style="font-size:12px;font-weight:500;color:var(--navy);margin-bottom:8px">% won within 30 days — by month</div>
+          <div class="chart-wrap" style="height:200px"><canvas id="pd-vel-month"></canvas></div></div>
+      </div>
+    </div>`;
 
   if (wonDeals.length) {
     makeChart('pd-won-month', {
@@ -2438,6 +2563,62 @@ function renderPdSales(sc) {
       options:{ responsive:true, maintainAspectRatio:false,
         plugins:{ legend:{display:false} },
         scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true} }
+      }
+    });
+    // Conversion funnel chart (Pipedrive-style vertical bars)
+    if (funnelCnts[0] > 0) {
+      makeChart('pd-funnel', {
+        type: 'bar',
+        data: {
+          labels: FUNNEL_S.map(s=>s.length>20?s.slice(0,20)+'…':s),
+          datasets: [
+            { label:'Reached stage', data:funnelCnts, backgroundColor:'#2e8bc0', borderRadius:4 },
+            { label:'Won', data:FUNNEL_S.map((_,i)=>i===FUNNEL_S.length-1?funnelWon:null), backgroundColor:'#2a7a4b', borderRadius:4 },
+          ]
+        },
+        options:{ responsive:true, maintainAspectRatio:false,
+          plugins:{
+            legend:{ position:'bottom', labels:{font:{family:'DM Sans',size:11},boxWidth:12} },
+            datalabels:{ display:false }
+          },
+          scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true} }
+        }
+      });
+      // Stage conversion by month (multi-line)
+      const convColors = ['#2e8bc0','#2a7a4b','#c25a00','#7b1fa2','#00796b','#e65100'];
+      const convDatasets = FUNNEL_S.slice(1).map((s,i) => ({
+        label: s.split(' ').slice(0,2).join(' '),
+        data: stageConvByMonth[i],
+        borderColor: convColors[i%convColors.length],
+        borderWidth: 2, tension:.3, pointRadius:3, fill:false, spanGaps:true
+      }));
+      makeChart('pd-conv-month', {
+        type:'line',
+        data:{ labels:months12.map(m=>monthLabel(m)), datasets:convDatasets },
+        options:{ responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ position:'bottom', labels:{font:{family:'DM Sans',size:11},boxWidth:12} } },
+          scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,callback:v=>v+'%'},min:0,max:100} }
+        }
+      });
+    }
+    // Velocity: cycle distribution
+    makeChart('pd-cycle-dist', {
+      type:'bar',
+      data:{ labels:CYCLE_BKTS.map(b=>b.lbl), datasets:[{label:'Won deals', data:cycleDistrib.map(b=>b.count), backgroundColor:'#2e8bc0', borderRadius:3}] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{display:false} },
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true} }
+      }
+    });
+    makeChart('pd-vel-month', {
+      type:'line',
+      data:{ labels:months12.map(m=>monthLabel(m)), datasets:[
+        {label:'% won ≤30d', data:months12.map(m=>within30ByMo[m]), borderColor:'#2e8bc0', borderWidth:2, tension:.3, pointRadius:3, fill:false, spanGaps:true},
+        {label:`Target ${velTarget30}%`, data:months12.map(()=>velTarget30), borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false},
+      ]},
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{position:'bottom', labels:{font:{family:'DM Sans',size:11},boxWidth:12}} },
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,callback:v=>v+'%'},min:0,max:100} }
       }
     });
     // Pipeline stage snapshot — stacked bar showing Open/Won/Lost per stage
@@ -2782,6 +2963,234 @@ function toggleForm(id) {
 // ─────────────────────────────────────────
 // INIT
 // ─────────────────────────────────────────
+// ── PIPEDRIVE: OPTI-MAX GROWTH MODEL ────────────────────────────────────────
+function renderPdOptimax(sc) {
+  const OM_KEY = 'liq_optimax';
+  const OM_DEF = {
+    // Stage 1 – Leads (manual, not in Pipedrive)
+    leads_curr: 50000, leads_target: 60000,
+    // Stage 2 – Deal funnel targets (%)
+    contact_pct_target: 65,   // % of total leads → Contact Made deal created
+    meeting_pct_target: 80,   // % of Contact Made → Meeting Scheduled
+    neg_pct_target: 95,       // % of Meeting Scheduled → Negotiations
+    order_pct_target: 82,     // % of Negotiations → Order Form Sent
+    invoice_pct_target: 90,   // % of Order Form Sent → Invoice Sent
+    won_pct_target: 90,       // % of Invoice Sent → Won
+    // Stage 4 – Value targets
+    upsell_pct_target: 10,    // % of clients who upsell
+    price_increase: 42,       // annual price increase ($)
+    // Velocity targets
+    cycle_30d_target: 50,     // % of won deals ≤30 days
+    avg_cycle_target: 45,     // avg days to close target
+  };
+
+  function loadOM() { try { return {...OM_DEF,...JSON.parse(localStorage.getItem(OM_KEY)||'{}')}; } catch { return {...OM_DEF}; } }
+  function saveOM(k, v) { const t=loadOM(); t[k]=parseFloat(v)||0; localStorage.setItem(OM_KEY,JSON.stringify(t)); renderPdOptimax(sc); }
+  window.omSave = saveOM;
+  window.omReset = () => { localStorage.removeItem(OM_KEY); renderPdOptimax(sc); };
+
+  const t = loadOM();
+
+  // Pull actuals from Pipedrive (all-time, all sales deals)
+  const sDeals = _pd_deals.filter(d => d['Deal - Pipeline']==='2026 Sales');
+  const FSALL = ['Contact Made/Discovery','Meeting Scheduled','Negotiations','Order Form Sent','Signed Order Form Returned','Invoice Sent','Payment Received'];
+  const fsIdx = Object.fromEntries(FSALL.map((s,i)=>[s,i]));
+  function reached(d, idx) {
+    if (d['Deal - Status']==='Won') return true;
+    let stg=d['Deal - Stage']||''; if(stg==='Contact Made')stg='Contact Made/Discovery';
+    const di=fsIdx[stg]; return di!=null&&di>=idx;
+  }
+  const fCnts = FSALL.map((_,i)=>sDeals.filter(d=>reached(d,i)).length);
+  const fRates= FSALL.map((_,i)=>i===0?null:(fCnts[i-1]>0?pct(fCnts[i],fCnts[i-1]):null));
+  const wonAll = sDeals.filter(d=>d['Deal - Status']==='Won');
+
+  // Average deal value from won deals (mix of $8000 full price + $4000 discounted)
+  const dealValues = wonAll.map(d=>parseFloat(d['Deal - Value'])||0).filter(v=>v>0);
+  const avgDealVal = dealValues.length ? Math.round(dealValues.reduce((a,b)=>a+b,0)/dealValues.length) : 8000;
+  const fullPriceCount = dealValues.filter(v=>v>=7000).length;
+  const discountCount  = dealValues.filter(v=>v>0&&v<7000).length;
+
+  // Sales velocity actuals
+  const wonDealsAll = wonAll;
+  function cdDays(d){const c=pdParseDate(d['Deal - Deal created']),w=pdParseDate(d['Deal - Won time']);if(!pdValidDate(c)||!pdValidDate(w))return null;return Math.round((w-c)/86400000);}
+  const cycleDaysAll = wonDealsAll.map(cdDays).filter(v=>v!=null);
+  const avgCycleAll  = cycleDaysAll.length ? Math.round(cycleDaysAll.reduce((a,b)=>a+b,0)/cycleDaysAll.length) : null;
+  const w30All = cycleDaysAll.filter(d=>d<=30).length;
+  const w30Pct = cycleDaysAll.length ? pct(w30All,cycleDaysAll.length) : null;
+
+  // Build OPTI-MAX model rows
+  const ROWS = [
+    { isHdr:true, label:'STAGE 1 — INCREASE LEADS & DRIVE MORE TRAFFIC' },
+    { id:'leads',   label:'Total leads reached', desc:'Webinars, EDMs, posts, events, calls · manual input',
+      currKey:'leads_curr', tgtKey:'leads_target', isCount:true,
+      curr: t.leads_curr, tgt: t.leads_target },
+    { id:'contact', label:'Contact Made / Discovery', desc:'CRM deals created · live from Pipedrive',
+      tgtKey:'contact_pct_target', isCount:false,
+      curr: fCnts[0], currPct: t.leads_curr>0?pct(fCnts[0],t.leads_curr):null, tgtPct: t.contact_pct_target },
+    { isHdr:true, label:'STAGE 2 — INCREASE EFFECTIVENESS OF SALES PROCESS' },
+    { id:'meeting', label:'Meeting Scheduled', desc:'% of Contact Made deals · live from Pipedrive',
+      tgtKey:'meeting_pct_target', isCount:false,
+      curr: fCnts[1], currPct: fRates[1], tgtPct: t.meeting_pct_target },
+    { id:'neg',     label:'Negotiations', desc:'% of Meeting Scheduled · live from Pipedrive',
+      tgtKey:'neg_pct_target', isCount:false,
+      curr: fCnts[2], currPct: fRates[2], tgtPct: t.neg_pct_target },
+    { id:'order',   label:'Order Form Sent', desc:'% of Negotiations · live from Pipedrive',
+      tgtKey:'order_pct_target', isCount:false,
+      curr: fCnts[3], currPct: fRates[3], tgtPct: t.order_pct_target },
+    { isHdr:true, label:'STAGE 3 — INCREASE SALES CONVERSIONS' },
+    { id:'invoice', label:'Invoice Sent', desc:'% of Order Form Sent · live from Pipedrive',
+      tgtKey:'invoice_pct_target', isCount:false,
+      curr: fCnts[5], currPct: fRates[5], tgtPct: t.invoice_pct_target },
+    { id:'won',     label:'Won (Paid Subscription)', desc:'% of Invoice Sent · live from Pipedrive',
+      tgtKey:'won_pct_target', isCount:false,
+      curr: wonAll.length, currPct: fCnts[5]>0?pct(wonAll.length,fCnts[5]):null, tgtPct: t.won_pct_target },
+    { isHdr:true, label:'STAGE 4 — INCREASE TRANSACTION VALUE' },
+    { id:'upsell',  label:'Upsell rate', desc:'% of clients who purchase additional licences · target only',
+      tgtKey:'upsell_pct_target', isCount:false,
+      curr: null, currPct: null, tgtPct: t.upsell_pct_target },
+    { id:'price',   label:'Price increase', desc:'Annual price increase per licence ($)',
+      currKey:'price_increase', tgtKey:'price_increase', isCount:true,
+      curr: t.price_increase, tgt: t.price_increase },
+  ];
+
+  // Build projected counts iteratively
+  const proj = {};
+  let prevProj = t.leads_target;
+  for (const r of ROWS) {
+    if (r.isHdr) continue;
+    if (r.id==='leads')   { proj[r.id]=t.leads_target; prevProj=t.leads_target; }
+    else if (r.id==='contact') { proj[r.id]=Math.round(prevProj*t.contact_pct_target/100); prevProj=proj[r.id]; }
+    else if (r.id==='meeting') { proj[r.id]=Math.round(prevProj*t.meeting_pct_target/100); prevProj=proj[r.id]; }
+    else if (r.id==='neg')     { proj[r.id]=Math.round(prevProj*t.neg_pct_target/100);     prevProj=proj[r.id]; }
+    else if (r.id==='order')   { proj[r.id]=Math.round(prevProj*t.order_pct_target/100);   prevProj=proj[r.id]; }
+    else if (r.id==='invoice') { proj[r.id]=Math.round(prevProj*t.invoice_pct_target/100); prevProj=proj[r.id]; }
+    else if (r.id==='won')     { proj[r.id]=Math.round(prevProj*t.won_pct_target/100);     prevProj=proj[r.id]; }
+    else proj[r.id]=null;
+  }
+  const projWon = proj.won;
+  const projImpPct = wonAll.length>0&&projWon!=null ? Math.round((projWon-wonAll.length)/wonAll.length*100) : null;
+  const currRevMo  = wonAll.length * avgDealVal / 12;
+  const projRevMo  = projWon!=null ? projWon * avgDealVal / 12 : null;
+
+  function fmtD(v) { return v!=null?'$'+(v/1000).toFixed(0)+'k':'—'; }
+
+  sc.innerHTML = `
+  <div class="box">
+    <div class="box-title">OPTI-MAX Sales Growth Model
+      <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">
+        Pipedrive actuals are live · targets save automatically to your browser
+      </span>
+    </div>
+    <p style="font-size:12px;color:var(--tm);margin-bottom:16px;line-height:1.6">
+      The <strong>OPTI-MAX framework</strong> shows how small % improvements at each stage of your sales funnel
+      <strong>compound</strong> into significantly more won deals. Stage 1 is manual (pre-CRM reach).
+      Stages 2–3 pull live from Pipedrive. Edit any <span style="color:var(--acc);font-weight:500">Target %</span> field — the projections update instantly.
+    </p>
+
+    <div class="cards" style="margin-bottom:18px">
+      <div class="card"><div class="card-label">Current won deals (all time)</div><div class="card-value">${wonAll.length}</div><div class="card-sub">2026 Sales pipeline</div></div>
+      <div class="card"><div class="card-label">Projected won (targets)</div><div class="card-value" style="color:var(--gr)">${projWon??'—'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">+${projImpPct}% improvement</div>`:''}
+      </div>
+      <div class="card"><div class="card-label">Avg deal value</div><div class="card-value">${fmtDollar(avgDealVal)}</div>
+        <div class="card-sub">${fullPriceCount} full price · ${discountCount} discounted</div></div>
+      ${projRevMo!=null?`<div class="card"><div class="card-label">Projected MRR uplift</div><div class="card-value" style="color:var(--gr)">+${fmtD(projRevMo-currRevMo)}</div><div class="card-sub">vs current ~${fmtD(currRevMo)}/mo</div></div>`:''}
+    </div>
+
+    <div style="overflow-x:auto">
+      <table class="om-table">
+        <thead><tr>
+          <th style="min-width:220px">Stage</th>
+          <th style="text-align:right">Current #</th>
+          <th style="text-align:right">Current %</th>
+          <th style="text-align:right;min-width:100px">Target</th>
+          <th style="text-align:right">Projected #</th>
+          <th style="text-align:right">Δ vs current</th>
+          <th style="text-align:right">% uplift</th>
+        </tr></thead>
+        <tbody>
+        ${ROWS.map(r => {
+          if (r.isHdr) return `<tr class="om-stage-hdr"><td colspan="7">${r.label}</td></tr>`;
+          const prj = proj[r.id];
+          const curr = r.curr;
+          const delta = prj!=null&&curr!=null ? prj-curr : null;
+          const uplift= curr>0&&delta!=null ? +((delta/curr)*100).toFixed(1) : null;
+          let tgtInput;
+          if (r.id==='price') {
+            tgtInput = `<div style="display:flex;align-items:center;gap:4px;justify-content:flex-end">$<input class="om-input" type="number" min="0" step="10" value="${t[r.tgtKey]||0}" onchange="omSave('${r.tgtKey}',this.value)"></div>`;
+          } else if (r.isCount) {
+            tgtInput = `<input class="om-input om-input-wide" type="number" min="0" step="1000" value="${r.tgt||0}" onchange="omSave('${r.tgtKey}',this.value)">`;
+          } else {
+            tgtInput = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="100" step="1" value="${r.tgtPct||0}" onchange="omSave('${r.tgtKey}',this.value)">%</div>`;
+          }
+          return `<tr>
+            <td><div style="font-weight:500">${r.label}</div>${r.desc?`<div style="font-size:11px;color:var(--tl)">${r.desc}</div>`:''}</td>
+            <td style="text-align:right;font-weight:500">${curr!=null?curr.toLocaleString():'—'}</td>
+            <td style="text-align:right">${r.currPct!=null?`<span class="conv-pct ${r.currPct>=70?'good':r.currPct>=40?'mid':'bad'}">${fmtPct(r.currPct)}</span>`:'—'}</td>
+            <td style="text-align:right">${tgtInput}</td>
+            <td style="text-align:right;font-weight:500;color:var(--gr)">${prj!=null?prj.toLocaleString():'—'}</td>
+            <td style="text-align:right">${delta!=null?`<span style="color:${delta>=0?'var(--gr)':'var(--re)'}">${delta>=0?'+':''}${delta.toLocaleString()}</span>`:'—'}</td>
+            <td style="text-align:right">${uplift!=null?`<span class="conv-pct ${uplift>=0?'good':'bad'}">${uplift>=0?'+':''}${uplift}%</span>`:'—'}</td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:22px;padding-top:18px;border-top:2px solid var(--bd)">
+      <div class="box-title">Sales Velocity Targets</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:480px">
+        <div>
+          <label style="font-size:12px;font-weight:500;color:var(--navy);display:block;margin-bottom:5px">
+            Target: % won within 30 days
+            <span style="font-weight:400;color:var(--tl)">&nbsp;(now: ${w30Pct!=null?fmtPct(w30Pct):'no data'})</span>
+          </label>
+          <div style="display:flex;align-items:center;gap:5px">
+            <input class="om-input" type="number" min="0" max="100" step="5" value="${t.cycle_30d_target}" onchange="omSave('cycle_30d_target',this.value)">
+            <span style="font-size:12px;color:var(--tl)">%</span>
+          </div>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:500;color:var(--navy);display:block;margin-bottom:5px">
+            Target: avg days to close
+            <span style="font-weight:400;color:var(--tl)">&nbsp;(now: ${avgCycleAll!=null?avgCycleAll+'d':'no data'})</span>
+          </label>
+          <div style="display:flex;align-items:center;gap:5px">
+            <input class="om-input" type="number" min="1" max="365" step="1" value="${t.avg_cycle_target}" onchange="omSave('avg_cycle_target',this.value)">
+            <span style="font-size:12px;color:var(--tl)">days</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:18px">
+      <button class="btn-cancel" onclick="omReset()">↺ Reset all targets to defaults</button>
+    </div>
+  </div>
+
+  <div class="box">
+    <div class="box-title">OPTI-MAX: Current vs Projected at each deal stage</div>
+    <div style="font-size:12px;color:var(--tl);margin-bottom:10px">Blue = current Pipedrive actuals · Green = projected if all targets are met</div>
+    <div class="chart-wrap" style="height:260px"><canvas id="pd-om-chart"></canvas></div>
+  </div>`;
+
+  // OPTI-MAX comparison chart
+  const omRows = ROWS.filter(r=>!r.isHdr && r.id!=='upsell' && r.id!=='price' && proj[r.id]!=null);
+  makeChart('pd-om-chart', {
+    type:'bar',
+    data:{
+      labels: omRows.map(r=>r.label.split(' ').slice(0,3).join(' ')),
+      datasets:[
+        {label:'Current (Pipedrive)', data:omRows.map(r=>r.curr??0), backgroundColor:'#2e8bc0', borderRadius:4},
+        {label:'Projected (targets)', data:omRows.map(r=>proj[r.id]??0), backgroundColor:'rgba(42,122,75,0.75)', borderRadius:4},
+      ]
+    },
+    options:{responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{position:'bottom',labels:{font:{family:'DM Sans',size:11},boxWidth:12}}},
+      scales:{x:{grid:{display:false},ticks:axStyle},y:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true}}
+    }
+  });
+}
+
 async function init() {
   await loadAll();
   buildNav();
