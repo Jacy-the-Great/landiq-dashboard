@@ -2297,14 +2297,16 @@ function renderPdSales(sc) {
   const ownerPerf = {};
   wonDeals.forEach(d => { const o = d['Deal - Owner'] || 'Unknown'; ownerPerf[o] = (ownerPerf[o] || 0) + 1; });
 
-  // Pipeline snapshot
-  const SALES_STAGES = ['Contact Made/Discovery','Meeting Scheduled','Negotiations','Order Form Sent','Signed Order Form Returned','Invoice Sent','Payment Received'];
-  const openByStage = {};
-  SALES_STAGES.forEach(s => openByStage[s] = 0);
-  salesDeals.filter(d => d['Deal - Status'] === 'Open').forEach(d => {
-    const st = d['Deal - Stage'];
-    if (openByStage.hasOwnProperty(st)) openByStage[st]++;
-    else if (st === 'Contact Made') openByStage['Contact Made/Discovery']++;
+  // Pipeline snapshot — all statuses per stage (current state, not range-filtered)
+  const SALES_STAGES = ['Contact Made/Discovery','Meeting Scheduled','Negotiations','Order Form Sent','Signed Order Form Returned','Invoice Sent','Payment Received','Closed Lost'];
+  const stageByStatus = { open: {}, won: {}, lost: {} };
+  SALES_STAGES.forEach(s => { stageByStatus.open[s]=0; stageByStatus.won[s]=0; stageByStatus.lost[s]=0; });
+  salesDeals.forEach(d => {
+    let st = d['Deal - Stage'] || '';
+    if (st === 'Contact Made') st = 'Contact Made/Discovery';
+    if (!SALES_STAGES.includes(st)) return;
+    const status = (d['Deal - Status'] || '').toLowerCase();
+    if (stageByStatus[status]) stageByStatus[status][st]++;
   });
 
   // Avg sales cycle overall
@@ -2352,15 +2354,8 @@ function renderPdSales(sc) {
         <div class="chart-wrap" style="height:240px"><canvas id="pd-owner"></canvas></div></div>
     </div>
 
-    <div class="box"><div class="box-title">Pipeline stage snapshot — open deals · 2026 Sales</div>
-      ${salesDeals.filter(d=>d['Deal - Status']==='Open').length ? `<div class="pipeline">${(() => {
-        const maxV = Math.max(...Object.values(openByStage), 1);
-        return SALES_STAGES.map(stage => {
-          const count = openByStage[stage] || 0;
-          return `<div class="stage-bar-wrap"><div class="stage-bg" style="width:${maxV>0?(count/maxV*100):0}%"></div>
-            <div class="stage-content"><div class="stage-name">${stage}</div><div class="stage-count">${count}</div></div></div>`;
-        }).join('');
-      })()}</div>` : '<div class="no-data">No open deals in 2026 Sales pipeline.</div>'}</div>`;
+    <div class="box"><div class="box-title">Pipeline stage snapshot — 2026 Sales (Open · Won · Lost)</div>
+      <div class="chart-wrap" style="height:${SALES_STAGES.length * 38 + 60}px"><canvas id="pd-stage-snap"></canvas></div></div>`;
 
   if (wonDeals.length) {
     makeChart('pd-won-month', {
@@ -2446,6 +2441,19 @@ function renderPdSales(sc) {
         scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true} }
       }
     });
+    // Pipeline stage snapshot — stacked bar showing Open/Won/Lost per stage
+    makeChart('pd-stage-snap', {
+      type:'bar',
+      data:{ labels:SALES_STAGES.map(s=>s.length>22?s.slice(0,22)+'…':s), datasets:[
+        {label:'Open',  data:SALES_STAGES.map(s=>stageByStatus.open[s]||0),  backgroundColor:'#2e8bc0', borderRadius:2},
+        {label:'Won',   data:SALES_STAGES.map(s=>stageByStatus.won[s]||0),   backgroundColor:'#2a7a4b', borderRadius:2},
+        {label:'Lost',  data:SALES_STAGES.map(s=>stageByStatus.lost[s]||0),  backgroundColor:'#c0392b', borderRadius:2},
+      ]},
+      options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
+        scales:{ x:{stacked:false, grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true}, y:{grid:{display:false},ticks:{...axStyle,font:{family:'DM Sans',size:10}}} }
+      }
+    });
   }
 }
 
@@ -2467,17 +2475,35 @@ function renderPdUsers(sc) {
   const paidPeople = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
   const activePaid = paidPeople.filter(isActive);
 
-  // Chart 11: Cumulative paid subscriber growth — ALL TIME (shows full trajectory regardless of range)
-  const paidByMonthAll = {};
-  paidPeople.forEach(p => {
-    const dt = pdParseDate(p['Person - Date Access Granted']);
-    if (!pdValidDate(dt)) return;
-    const k = monthKey(dt.toISOString());
-    paidByMonthAll[k] = (paidByMonthAll[k] || 0) + 1;
+  // Chart 11: Active paid subscribers at each month (point-in-time count, not cumulative)
+  // Find all months from earliest access granted to today
+  const allPaidMonths = (() => {
+    let earliest = null;
+    paidPeople.forEach(p => {
+      const d = pdParseDate(p['Person - Date Access Granted']);
+      if (pdValidDate(d) && (!earliest || d < earliest)) earliest = d;
+    });
+    if (!earliest) return [];
+    const months = [], d = new Date(earliest.getFullYear(), earliest.getMonth(), 1);
+    const now = new Date();
+    while (d <= now) {
+      months.push(d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'));
+      d.setMonth(d.getMonth() + 1);
+    }
+    return months;
+  })();
+  // For each month: count people who had active access at end of that month
+  const activeAtMonth = allPaidMonths.map(m => {
+    const [yr, mo] = m.split('-').map(Number);
+    const monthEnd = new Date(yr, mo, 0, 23, 59, 59); // last moment of last day
+    return paidPeople.filter(p => {
+      const granted = pdParseDate(p['Person - Date Access Granted']);
+      if (!pdValidDate(granted) || granted > monthEnd) return false;
+      const removed = pdParseDate(p['Person - Date Access Removed']);
+      if (!removed || !pdValidDate(removed)) return true;
+      return removed > monthEnd;
+    }).length;
   });
-  const allPaidMonths = Object.keys(paidByMonthAll).sort();
-  let cum = 0;
-  const cumData = allPaidMonths.map(m => { cum += paidByMonthAll[m]; return cum; });
 
   // Chart 12: Customer type breakdown (all people, no range filter — always shows current state)
   const ctypes = {};
@@ -2514,11 +2540,11 @@ function renderPdUsers(sc) {
     <div class="cards" style="margin-bottom:18px">
       <div class="card"><div class="card-label">Active paid subscribers</div><div class="card-value">${activePaid.length}</div><div class="card-sub">Target: 600</div></div>
       <div class="card"><div class="card-label">All paid (incl. past)</div><div class="card-value">${paidPeople.length}</div><div class="card-sub">Customer Type = Paid Subscription</div></div>
-      <div class="card"><div class="card-label">2-week trials</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='2 Week Trial Licence').length}</div></div>
+      <div class="card"><div class="card-label">Active 2-week trials</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='2 Week Trial Licence'&&isActive(p)).length}</div><div class="card-sub">current snapshot</div></div>
       <div class="card"><div class="card-label">Centrally funded</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='Centrally Funded Licence').length}</div></div>
     </div>
 
-    <div class="box"><div class="box-title">Paid subscriber growth — cumulative (all time)</div>
+    <div class="box"><div class="box-title">Active paid subscribers over time (all time)</div>
       ${allPaidMonths.length ? `<div class="chart-wrap" style="height:240px"><canvas id="pd-sub-growth"></canvas></div>` : '<div class="no-data">No access granted dates found.</div>'}</div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
@@ -2538,12 +2564,12 @@ function renderPdUsers(sc) {
     if (allPaidMonths.length) makeChart('pd-sub-growth', {
       type:'line',
       data:{ labels:allPaidMonths.map(m=>monthLabel(m)), datasets:[
-        {label:'Cumulative paid subscribers', data:cumData, borderColor:'#2e8bc0', backgroundColor:'rgba(46,139,192,.08)', borderWidth:2, tension:.3, pointRadius:2, fill:true},
+        {label:'Active paid subscribers', data:activeAtMonth, borderColor:'#2e8bc0', backgroundColor:'rgba(46,139,192,.08)', borderWidth:2, tension:.3, pointRadius:2, fill:true},
         {label:'Target: 600', data:allPaidMonths.map(()=>TARGET_USERS), borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false},
       ]},
       options:{ responsive:true, maintainAspectRatio:false,
         plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
-        scales:{ x:{grid:{display:false},ticks:{...axStyle,maxTicksLimit:14}}, y:{grid:gridStyle,ticks:axStyle,beginAtZero:true} }
+        scales:{ x:{grid:{display:false},ticks:{...axStyle,maxTicksLimit:14}}, y:{grid:gridStyle,ticks:axStyle,beginAtZero:true,suggestedMax:TARGET_USERS} }
       }
     });
     const ctEntries = Object.entries(ctypes).filter(([k])=>k&&k!=='Unknown').sort((a,b)=>b[1]-a[1]);
