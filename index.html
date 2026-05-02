@@ -1989,7 +1989,14 @@ function renderPipedrive(el) {
   const wonDeals  = _pd_deals.filter(d => d['Deal - Status'] === 'Won'  && d['Deal - Pipeline'] === '2026 Sales');
   const lostDeals = _pd_deals.filter(d => d['Deal - Status'] === 'Lost' && d['Deal - Pipeline'] === '2026 Sales');
   const openDeals = _pd_deals.filter(d => d['Deal - Status'] === 'Open' && d['Deal - Pipeline'] === '2026 Sales');
+  const _now = new Date();
   const paidSubs  = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
+  const activePaidSubs = paidSubs.filter(p => {
+    const rem = p['Person - Date Access Removed'];
+    if (!rem) return true;
+    const d = pdParseDate(rem);
+    return pdValidDate(d) && d > _now;
+  });
 
   el.innerHTML = `
     <div class="section-header">
@@ -2000,7 +2007,7 @@ function renderPipedrive(el) {
       ['Won deals (total)', wonDeals.length || null],
       ['Open deals (Sales)', openDeals.length || null],
       ['Win rate', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%'],
-      ['Paid subscribers', paidSubs.length || null],
+      ['Active paid subscribers', activePaidSubs.length || null, 'Target: 600'],
       ['People (total)', _pd_people.length || null],
     ])}
     <div class="sub-tabs">
@@ -2331,9 +2338,23 @@ function renderPdSales(sc) {
 
 // ── PIPEDRIVE: USERS & LICENCES ──────────────────────────────────────────────
 function renderPdUsers(sc) {
-  // Chart 11: Paid subscriber growth (cumulative by access granted date)
+  const today = new Date();
+
+  // Helper: is access currently active? (no removal date, or removal date in the future)
+  function isActive(p) {
+    const rem = p['Person - Date Access Removed'];
+    if (!rem) return true;
+    const d = pdParseDate(rem);
+    return pdValidDate(d) && d > today;
+  }
+
+  // Paid Subscription people only
+  const paidPeople = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
+  const activePaid = paidPeople.filter(isActive);
+
+  // Chart 11: Paid subscriber growth — cumulative, PAID SUBSCRIPTION ONLY, by access granted date
   const paidByMonth = {};
-  _pd_people.forEach(p => {
+  paidPeople.forEach(p => {
     const dt = pdParseDate(p['Person - Date Access Granted']);
     if (!pdValidDate(dt)) return;
     const k = monthKey(dt.toISOString());
@@ -2343,28 +2364,28 @@ function renderPdUsers(sc) {
   let cum = 0;
   const cumData = paidMonths.map(m => { cum += paidByMonth[m]; return cum; });
 
-  // Chart 12: Customer type breakdown
+  // Chart 12: Customer type breakdown (all people)
   const ctypes = {};
   _pd_people.forEach(p => { const ct = p['Person - Customer Type']||'Unknown'; ctypes[ct]=(ctypes[ct]||0)+1; });
 
-  // Chart 13: Top 15 orgs
+  // Chart 13: Top 15 orgs — PAID SUBSCRIPTION ONLY
   const orgs = {};
-  _pd_people.forEach(p => { const o=p['Person - Organisation']; if(o&&o.trim()) orgs[o]=(orgs[o]||0)+1; });
+  activePaid.forEach(p => { const o=p['Person - Organisation']; if(o&&o.trim()) orgs[o]=(orgs[o]||0)+1; });
   const topOrgs = Object.entries(orgs).sort((a,b)=>b[1]-a[1]).slice(0,15);
 
-  // Chart 14: New people by month (12m)
+  // Chart 14: New paid subscribers by month (12m)
   const months12 = pd12Months();
   const newByMonth = {};
-  _pd_people.forEach(p => {
-    const dt = pdParseDate(p['Person - Person created']);
+  paidPeople.forEach(p => {
+    const dt = pdParseDate(p['Person - Date Access Granted']);
     if (!pdValidDate(dt)) return;
     const k = monthKey(dt.toISOString());
     newByMonth[k] = (newByMonth[k]||0)+1;
   });
 
-  // Chart 15: Access revoked
+  // Chart 15: Access removed (Paid Subscription only) — churn indicator
   const revokedByMonth = {};
-  _pd_people.forEach(p => {
+  paidPeople.forEach(p => {
     const dt = pdParseDate(p['Person - Date Access Removed']);
     if (!pdValidDate(dt)) return;
     const k = monthKey(dt.toISOString());
@@ -2375,27 +2396,27 @@ function renderPdUsers(sc) {
   sc.innerHTML = `
     ${!_pd_people.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive people CSV first.</div></div>' : ''}
     <div class="cards" style="margin-bottom:18px">
-      <div class="card"><div class="card-label">Paid subscribers</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='Paid Subscription').length}</div><div class="card-sub">Target: 600</div></div>
+      <div class="card"><div class="card-label">Active paid subscribers</div><div class="card-value">${activePaid.length}</div><div class="card-sub">Target: 600</div></div>
+      <div class="card"><div class="card-label">All paid (incl. past)</div><div class="card-value">${paidPeople.length}</div><div class="card-sub">Customer Type = Paid Subscription</div></div>
       <div class="card"><div class="card-label">2-week trials</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='2 Week Trial Licence').length}</div></div>
-      <div class="card"><div class="card-label">Contact register</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='Contact Register').length.toLocaleString()}</div></div>
-      <div class="card"><div class="card-label">Access revoked</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='Access Revoked').length.toLocaleString()}</div></div>
+      <div class="card"><div class="card-label">Centrally funded</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='Centrally Funded Licence').length}</div></div>
     </div>
 
-    <div class="box"><div class="box-title">Paid subscriber growth — cumulative (by access granted date)</div>
+    <div class="box"><div class="box-title">Paid subscriber growth — cumulative (Paid Subscription by access granted date)</div>
       ${paidMonths.length ? `<div class="chart-wrap" style="height:240px"><canvas id="pd-sub-growth"></canvas></div>` : '<div class="no-data">No access granted dates found.</div>'}</div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-      <div class="box" style="margin-bottom:0"><div class="box-title">Customer type breakdown</div>
+      <div class="box" style="margin-bottom:0"><div class="box-title">Customer type breakdown (all people)</div>
         <div class="chart-wrap" style="height:260px"><canvas id="pd-ctype"></canvas></div></div>
-      <div class="box" style="margin-bottom:0"><div class="box-title">New people added by month (12m)</div>
+      <div class="box" style="margin-bottom:0"><div class="box-title">New paid subscribers by month (12m)</div>
         <div class="chart-wrap" style="height:260px"><canvas id="pd-new-users"></canvas></div></div>
     </div>
 
-    <div class="box"><div class="box-title">Top 15 organisations by user count</div>
+    <div class="box"><div class="box-title">Active paid subscribers by organisation</div>
       ${topOrgs.length ? `<div class="chart-wrap" style="height:${Math.max(300,topOrgs.length*28)}px"><canvas id="pd-top-orgs"></canvas></div>` : '<div class="no-data">No org data.</div>'}</div>
 
-    <div class="box"><div class="box-title">Access revoked by month — churn indicator</div>
-      ${revokedMonths.length ? `<div class="chart-wrap" style="height:200px"><canvas id="pd-revoked"></canvas></div>` : '<div class="no-data">No revocation data.</div>'}</div>`;
+    <div class="box"><div class="box-title">Access end dates — paid subscribers (churn risk)</div>
+      ${revokedMonths.length ? `<div class="chart-wrap" style="height:200px"><canvas id="pd-revoked"></canvas></div>` : '<div class="no-data">No access end date data.</div>'}</div>`;
 
   if (_pd_people.length) {
     if (paidMonths.length) makeChart('pd-sub-growth', {
@@ -2419,7 +2440,7 @@ function renderPdUsers(sc) {
     });
     makeChart('pd-new-users', {
       type:'bar',
-      data:{ labels:months12.map(m=>monthLabel(m)), datasets:[{label:'New people', data:months12.map(m=>newByMonth[m]||0), backgroundColor:'#2a7a4b', borderRadius:3}] },
+      data:{ labels:months12.map(m=>monthLabel(m)), datasets:[{label:'New paid subscribers', data:months12.map(m=>newByMonth[m]||0), backgroundColor:'#2a7a4b', borderRadius:3}] },
       options:{ responsive:true, maintainAspectRatio:false,
         plugins:{ legend:{display:false} },
         scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:axStyle,beginAtZero:true} }
@@ -2427,7 +2448,7 @@ function renderPdUsers(sc) {
     });
     if (topOrgs.length) makeChart('pd-top-orgs', {
       type:'bar',
-      data:{ labels:topOrgs.map(([k])=>k.length>50?k.slice(0,50)+'…':k), datasets:[{label:'Users', data:topOrgs.map(([,v])=>v), backgroundColor:'#2e8bc0', borderRadius:3}] },
+      data:{ labels:topOrgs.map(([k])=>k.length>50?k.slice(0,50)+'…':k), datasets:[{label:'Active paid subscribers', data:topOrgs.map(([,v])=>v), backgroundColor:'#2e8bc0', borderRadius:3}] },
       options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
         plugins:{ legend:{display:false} },
         scales:{ x:{grid:gridStyle,ticks:axStyle,beginAtZero:true}, y:{grid:{display:false},ticks:{...axStyle,font:{family:'DM Sans',size:10}}} }
@@ -2435,7 +2456,7 @@ function renderPdUsers(sc) {
     });
     if (revokedMonths.length) makeChart('pd-revoked', {
       type:'bar',
-      data:{ labels:revokedMonths.map(m=>monthLabel(m)), datasets:[{label:'Access revoked', data:revokedMonths.map(m=>revokedByMonth[m]||0), backgroundColor:'#c0392b', borderRadius:3}] },
+      data:{ labels:revokedMonths.map(m=>monthLabel(m)), datasets:[{label:'Access end dates', data:revokedMonths.map(m=>revokedByMonth[m]||0), backgroundColor:'#c0392b', borderRadius:3}] },
       options:{ responsive:true, maintainAspectRatio:false,
         plugins:{ legend:{display:false} },
         scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:axStyle,beginAtZero:true} }
