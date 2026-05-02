@@ -391,7 +391,6 @@ function delRow(key, id, dateKey = 'week') {
 const TABS = [
   { id: 'home',      label: 'Home' },
   { id: 'pipedrive', label: 'Pipedrive' },
-  { id: 'trials',    label: 'Trials Pipeline' },
   { id: 'website',   label: 'Website' },
   { id: 'training',  label: 'Training' },
   { id: 'marketing', label: 'Marketing' },
@@ -416,7 +415,7 @@ function switchTab(id) {
 function renderTab(id) {
   const mc = document.getElementById('main-content');
   destroyAllCharts();
-  const renderers = { home: renderHome, trials: renderTrials, pipedrive: renderPipedrive, website: renderWebsite, training: renderTraining, marketing: renderMarketing };
+  const renderers = { home: renderHome, pipedrive: renderPipedrive, website: renderWebsite, training: renderTraining, marketing: renderMarketing };
   if (renderers[id]) renderers[id](mc);
 }
 
@@ -2610,56 +2609,161 @@ function renderPdUsers(sc) {
 // ── PIPEDRIVE: TRIAL PIPELINE ────────────────────────────────────────────────
 function renderPdTrials(sc) {
   const range = pdGetRange();
+  const today = new Date();
+
+  // ── PEOPLE-BASED TRIAL STATS ────────────────────
+  function isActive(p) {
+    const rem = p['Person - Date Access Removed'];
+    if (!rem) return true;
+    const d = pdParseDate(rem); return pdValidDate(d) && d > today;
+  }
+  const activeTrial   = _pd_people.filter(p => p['Person - Customer Type'] === '2 Week Trial Licence' && isActive(p));
+  const everTrialled  = _pd_people.filter(p =>
+    p['Person - Customer Type'] === '2 Week Trial Licence' ||
+    p['Person - Previous Customer Type'] === '2 Week Trial Licence'
+  );
+  const convertedFromTrial = _pd_people.filter(p =>
+    p['Person - Customer Type'] === 'Paid Subscription' &&
+    p['Person - Previous Customer Type'] === '2 Week Trial Licence'
+  );
+  const trialConvRate = everTrialled.length ? pct(convertedFromTrial.length, everTrialled.length) : null;
+
+  // New trials by month (range-filtered)
+  const rangeMonths = pdRangeMonths(range);
+  const newTrialsByMonth = {};
+  _pd_people.filter(p => p['Person - Customer Type'] === '2 Week Trial Licence').forEach(p => {
+    if (!pdInRange(p['Person - Date Access Granted'], range)) return;
+    const k = monthKey(p['Person - Date Access Granted']);
+    if (k) newTrialsByMonth[k] = (newTrialsByMonth[k] || 0) + 1;
+  });
+
+  // ── DEAL-BASED TRIAL STATS ────────────────────
   const allTrialDeals = _pd_deals.filter(d => d['Deal - Pipeline'] === 'Trial Pipeline');
-  // For stage snapshot and open trials: always show current state
-  const openTrials = allTrialDeals.filter(d => d['Deal - Status'] === 'Open');
-  // For historical stats: filter by date range (use deal created date)
-  const trialDeals = range.from
+  const openTrials    = allTrialDeals.filter(d => d['Deal - Status'] === 'Open');
+  const trialDeals    = range.from
     ? allTrialDeals.filter(d => pdInRange(d['Deal - Deal created'], range))
     : allTrialDeals;
-  const lostTrials = trialDeals.filter(d => d['Deal - Status'] === 'Lost');
-  const closedLost = trialDeals.filter(d => d['Deal - Stage'] === 'Closed Lost' || d['Deal - Status'] === 'Lost').length;
+  const lostTrials    = trialDeals.filter(d => d['Deal - Status'] === 'Lost');
+  const closedLost    = trialDeals.filter(d => d['Deal - Stage'] === 'Closed Lost' || d['Deal - Status'] === 'Lost').length;
 
-  const TRIAL_STAGES_PD = ['Follow Up','Demo Scheduled','Demo Booked','Trial in Progress','Trial Mid Point','Trial Complete','Pending Onboarding','Awaiting Onboarding','Closed Lost'];
-  const stageCount = {};
-  TRIAL_STAGES_PD.forEach(s => stageCount[s] = 0);
-  trialDeals.forEach(d => { const s = d['Deal - Stage']; if (stageCount.hasOwnProperty(s)) stageCount[s]++; });
+  // Funnel stages in order
+  const FUNNEL_STAGES = ['Follow Up','Demo Scheduled','Demo Booked','Trial in Progress','Trial Mid Point','Trial Complete','Pending Onboarding','Awaiting Onboarding'];
+  const stageOrder = [...FUNNEL_STAGES, 'Closed Lost'];
 
+  // Current open deals by stage (snapshot)
+  const openByStage = {};
+  stageOrder.forEach(s => openByStage[s] = 0);
+  openTrials.forEach(d => { const s = d['Deal - Stage']; if (openByStage.hasOwnProperty(s)) openByStage[s]++; });
+
+  // Funnel conversion: for each stage, count deals that *reached* that stage or beyond (all time)
+  // A deal "reached" a stage if its current stage index >= that stage's index
+  const reachedStage = FUNNEL_STAGES.map((s, i) => {
+    return allTrialDeals.filter(d => {
+      const idx = stageOrder.indexOf(d['Deal - Stage']);
+      return idx >= i; // reached this stage or beyond (Closed Lost is beyond all)
+    }).length;
+  });
+
+  // Monthly new trial deals (range-filtered)
+  const newDealsByMonth = {};
+  trialDeals.forEach(d => {
+    const dt = pdParseDate(d['Deal - Deal created']);
+    if (!pdValidDate(dt)) return;
+    const k = monthKey(dt.toISOString());
+    newDealsByMonth[k] = (newDealsByMonth[k] || 0) + 1;
+  });
+
+  // Lost reasons
   const lostReasons = {};
   lostTrials.forEach(d => { const r = d['Deal - Lost reason']; if (r && r.trim()) lostReasons[r] = (lostReasons[r]||0)+1; });
 
+  // Trial orgs (active trials by org)
+  const trialOrgs = {};
+  activeTrial.forEach(p => { const o = p['Person - Organisation']||'Unknown'; trialOrgs[o]=(trialOrgs[o]||0)+1; });
+  const topTrialOrgs = Object.entries(trialOrgs).sort((a,b)=>b[1]-a[1]).slice(0,10);
+
   sc.innerHTML = `
-    ${!allTrialDeals.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive deals CSV first.</div></div>' : ''}
+    ${!allTrialDeals.length && !_pd_people.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive deals and people CSVs first.</div></div>' : ''}
+
     <div class="cards" style="margin-bottom:18px">
-      <div class="card"><div class="card-label">Trial deals</div><div class="card-value">${trialDeals.length}</div><div class="card-sub">${range.label}</div></div>
-      <div class="card"><div class="card-label">Open trials</div><div class="card-value">${openTrials.length}</div><div class="card-sub">current snapshot</div></div>
-      <div class="card"><div class="card-label">Closed Lost</div><div class="card-value" style="color:var(--re)">${closedLost}</div>
-        <div class="card-sub">${trialDeals.length ? fmtPct(pct(closedLost, trialDeals.length)) + ' of trial deals · ' + range.label : ''}</div></div>
-      <div class="card"><div class="card-label">Lost (total)</div><div class="card-value">${lostTrials.length}</div><div class="card-sub">${range.label}</div></div>
+      <div class="card"><div class="card-label">Active 2-week trials</div><div class="card-value">${activeTrial.length}</div><div class="card-sub">current snapshot</div></div>
+      <div class="card"><div class="card-label">Ever trialled</div><div class="card-value">${everTrialled.length}</div><div class="card-sub">Paid Subscription or prior type</div></div>
+      <div class="card"><div class="card-label">Converted to paid</div><div class="card-value">${convertedFromTrial.length}</div><div class="card-sub">Previous type = 2 Week Trial</div></div>
+      <div class="card"><div class="card-label">Trial → paid rate</div>${trialConvRate!=null?`<div class="card-value">${fmtPct(trialConvRate)}</div>`:'<div class="card-nodata">no data</div>'}<div class="card-sub">of all who trialled</div></div>
+      <div class="card"><div class="card-label">Open trial deals</div><div class="card-value">${openTrials.length}</div><div class="card-sub">current snapshot · Trial Pipeline</div></div>
+      <div class="card"><div class="card-label">Closed Lost</div><div class="card-value" style="color:var(--re)">${closedLost}</div><div class="card-sub">${trialDeals.length?fmtPct(pct(closedLost,trialDeals.length))+' of deals · '+range.label:range.label}</div></div>
     </div>
-    ${closedLost > 0 ? `<div class="callout warn"><div class="callout-label">Conversion concern</div><div class="callout-text">${closedLost} of ${trialDeals.length} trial deals (${fmtPct(pct(closedLost, trialDeals.length))}) are Closed Lost · ${range.label}.</div></div>` : ''}
 
-    <div class="box"><div class="box-title">Trial pipeline — all deals by stage</div>
-      ${trialDeals.length ? `<div class="pipeline">${(() => {
-        const maxV = Math.max(...Object.values(stageCount), 1);
-        return TRIAL_STAGES_PD.filter(s => stageCount[s] > 0).map(stage => {
-          const count = stageCount[stage];
-          const isLost = stage === 'Closed Lost';
-          return `<div class="stage-bar-wrap"><div class="stage-bg" style="width:${(count/maxV*100)}%;background:${isLost?'var(--re2)':'var(--acc2)'}"></div>
-            <div class="stage-content"><div class="stage-name" style="color:${isLost?'var(--re)':'var(--navy)'}">${stage}</div><div class="stage-count">${count}</div></div></div>`;
-        }).join('');
-      })()}</div>` : '<div class="no-data">No trial pipeline data.</div>'}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title">Open trial deals — current stage snapshot</div>
+        ${openTrials.length ? `<div class="pipeline">${(() => {
+          const maxV = Math.max(...FUNNEL_STAGES.map(s=>openByStage[s]||0), 1);
+          return FUNNEL_STAGES.map((stage, i) => {
+            const count = openByStage[stage] || 0;
+            const w = maxV > 0 ? (count/maxV*100) : 0;
+            return `<div class="stage-bar-wrap"><div class="stage-bg" style="width:${w}%"></div>
+              <div class="stage-content"><div class="stage-name">${stage}</div><div class="stage-count">${count}</div></div></div>`;
+          }).join('');
+        })()}</div>` : '<div class="no-data">No open trial deals.</div>'}
+      </div>
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title">Trial funnel — stage conversion (all time)</div>
+        ${reachedStage[0] > 0 ? `<table class="conv-table">
+          <thead><tr><th>Stage</th><th>Reached</th><th>Conv. from prev</th></tr></thead>
+          <tbody>${FUNNEL_STAGES.map((s, i) => {
+            const n = reachedStage[i];
+            const conv = i > 0 && reachedStage[i-1] ? pct(n, reachedStage[i-1]) : null;
+            const cls = conv == null ? '' : conv > 75 ? 'good' : conv > 40 ? 'mid' : 'bad';
+            return `<tr><td style="font-size:12px">${s}</td><td style="text-align:right;font-weight:600">${n}</td>
+              <td style="text-align:right">${conv!=null?`<span class="conv-pct ${cls}">${fmtPct(conv)}</span>`:'—'}</td></tr>`;
+          }).join('')}
+          <tr style="border-top:2px solid var(--bor)"><td style="font-size:12px;color:var(--re)">Closed Lost</td><td style="text-align:right;font-weight:600;color:var(--re)">${openByStage['Closed Lost']||lostTrials.length}</td><td></td></tr>
+          </tbody></table>` : '<div class="no-data">No trial deal data.</div>'}
+      </div>
+    </div>
 
-    <div class="box"><div class="box-title">Trial lost reasons</div>
-      ${Object.keys(lostReasons).length ? `<div class="chart-wrap" style="height:${Math.max(200,Object.keys(lostReasons).length*40)}px"><canvas id="pd-trial-lost"></canvas></div>` : '<div class="no-data">No lost reason data.</div>'}</div>`;
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div class="box" style="margin-bottom:0"><div class="box-title">New trial people by month — ${range.label}</div>
+        <div class="chart-wrap" style="height:220px"><canvas id="pd-trial-new"></canvas></div></div>
+      <div class="box" style="margin-bottom:0"><div class="box-title">New trial deals by month — ${range.label}</div>
+        <div class="chart-wrap" style="height:220px"><canvas id="pd-trial-deals"></canvas></div></div>
+    </div>
 
+    ${topTrialOrgs.length ? `<div class="box"><div class="box-title">Active 2-week trials by organisation</div>
+      <div class="chart-wrap" style="height:${Math.max(200,topTrialOrgs.length*32)}px"><canvas id="pd-trial-orgs"></canvas></div></div>` : ''}
+
+    <div class="box"><div class="box-title">Trial lost reasons — ${range.label}</div>
+      ${Object.keys(lostReasons).length ? `<div class="chart-wrap" style="height:${Math.max(200,Object.keys(lostReasons).length*40)}px"><canvas id="pd-trial-lost"></canvas></div>` : '<div class="no-data">No lost reason data for this period.</div>'}</div>`;
+
+  // Charts
+  makeChart('pd-trial-new', {
+    type:'bar',
+    data:{ labels:rangeMonths.map(m=>monthLabel(m)), datasets:[{label:'New 2-week trials', data:rangeMonths.map(m=>newTrialsByMonth[m]||0), backgroundColor:'#2e8bc0', borderRadius:3}] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+      scales:{ x:{grid:{display:false},ticks:{...axStyle,maxTicksLimit:14}}, y:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true} }
+    }
+  });
+  makeChart('pd-trial-deals', {
+    type:'bar',
+    data:{ labels:rangeMonths.map(m=>monthLabel(m)), datasets:[{label:'New trial deals', data:rangeMonths.map(m=>newDealsByMonth[m]||0), backgroundColor:'#1a3c5e', borderRadius:3}] },
+    options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+      scales:{ x:{grid:{display:false},ticks:{...axStyle,maxTicksLimit:14}}, y:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true} }
+    }
+  });
+  if (topTrialOrgs.length) makeChart('pd-trial-orgs', {
+    type:'bar',
+    data:{ labels:topTrialOrgs.map(([k])=>k.length>40?k.slice(0,40)+'…':k), datasets:[{label:'Active trials', data:topTrialOrgs.map(([,v])=>v), backgroundColor:'#2e8bc0', borderRadius:3}] },
+    options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+      scales:{ x:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true}, y:{grid:{display:false},ticks:{...axStyle,font:{family:'DM Sans',size:10}}} }
+    }
+  });
   if (Object.keys(lostReasons).length) {
     const lrEntries = Object.entries(lostReasons).sort((a,b)=>b[1]-a[1]);
     makeChart('pd-trial-lost', {
       type:'bar',
       data:{ labels:lrEntries.map(([k])=>k.length>45?k.slice(0,45)+'…':k), datasets:[{label:'Lost deals', data:lrEntries.map(([,v])=>v), backgroundColor:'#c0392b', borderRadius:3}] },
-      options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
-        plugins:{ legend:{display:false} },
+      options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
         scales:{ x:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true}, y:{grid:{display:false},ticks:{...axStyle,font:{family:'DM Sans',size:10}}} }
       }
     });
