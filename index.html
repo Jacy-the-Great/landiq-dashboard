@@ -390,9 +390,8 @@ function delRow(key, id, dateKey = 'week') {
 // ─────────────────────────────────────────
 const TABS = [
   { id: 'home',      label: 'Home' },
-  { id: 'sales',     label: 'Sales Funnel' },
-  { id: 'trials',    label: 'Trials Pipeline' },
   { id: 'pipedrive', label: 'Pipedrive' },
+  { id: 'trials',    label: 'Trials Pipeline' },
   { id: 'website',   label: 'Website' },
   { id: 'training',  label: 'Training' },
   { id: 'marketing', label: 'Marketing' },
@@ -417,7 +416,7 @@ function switchTab(id) {
 function renderTab(id) {
   const mc = document.getElementById('main-content');
   destroyAllCharts();
-  const renderers = { home: renderHome, sales: renderSales, trials: renderTrials, pipedrive: renderPipedrive, website: renderWebsite, training: renderTraining, marketing: renderMarketing };
+  const renderers = { home: renderHome, trials: renderTrials, pipedrive: renderPipedrive, website: renderWebsite, training: renderTraining, marketing: renderMarketing };
   if (renderers[id]) renderers[id](mc);
 }
 
@@ -477,13 +476,11 @@ function toggleShowAll(key) {
 // HOME TAB
 // ─────────────────────────────────────────
 function renderHome(el) {
-  const sales    = load('sales');
   const trials   = load('trials');
   const website  = load('website');
   const training = load('training');
   const content  = load('content');
 
-  const sl = sales.length ? sales[sales.length - 1] : null;
   const ul = trials.length ? trials[trials.length - 1] : null;
   const wl = website.length ? website[website.length - 1] : null;
   const trainedTotal = training.reduce((s, r) => s + (r.attendees || 0), 0);
@@ -492,28 +489,43 @@ function renderHome(el) {
   const sdkPct = pct(ul?.sdkActive, ul?.trialsGranted);
   const outcomes = content.filter(c => c.outcome && c.outcome.trim());
 
+  // Live from Pipedrive CSV
+  const _now = new Date();
+  const pdWonThisMonth = _pd_deals.filter(d => {
+    if (d['Deal - Status'] !== 'Won' || d['Deal - Pipeline'] !== '2026 Sales') return false;
+    const dt = pdParseDate(d['Deal - Won time']);
+    return pdValidDate(dt) && dt.getFullYear() === _now.getFullYear() && dt.getMonth() === _now.getMonth();
+  });
+  const pdRevThisMonth = pdWonThisMonth.reduce((s, d) => s + (parseFloat(d['Deal - Value']) || 0), 0);
+  const pdWonAll  = _pd_deals.filter(d => d['Deal - Status'] === 'Won'  && d['Deal - Pipeline'] === '2026 Sales');
+  const pdLostAll = _pd_deals.filter(d => d['Deal - Status'] === 'Lost' && d['Deal - Pipeline'] === '2026 Sales');
+  const pdWinRate = pdWonAll.length + pdLostAll.length ? pct(pdWonAll.length, pdWonAll.length + pdLostAll.length) : null;
+  const pdActivePaid = _pd_people.filter(p => {
+    if (p['Person - Customer Type'] !== 'Paid Subscription') return false;
+    const rem = p['Person - Date Access Removed'];
+    if (!rem) return true;
+    const d = pdParseDate(rem); return pdValidDate(d) && d > _now;
+  }).length;
+
   const mods = [
-    { name: 'Sales Funnel',    last: sl,                   dk: 'week' },
     { name: 'Trials Pipeline', last: ul,                   dk: 'week' },
     { name: 'Website',         last: wl,                   dk: 'week' },
     { name: 'Training',        last: training[training.length - 1], dk: 'date' },
-    { name: 'Marketing',        last: content[content.length - 1],   dk: 'date' },
+    { name: 'Marketing',       last: content[content.length - 1],   dk: 'date' },
   ];
-
-  const trendData = sales.slice(-12);
 
   el.innerHTML = `
     ${cardsHTML([
-      ['Revenue (month)', sl?.revenue, null, '$'],
-      ['Won deals (month)', sl?.won, null, null],
-      ['Win rate', sl?.winRate, null, '%'],
-      ['SDK active (trials)', sdkPct, null, '%'],
+      ['Won deals (this month)', pdWonThisMonth.length || null, null, null, '2026 Sales pipeline'],
+      ['Revenue (this month)', pdRevThisMonth || null, null, '$', '2026 Sales pipeline'],
+      ['Win rate (2026 Sales)', pdWinRate, null, '%', 'Won ÷ (Won + Lost) all time'],
+      ['Active paid subscribers', pdActivePaid || null, null, null, 'Target: 600'],
       ['Website users', wl?.users, null, null],
       ['People trained', trainedTotal, null, null],
     ])}
 
     <div class="box">
-      <div class="box-title">Combined trends: 12 weeks</div>
+      <div class="box-title">Sales performance — last 12 months (live from Pipedrive)</div>
       <div class="chart-wrap" style="height:240px"><canvas id="home-trend"></canvas></div>
     </div>
 
@@ -536,24 +548,46 @@ function renderHome(el) {
     </div>
   `;
 
-  if (trendData.length) {
-    const trialData = load('trials');
+  // Home trend chart — last 12 months from Pipedrive
+  const homeTrendMonths = pd12Months();
+  const homeWonByMonth = {};
+  const homePaidByMonth = {};
+  _pd_deals.filter(d => d['Deal - Status'] === 'Won' && d['Deal - Pipeline'] === '2026 Sales').forEach(d => {
+    const dt = pdParseDate(d['Deal - Won time']);
+    if (!pdValidDate(dt)) return;
+    const k = monthKey(dt.toISOString());
+    homeWonByMonth[k] = (homeWonByMonth[k] || 0) + 1;
+  });
+  _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription').forEach(p => {
+    const dt = pdParseDate(p['Person - Date Access Granted']);
+    if (!pdValidDate(dt)) return;
+    const k = monthKey(dt.toISOString());
+    homePaidByMonth[k] = (homePaidByMonth[k] || 0) + 1;
+  });
+  // Cumulative paid for home chart
+  let pdCum = 0;
+  const homeCumPaid = [];
+  const allPaidMonthsForHome = Object.keys(homePaidByMonth).sort();
+  const cumMap = {};
+  allPaidMonthsForHome.forEach(m => { pdCum += homePaidByMonth[m]; cumMap[m] = pdCum; });
+
+  if (_pd_deals.length) {
     makeChart('home-trend', {
-      type: 'line',
+      type: 'bar',
       data: {
-        labels: trendData.map(r => fmtDate(r.week).slice(0, 6)),
+        labels: homeTrendMonths.map(m => monthLabel(m)),
         datasets: [
-          { label: 'Website users', data: trendData.map(r => r.websiteUsers || 0), borderColor: '#2e8bc0', borderWidth: 2, dot: false, tension: .3, pointRadius: 2, yAxisID: 'y' },
-          { label: 'Trials active', data: trendData.map(r => { const u = trialData.find(t => t.week === r.week); return u ? (u.trialsGranted || 0) : 0; }), borderColor: '#1a3c5e', borderWidth: 2, tension: .3, pointRadius: 2, yAxisID: 'y' },
-          { label: 'Deals won', data: trendData.map(r => r.won || 0), borderColor: '#2a7a4b', borderWidth: 2, tension: .3, pointRadius: 3, yAxisID: 'y1' },
+          { label: 'Won deals (2026 Sales)', data: homeTrendMonths.map(m => homeWonByMonth[m] || 0), backgroundColor: '#2a7a4b', borderRadius: 3, yAxisID: 'y' },
+          { label: 'Active paid (cumulative)', data: homeTrendMonths.map(m => cumMap[m] || null), type: 'line', borderColor: '#2e8bc0', borderWidth: 2, tension: .3, pointRadius: 3, fill: false, spanGaps: true, yAxisID: 'y1' },
+          { label: 'Target: 600', data: homeTrendMonths.map(() => TARGET_USERS), type: 'line', borderColor: '#c25a00', borderDash: [6, 4], borderWidth: 2, pointRadius: 0, fill: false, yAxisID: 'y1' },
         ]
       },
       options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
         plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, color: '#4a5f70', padding: 16, boxWidth: 12 } } },
         scales: {
-          x: { grid: gridStyle, ticks: axStyle },
-          y: { type: 'linear', position: 'left', grid: gridStyle, ticks: axStyle, beginAtZero: true },
-          y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, ticks: axStyle, beginAtZero: true },
+          x: { grid: { display: false }, ticks: axStyle },
+          y:  { type: 'linear', position: 'left',  grid: gridStyle, ticks: { ...axStyle, stepSize: 1 }, beginAtZero: true, title: { display: true, text: 'Won deals', ...axStyle } },
+          y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, ticks: axStyle, beginAtZero: true, title: { display: true, text: 'Paid subscribers', ...axStyle } },
         }
       }
     });
@@ -1996,12 +2030,73 @@ const pd12Months = () => {
   return months;
 };
 
+// ── DATE RANGE HELPERS ───────────────────
+function pdGetRange() {
+  const r = activeSub.pd_range || 'all';
+  const to = new Date();
+  if (r === 'all') return { from: null, to, label: 'All time' };
+  const from = new Date();
+  if      (r === '1m')  { from.setMonth(from.getMonth() - 1); }
+  else if (r === '3m')  { from.setMonth(from.getMonth() - 3); }
+  else if (r === '6m')  { from.setMonth(from.getMonth() - 6); }
+  else if (r === '12m') { from.setMonth(from.getMonth() - 12); }
+  else if (r === 'ytd') { from.setMonth(0); from.setDate(1); from.setHours(0,0,0,0); }
+  from.setHours(0,0,0,0);
+  const labels = { '1m':'Last month','3m':'Last 3 months','6m':'Last 6 months','12m':'Last 12 months','ytd':'Year to date' };
+  return { from, to, label: labels[r] };
+}
+
+function pdInRange(dateStr, range) {
+  if (!dateStr) return false;
+  const d = pdParseDate(dateStr);
+  if (!pdValidDate(d)) return false;
+  if (!range.from) return true;
+  return d >= range.from && d <= range.to;
+}
+
+function pdRangeMonths(range) {
+  const now = new Date();
+  let from;
+  if (!range.from) {
+    // All time — compute from earliest deal or person date
+    let earliest = now;
+    _pd_deals.concat(_pd_people).forEach(r => {
+      const dates = [r['Deal - Won time'], r['Deal - Deal created'], r['Person - Date Access Granted']].filter(Boolean);
+      dates.forEach(s => { const d = pdParseDate(s); if (pdValidDate(d) && d < earliest) earliest = d; });
+    });
+    from = new Date(earliest.getFullYear(), earliest.getMonth(), 1);
+  } else {
+    from = new Date(range.from.getFullYear(), range.from.getMonth(), 1);
+  }
+  const months = [];
+  const d = new Date(from);
+  while (d <= now) {
+    months.push(d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'));
+    d.setMonth(d.getMonth() + 1);
+  }
+  return months;
+}
+
+function setPdRange(r) { activeSub.pd_range = r; renderPipedrive(); }
+
+function pdRangeToggleHTML() {
+  const cur = activeSub.pd_range || 'all';
+  const opts = [['1m','1M'],['3m','3M'],['6m','6M'],['12m','12M'],['ytd','YTD'],['all','All']];
+  return `<div class="range-toggle">${opts.map(([v,l]) => `<button class="range-btn${cur===v?' active':''}" onclick="setPdRange('${v}')">${l}</button>`).join('')}</div>`;
+}
+
 function renderPipedrive(el) {
   el = el || document.getElementById('main-content');
   const sub = activeSub.pd_sub || 'import';
-  const wonDeals  = _pd_deals.filter(d => d['Deal - Status'] === 'Won'  && d['Deal - Pipeline'] === '2026 Sales');
-  const lostDeals = _pd_deals.filter(d => d['Deal - Status'] === 'Lost' && d['Deal - Pipeline'] === '2026 Sales');
-  const openDeals = _pd_deals.filter(d => d['Deal - Status'] === 'Open' && d['Deal - Pipeline'] === '2026 Sales');
+  const range = pdGetRange();
+
+  // Summary cards: filter won/lost by date within selected range
+  const salesDealsAll = _pd_deals.filter(d => d['Deal - Pipeline'] === '2026 Sales');
+  const wonDeals  = salesDealsAll.filter(d => d['Deal - Status'] === 'Won'  && pdInRange(d['Deal - Won time'],  range));
+  const lostDeals = salesDealsAll.filter(d => d['Deal - Status'] === 'Lost' && pdInRange(d['Deal - Lost time'], range));
+  const openDeals = salesDealsAll.filter(d => d['Deal - Status'] === 'Open');
+
+  // Active paid subscribers always shows current state
   const _now = new Date();
   const paidSubs  = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
   const activePaidSubs = paidSubs.filter(p => {
@@ -2015,12 +2110,13 @@ function renderPipedrive(el) {
     <div class="section-header">
       <div><div class="section-title">Pipedrive Analytics</div>
       <div class="section-sub">Deals · People · Trial pipeline — powered by Pipedrive CSV import</div></div>
+      ${pdRangeToggleHTML()}
     </div>
     ${cardsHTML([
-      ['Won deals (2026 Sales)', wonDeals.length || null],
-      ['Lost deals (2026 Sales)', lostDeals.length || null],
-      ['Win rate (2026 Sales)', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%', 'Won ÷ (Won + Lost) deals'],
-      ['Active paid subscribers', activePaidSubs.length || null, null, null, 'Target: 600'],
+      ['Won deals (2026 Sales)', wonDeals.length || null, null, null, range.label],
+      ['Lost deals (2026 Sales)', lostDeals.length || null, null, null, range.label],
+      ['Win rate (2026 Sales)', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%', 'Won ÷ (Won + Lost) · ' + range.label],
+      ['Active paid subscribers', activePaidSubs.length || null, null, null, 'Target: 600 · as of today'],
       ['People (total)', _pd_people.length || null],
     ])}
     <div class="sub-tabs">
@@ -2127,10 +2223,12 @@ async function handlePeopleImport(input) {
 
 // ── PIPEDRIVE: SALES CHARTS ─────────────────────────────────────────────────
 function renderPdSales(sc) {
+  const range = pdGetRange();
+  const rangeMonths = pdRangeMonths(range);
   const salesDeals = _pd_deals.filter(d => d['Deal - Pipeline'] === '2026 Sales');
-  const wonDeals   = salesDeals.filter(d => d['Deal - Status'] === 'Won');
-  const lostDeals  = salesDeals.filter(d => d['Deal - Status'] === 'Lost');
-  const months12   = pd12Months();
+  const wonDeals   = salesDeals.filter(d => d['Deal - Status'] === 'Won'  && pdInRange(d['Deal - Won time'],  range));
+  const lostDeals  = salesDeals.filter(d => d['Deal - Status'] === 'Lost' && pdInRange(d['Deal - Lost time'], range));
+  const months12   = rangeMonths;
 
   // Won by month (count + value)
   const wonByMonth = {};
@@ -2180,20 +2278,22 @@ function renderPdSales(sc) {
     return pdValidDate(c) && pdValidDate(w) && monthKey(c.toISOString()) === monthKey(w.toISOString());
   });
 
-  // Source performance
+  // Source performance (range-filtered closed deals)
   const srcPerf = {};
   salesDeals.filter(d => d['Deal - Status'] !== 'Open').forEach(d => {
+    const dateField = d['Deal - Status'] === 'Won' ? d['Deal - Won time'] : d['Deal - Lost time'];
+    if (!pdInRange(dateField, range)) return;
     const src = d['Deal - Source channel'] || 'Unknown';
     if (!srcPerf[src]) srcPerf[src] = { won: 0, lost: 0, wonVal: 0 };
     if (d['Deal - Status'] === 'Won') { srcPerf[src].won++; srcPerf[src].wonVal += parseFloat(d['Deal - Value']) || 0; }
     else srcPerf[src].lost++;
   });
 
-  // Category donut (won only)
+  // Category donut (won only, range-filtered)
   const catPerf = {};
   wonDeals.forEach(d => { const c = d['Deal - Category'] || 'Other'; catPerf[c] = (catPerf[c] || 0) + 1; });
 
-  // Owner bar (won only)
+  // Owner bar (won only, range-filtered)
   const ownerPerf = {};
   wonDeals.forEach(d => { const o = d['Deal - Owner'] || 'Unknown'; ownerPerf[o] = (ownerPerf[o] || 0) + 1; });
 
@@ -2230,16 +2330,16 @@ function renderPdSales(sc) {
       </div>
     </div>
 
-    <div class="box"><div class="box-title">Won deals &amp; revenue by month (12 months)</div>
+    <div class="box"><div class="box-title">Won deals &amp; revenue by month — ${range.label}</div>
       <div class="chart-wrap" style="height:260px"><canvas id="pd-won-month"></canvas></div></div>
 
-    <div class="box"><div class="box-title">Win rate by month</div>
+    <div class="box"><div class="box-title">Win rate by month — ${range.label}</div>
       <div class="chart-wrap" style="height:210px"><canvas id="pd-winrate"></canvas></div></div>
 
-    <div class="box"><div class="box-title">Won vs Lost by month (12 months)</div>
+    <div class="box"><div class="box-title">Won vs Lost by month — ${range.label}</div>
       <div class="chart-wrap" style="height:210px"><canvas id="pd-wl-month"></canvas></div></div>
 
-    <div class="box"><div class="box-title">Average sales cycle — days from created to won</div>
+    <div class="box"><div class="box-title">Average sales cycle — days from created to won — ${range.label}</div>
       <div class="chart-wrap" style="height:200px"><canvas id="pd-cycle"></canvas></div></div>
 
     <div class="box"><div class="box-title">Deal source performance (won vs lost)</div>
@@ -2352,8 +2452,10 @@ function renderPdSales(sc) {
 // ── PIPEDRIVE: USERS & LICENCES ──────────────────────────────────────────────
 function renderPdUsers(sc) {
   const today = new Date();
+  const range = pdGetRange();
+  const rangeMonths = pdRangeMonths(range);
 
-  // Helper: is access currently active? (no removal date, or removal date in the future)
+  // Helper: is access currently active?
   function isActive(p) {
     const rem = p['Person - Date Access Removed'];
     if (!rem) return true;
@@ -2365,46 +2467,47 @@ function renderPdUsers(sc) {
   const paidPeople = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
   const activePaid = paidPeople.filter(isActive);
 
-  // Chart 11: Paid subscriber growth — cumulative, PAID SUBSCRIPTION ONLY, by access granted date
-  const paidByMonth = {};
+  // Chart 11: Cumulative paid subscriber growth — ALL TIME (shows full trajectory regardless of range)
+  const paidByMonthAll = {};
   paidPeople.forEach(p => {
     const dt = pdParseDate(p['Person - Date Access Granted']);
     if (!pdValidDate(dt)) return;
     const k = monthKey(dt.toISOString());
-    paidByMonth[k] = (paidByMonth[k] || 0) + 1;
+    paidByMonthAll[k] = (paidByMonthAll[k] || 0) + 1;
   });
-  const paidMonths = Object.keys(paidByMonth).sort();
+  const allPaidMonths = Object.keys(paidByMonthAll).sort();
   let cum = 0;
-  const cumData = paidMonths.map(m => { cum += paidByMonth[m]; return cum; });
+  const cumData = allPaidMonths.map(m => { cum += paidByMonthAll[m]; return cum; });
 
-  // Chart 12: Customer type breakdown (all people)
+  // Chart 12: Customer type breakdown (all people, no range filter — always shows current state)
   const ctypes = {};
   _pd_people.forEach(p => { const ct = p['Person - Customer Type']||'Unknown'; ctypes[ct]=(ctypes[ct]||0)+1; });
 
-  // Chart 13: Top 15 orgs — PAID SUBSCRIPTION ONLY
+  // Chart 13: Top orgs — active paid subscribers (current state, no range filter)
   const orgs = {};
   activePaid.forEach(p => { const o=p['Person - Organisation']; if(o&&o.trim()) orgs[o]=(orgs[o]||0)+1; });
   const topOrgs = Object.entries(orgs).sort((a,b)=>b[1]-a[1]).slice(0,15);
 
-  // Chart 14: New paid subscribers by month (12m)
-  const months12 = pd12Months();
+  // Chart 14: New paid subscribers by month — range-filtered
   const newByMonth = {};
   paidPeople.forEach(p => {
     const dt = pdParseDate(p['Person - Date Access Granted']);
     if (!pdValidDate(dt)) return;
+    if (!pdInRange(p['Person - Date Access Granted'], range)) return;
     const k = monthKey(dt.toISOString());
     newByMonth[k] = (newByMonth[k]||0)+1;
   });
 
-  // Chart 15: Access removed (Paid Subscription only) — churn indicator
+  // Chart 15: Access end dates — range-filtered
   const revokedByMonth = {};
   paidPeople.forEach(p => {
     const dt = pdParseDate(p['Person - Date Access Removed']);
     if (!pdValidDate(dt)) return;
+    if (!pdInRange(p['Person - Date Access Removed'], range)) return;
     const k = monthKey(dt.toISOString());
     revokedByMonth[k] = (revokedByMonth[k]||0)+1;
   });
-  const revokedMonths = Object.keys(revokedByMonth).sort().slice(-12);
+  const revokedMonths = rangeMonths.filter(m => revokedByMonth[m] != null);
 
   sc.innerHTML = `
     ${!_pd_people.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive people CSV first.</div></div>' : ''}
@@ -2415,32 +2518,32 @@ function renderPdUsers(sc) {
       <div class="card"><div class="card-label">Centrally funded</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='Centrally Funded Licence').length}</div></div>
     </div>
 
-    <div class="box"><div class="box-title">Paid subscriber growth — cumulative (Paid Subscription by access granted date)</div>
-      ${paidMonths.length ? `<div class="chart-wrap" style="height:240px"><canvas id="pd-sub-growth"></canvas></div>` : '<div class="no-data">No access granted dates found.</div>'}</div>
+    <div class="box"><div class="box-title">Paid subscriber growth — cumulative (all time)</div>
+      ${allPaidMonths.length ? `<div class="chart-wrap" style="height:240px"><canvas id="pd-sub-growth"></canvas></div>` : '<div class="no-data">No access granted dates found.</div>'}</div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
       <div class="box" style="margin-bottom:0"><div class="box-title">Customer type breakdown (all people)</div>
         <div class="chart-wrap" style="height:260px"><canvas id="pd-ctype"></canvas></div></div>
-      <div class="box" style="margin-bottom:0"><div class="box-title">New paid subscribers by month (12m)</div>
+      <div class="box" style="margin-bottom:0"><div class="box-title">New paid subscribers by month — ${range.label}</div>
         <div class="chart-wrap" style="height:260px"><canvas id="pd-new-users"></canvas></div></div>
     </div>
 
-    <div class="box"><div class="box-title">Active paid subscribers by organisation</div>
+    <div class="box"><div class="box-title">Active paid subscribers by organisation (as of today)</div>
       ${topOrgs.length ? `<div class="chart-wrap" style="height:${Math.max(300,topOrgs.length*28)}px"><canvas id="pd-top-orgs"></canvas></div>` : '<div class="no-data">No org data.</div>'}</div>
 
-    <div class="box"><div class="box-title">Access end dates — paid subscribers (churn risk)</div>
-      ${revokedMonths.length ? `<div class="chart-wrap" style="height:200px"><canvas id="pd-revoked"></canvas></div>` : '<div class="no-data">No access end date data.</div>'}</div>`;
+    <div class="box"><div class="box-title">Access end dates — paid subscribers — ${range.label}</div>
+      ${revokedMonths.length ? `<div class="chart-wrap" style="height:200px"><canvas id="pd-revoked"></canvas></div>` : '<div class="no-data">No access end date data for this period.</div>'}</div>`;
 
   if (_pd_people.length) {
-    if (paidMonths.length) makeChart('pd-sub-growth', {
+    if (allPaidMonths.length) makeChart('pd-sub-growth', {
       type:'line',
-      data:{ labels:paidMonths.map(m=>monthLabel(m)), datasets:[
+      data:{ labels:allPaidMonths.map(m=>monthLabel(m)), datasets:[
         {label:'Cumulative paid subscribers', data:cumData, borderColor:'#2e8bc0', backgroundColor:'rgba(46,139,192,.08)', borderWidth:2, tension:.3, pointRadius:2, fill:true},
-        {label:'Target: 600', data:paidMonths.map(()=>TARGET_USERS), borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false},
+        {label:'Target: 600', data:allPaidMonths.map(()=>TARGET_USERS), borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false},
       ]},
       options:{ responsive:true, maintainAspectRatio:false,
         plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
-        scales:{ x:{grid:{display:false},ticks:{...axStyle,maxTicksLimit:12}}, y:{grid:gridStyle,ticks:axStyle,beginAtZero:true} }
+        scales:{ x:{grid:{display:false},ticks:{...axStyle,maxTicksLimit:14}}, y:{grid:gridStyle,ticks:axStyle,beginAtZero:true} }
       }
     });
     const ctEntries = Object.entries(ctypes).filter(([k])=>k&&k!=='Unknown').sort((a,b)=>b[1]-a[1]);
@@ -2453,10 +2556,10 @@ function renderPdUsers(sc) {
     });
     makeChart('pd-new-users', {
       type:'bar',
-      data:{ labels:months12.map(m=>monthLabel(m)), datasets:[{label:'New paid subscribers', data:months12.map(m=>newByMonth[m]||0), backgroundColor:'#2a7a4b', borderRadius:3}] },
+      data:{ labels:rangeMonths.map(m=>monthLabel(m)), datasets:[{label:'New paid subscribers', data:rangeMonths.map(m=>newByMonth[m]||0), backgroundColor:'#2a7a4b', borderRadius:3}] },
       options:{ responsive:true, maintainAspectRatio:false,
         plugins:{ legend:{display:false} },
-        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:axStyle,beginAtZero:true} }
+        scales:{ x:{grid:{display:false},ticks:{...axStyle,maxTicksLimit:14}}, y:{grid:gridStyle,ticks:axStyle,beginAtZero:true} }
       }
     });
     if (topOrgs.length) makeChart('pd-top-orgs', {
@@ -2480,8 +2583,14 @@ function renderPdUsers(sc) {
 
 // ── PIPEDRIVE: TRIAL PIPELINE ────────────────────────────────────────────────
 function renderPdTrials(sc) {
-  const trialDeals = _pd_deals.filter(d => d['Deal - Pipeline'] === 'Trial Pipeline');
-  const openTrials = trialDeals.filter(d => d['Deal - Status'] === 'Open');
+  const range = pdGetRange();
+  const allTrialDeals = _pd_deals.filter(d => d['Deal - Pipeline'] === 'Trial Pipeline');
+  // For stage snapshot and open trials: always show current state
+  const openTrials = allTrialDeals.filter(d => d['Deal - Status'] === 'Open');
+  // For historical stats: filter by date range (use deal created date)
+  const trialDeals = range.from
+    ? allTrialDeals.filter(d => pdInRange(d['Deal - Deal created'], range))
+    : allTrialDeals;
   const lostTrials = trialDeals.filter(d => d['Deal - Status'] === 'Lost');
   const closedLost = trialDeals.filter(d => d['Deal - Stage'] === 'Closed Lost' || d['Deal - Status'] === 'Lost').length;
 
@@ -2494,15 +2603,15 @@ function renderPdTrials(sc) {
   lostTrials.forEach(d => { const r = d['Deal - Lost reason']; if (r && r.trim()) lostReasons[r] = (lostReasons[r]||0)+1; });
 
   sc.innerHTML = `
-    ${!trialDeals.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive deals CSV first.</div></div>' : ''}
+    ${!allTrialDeals.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive deals CSV first.</div></div>' : ''}
     <div class="cards" style="margin-bottom:18px">
-      <div class="card"><div class="card-label">Total trial deals</div><div class="card-value">${trialDeals.length}</div></div>
-      <div class="card"><div class="card-label">Open trials</div><div class="card-value">${openTrials.length}</div></div>
+      <div class="card"><div class="card-label">Trial deals</div><div class="card-value">${trialDeals.length}</div><div class="card-sub">${range.label}</div></div>
+      <div class="card"><div class="card-label">Open trials</div><div class="card-value">${openTrials.length}</div><div class="card-sub">current snapshot</div></div>
       <div class="card"><div class="card-label">Closed Lost</div><div class="card-value" style="color:var(--re)">${closedLost}</div>
-        <div class="card-sub">${trialDeals.length ? fmtPct(pct(closedLost, trialDeals.length)) + ' of all trial deals' : ''}</div></div>
-      <div class="card"><div class="card-label">Lost (total)</div><div class="card-value">${lostTrials.length}</div></div>
+        <div class="card-sub">${trialDeals.length ? fmtPct(pct(closedLost, trialDeals.length)) + ' of trial deals · ' + range.label : ''}</div></div>
+      <div class="card"><div class="card-label">Lost (total)</div><div class="card-value">${lostTrials.length}</div><div class="card-sub">${range.label}</div></div>
     </div>
-    ${closedLost > 0 ? `<div class="callout warn"><div class="callout-label">Conversion concern</div><div class="callout-text">${closedLost} of ${trialDeals.length} trial deals (${fmtPct(pct(closedLost, trialDeals.length))}) are Closed Lost. This is a significant conversion problem worth investigating urgently.</div></div>` : ''}
+    ${closedLost > 0 ? `<div class="callout warn"><div class="callout-label">Conversion concern</div><div class="callout-text">${closedLost} of ${trialDeals.length} trial deals (${fmtPct(pct(closedLost, trialDeals.length))}) are Closed Lost · ${range.label}.</div></div>` : ''}
 
     <div class="box"><div class="box-title">Trial pipeline — all deals by stage</div>
       ${trialDeals.length ? `<div class="pipeline">${(() => {
