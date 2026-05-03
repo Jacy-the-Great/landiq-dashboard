@@ -3418,65 +3418,134 @@ function renderPdOptimax(sc) {
   const targARR3y  = Math.round(targCumARR[35]);
   function fmtM(v) { return v>=1000000?'$'+(v/1000000).toFixed(2)+'M':'$'+(v/1000).toFixed(0)+'k'; }
 
-  // ── Pre-compute rows HTML (avoids nested template literal escaping issues) ─
+  // ── Pre-compute rows HTML: 7 columns matching reference model ──────────────
+  // Columns: Stage | Current #/mo | Current % | Target #/mo | Target % | Actual % Increase | Cumulative % Increase
   const omRowsHTML = ROWS.map(r => {
-    if (r.isHdr) return `<tr class="om-stage-hdr"><td colspan="6">${r.label}</td></tr>`;
-    const prj    = proj[r.id];
-    const curr   = r.isCurrPct ? null : r.curr;
-    const delta  = prj!=null&&curr!=null&&!r.isCurrPct ? prj-curr : null;
-    const uplift = curr>0&&delta!=null ? +((delta/curr)*100).toFixed(1) : null;
+    if (r.isHdr) return `<tr class="om-stage-hdr"><td colspan="7">${r.label}</td></tr>`;
+    const prj = proj[r.id];
 
+    // ── Col 2: Current # per month ──────────────────────────────────────────
+    // Stage 1 (leads): editable count input
+    // Upsell: editable % input (curr = rate, not a count)
+    // Price: editable $ input
+    // Others: Pipedrive count (read-only display)
     let currCell;
-    if (r.currEditable && r.isCurrPct) {
-      currCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="${r.currMax||100}" step="${r.currStep||1}" value="${t[r.currKey]||0}" onchange="omSave('${r.currKey}',this.value)"><span style="font-size:11px;color:var(--tl)">%</span></div>`;
-    } else if (r.currEditable && r.isCurrCount) {
-      currCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end">${r.currPrefix?`<span style="font-size:11px;color:var(--tl)">${r.currPrefix}</span>`:''}<input class="om-input${r.currStep>=1000?' om-input-wide':''}" type="number" min="0" step="${r.currStep||1}" value="${t[r.currKey]||0}" onchange="omSave('${r.currKey}',this.value)"></div>`;
+    if (r.id === 'leads') {
+      currCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input om-input-wide" type="number" min="0" step="1000" value="${t[r.currKey]||0}" onchange="omSave('${r.currKey}',this.value)"></div>`;
+    } else if (r.id === 'upsell') {
+      currCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="100" step="1" value="${t[r.currKey]||0}" onchange="omSave('${r.currKey}',this.value)"><span style="font-size:11px;color:var(--tl)">%</span></div>`;
+    } else if (r.id === 'price') {
+      currCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><span style="font-size:11px;color:var(--tl)">$</span><input class="om-input" type="number" min="0" step="10" value="${t[r.currKey]||0}" onchange="omSave('${r.currKey}',this.value)"><span style="font-size:10px;color:var(--tl)">/yr</span></div>`;
     } else {
-      currCell = `<span style="font-weight:500">${curr!=null?curr.toLocaleString():'—'}</span>`;
+      currCell = `<span style="font-weight:500">${r.curr!=null?r.curr.toLocaleString():'—'}</span>`;
     }
 
-    let tgtCell;
-    if (r.id==='price') {
-      tgtCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><span style="font-size:11px;color:var(--tl)">$</span><input class="om-input" type="number" min="0" step="10" value="${t[r.tgtKey]||0}" onchange="omSave('${r.tgtKey}',this.value)"></div>`;
-    } else if (r.id==='leads') {
-      tgtCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input om-input-wide" type="number" min="0" step="1000" value="${t[r.tgtKey]||0}" onchange="omSave('${r.tgtKey}',this.value)"></div>`;
+    // ── Col 3: Current % (conversion rate from Pipedrive) ───────────────────
+    // Stage 1: no prior stage, show —
+    // Upsell: upsell% is already in col 2, show — here
+    // Price: no %, show —
+    // Conv stages: from Pipedrive actuals
+    let currPctCell;
+    if (r.id === 'leads' || r.id === 'upsell' || r.id === 'price') {
+      currPctCell = '<span style="color:var(--tl)">—</span>';
     } else {
-      tgtCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="100" step="1" value="${r.tgtPct||0}" onchange="omSave('${r.tgtKey}',this.value)"><span style="font-size:11px;color:var(--tl)">%</span></div>`;
+      const label = r.id === 'contact' ? '<div style="font-size:9px;color:var(--tl)">of leads</div>' : '';
+      currPctCell = r.currPct!=null
+        ? `<span class="conv-pct ${r.currPct>=70?'good':r.currPct>=40?'mid':'bad'}">${fmtPct(r.currPct)}</span>${label}`
+        : '—';
     }
 
-    const convPct = r.currPct!=null
-      ? `<span class="conv-pct ${r.currPct>=70?'good':r.currPct>=40?'mid':'bad'}">${fmtPct(r.currPct)}</span>`
-      : r.id==='contact' ? `<span style="font-size:11px;color:var(--tl)">of leads</span>` : '—';
-    const upliftHTML = uplift!=null ? `<span class="conv-pct ${uplift>=0?'good':'bad'}">${uplift>=0?'+':''}${uplift}%</span>` : '—';
+    // ── Col 4: Target # per month (computed projected count) ────────────────
+    // Stage 1: editable target count input
+    // Price: editable target $ per year
+    // Upsell: no count target (rate-based), show —
+    // Conv stages: computed projected count = proj[r.id]
+    let tgtCountCell;
+    if (r.id === 'leads') {
+      tgtCountCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input om-input-wide" type="number" min="0" step="1000" value="${t[r.tgtKey]||0}" onchange="omSave('${r.tgtKey}',this.value)"></div>`;
+    } else if (r.id === 'price') {
+      tgtCountCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><span style="font-size:11px;color:var(--tl)">$</span><input class="om-input" type="number" min="0" step="10" value="${t[r.tgtKey]||0}" onchange="omSave('${r.tgtKey}',this.value)"><span style="font-size:10px;color:var(--tl)">/yr</span></div>`;
+    } else if (r.id === 'upsell') {
+      tgtCountCell = '<span style="color:var(--tl)">—</span>';
+    } else {
+      tgtCountCell = `<span style="font-weight:600;color:var(--gr)">${prj!=null?prj.toLocaleString():'—'}</span>`;
+    }
+
+    // ── Col 5: Target % (editable input) ────────────────────────────────────
+    // Stage 1, Price: no conversion %, show —
+    // Conv stages + upsell: editable % input
+    let tgtPctCell;
+    if (r.id === 'leads' || r.id === 'price') {
+      tgtPctCell = '<span style="color:var(--tl)">—</span>';
+    } else {
+      const step = r.id === 'upsell' ? (r.currStep||1) : 1;
+      tgtPctCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="100" step="${step}" value="${r.tgtPct||0}" onchange="omSave('${r.tgtKey}',this.value)"><span style="font-size:11px;color:var(--tl)">%</span></div>`;
+    }
+
+    // ── Col 6: Actual % Increase ─────────────────────────────────────────────
+    // Stage 1: (target_count - curr_count) / curr_count × 100 (relative change in volume)
+    // Conv stages: target_pct - current_pct (absolute pp improvement in conversion rate)
+    // Upsell: target_pct - curr_pct
+    // Price: (target_$ - curr_$) relative to avg deal value
+    let actualPct;
+    if (r.id === 'leads') {
+      actualPct = t.leads_curr > 0 ? +((t.leads_target - t.leads_curr) / t.leads_curr * 100).toFixed(1) : null;
+    } else if (r.id === 'upsell') {
+      actualPct = +((t.upsell_pct_target||0) - (t.upsell_pct_curr||0)).toFixed(1);
+    } else if (r.id === 'price') {
+      actualPct = avgDealVal > 0 && (t.price_target||0) > 0 ? +((t.price_target - (t.price_curr||0)) / avgDealVal * 100).toFixed(1) : null;
+    } else {
+      // Absolute pp improvement in conversion rate (target% - current%)
+      actualPct = (r.currPct != null && r.tgtPct != null) ? +((r.tgtPct||0) - r.currPct).toFixed(1) : null;
+    }
+    const actualHTML = actualPct != null
+      ? `<span class="conv-pct ${actualPct>=0?'good':'bad'}">${actualPct>=0?'+':''}${actualPct}%</span>`
+      : '—';
+
+    // ── Col 7: Cumulative % Increase ─────────────────────────────────────────
+    // Stage 1: same as actual% (first stage, no prior chain)
+    // Conv stages: (proj_count_at_stage - curr_count_at_stage) / curr_count_at_stage × 100
+    //   This shows the compound chain effect: more leads AND better conversion
+    // Upsell, Price: — (multiplicative revenue effects, not part of the chain count)
+    let cumulativePct;
+    if (r.id === 'leads') {
+      cumulativePct = actualPct;
+    } else if (r.id === 'upsell' || r.id === 'price') {
+      cumulativePct = null;
+    } else {
+      const currBase = r.id === 'won' ? wonCurr : r.curr;
+      cumulativePct = (currBase > 0 && prj != null) ? +((prj - currBase) / currBase * 100).toFixed(1) : null;
+    }
+    const cumulativeHTML = cumulativePct != null
+      ? `<span class="conv-pct ${cumulativePct>=0?'good':'bad'}">${cumulativePct>=0?'+':''}${cumulativePct}%</span>`
+      : '—';
 
     return `<tr>
       <td><div style="font-weight:500">${r.label}</div>${r.desc?`<div style="font-size:11px;color:var(--tl);margin-top:2px">${r.desc}</div>`:''}</td>
       <td style="text-align:right">${currCell}</td>
-      <td style="text-align:right">${convPct}</td>
-      <td style="text-align:right">${tgtCell}</td>
-      <td style="text-align:right;font-weight:500;color:var(--gr)">${prj!=null?prj.toLocaleString():'—'}</td>
-      <td style="text-align:right">${upliftHTML}</td>
+      <td style="text-align:right">${currPctCell}</td>
+      <td style="text-align:right">${tgtCountCell}</td>
+      <td style="text-align:right">${tgtPctCell}</td>
+      <td style="text-align:right">${actualHTML}</td>
+      <td style="text-align:right">${cumulativeHTML}</td>
     </tr>`;
   }).join('');
 
   // ── Stage 5 TOTAL IMPACT rows ─────────────────────────────────────────────
-  const avgUpliftDisp = avgUpliftPct.toFixed(1);
   const cumUpliftDisp = cumulativeUplift.toFixed(1);
   const omStage5HTML = `
-    <tr class="om-stage-hdr"><td colspan="6" style="background:#0d2b45">STAGE 5 — TOTAL IMPACT &amp; COMBINED UPLIFT EFFECT</td></tr>
+    <tr class="om-stage-hdr"><td colspan="7" style="background:#0d2b45">STAGE 5 — TOTAL IMPACT &amp; COMBINED UPLIFT EFFECT</td></tr>
     <tr style="background:#f0f7ff">
       <td>
         <div style="font-weight:600;color:var(--navy)">Total Revenue Per Month</div>
-        <div style="font-size:11px;color:var(--tl);margin-top:2px">Based on won ${unitLabel} rate × avg deal value · model projection</div>
+        <div style="font-size:11px;color:var(--tl);margin-top:2px">Won ${unitLabel}/mo × avg deal value · model projection</div>
       </td>
       <td style="text-align:right;font-weight:600">${fmtDollar(currRevMonth)}<span style="font-size:10px;color:var(--tl)">/mo</span></td>
       <td style="text-align:center;color:var(--tl)">→</td>
       <td style="text-align:right;font-weight:600;color:var(--gr)">${fmtDollar(projRevMonth)}<span style="font-size:10px;color:var(--tl)">/mo</span></td>
-      <td style="text-align:right;font-weight:600;color:var(--gr)">${fmtDollar(projRevMonth - currRevMonth)}<span style="font-size:10px;color:var(--tl)">/mo uplift</span></td>
-      <td style="text-align:right">
-        <div><span class="conv-pct ${avgUpliftPct>=0?'good':'bad'}">${avgUpliftPct>=0?'+':''}${avgUpliftDisp}%</span><div style="font-size:9px;color:var(--tl)">avg per stage</div></div>
-        <div style="margin-top:4px"><span class="conv-pct ${cumulativeUplift>=0?'good':'bad'}">${cumulativeUplift>=0?'+':''}${cumUpliftDisp}%</span><div style="font-size:9px;color:var(--tl)">cumulative (leads→won)</div></div>
-      </td>
+      <td style="text-align:right">—</td>
+      <td style="text-align:right;font-weight:600;color:var(--gr)">+${fmtDollar(projRevMonth - currRevMonth)}<span style="font-size:10px;color:var(--tl)">/mo</span></td>
+      <td style="text-align:right"><span class="conv-pct ${cumulativeUplift>=0?'good':'bad'}">${cumulativeUplift>=0?'+':''}${cumUpliftDisp}%</span><div style="font-size:9px;color:var(--tl)">cumulative</div></td>
     </tr>
     <tr style="background:#f0f7ff;border-top:1px solid #dce7f0">
       <td>
@@ -3486,7 +3555,8 @@ function renderPdOptimax(sc) {
       <td style="text-align:right;font-weight:600">${fmtDollar(currRevYear)}</td>
       <td style="text-align:center;color:var(--tl)">→</td>
       <td style="text-align:right;font-weight:600;color:var(--gr)">${fmtDollar(projRevYear)}</td>
-      <td style="text-align:right;font-weight:600;color:var(--gr)">${fmtDollar(projRevYear - currRevYear)}<span style="font-size:10px;color:var(--tl)">/yr uplift</span></td>
+      <td style="text-align:right">—</td>
+      <td style="text-align:right;font-weight:600;color:var(--gr)">+${fmtDollar(projRevYear - currRevYear)}<span style="font-size:10px;color:var(--tl)">/yr</span></td>
       <td style="text-align:right"><span class="conv-pct ${cumulativeUplift>=0?'good':'bad'}">${cumulativeUplift>=0?'+':''}${cumUpliftDisp}%</span><div style="font-size:9px;color:var(--tl)">cumulative</div></td>
     </tr>`;
 
@@ -3528,11 +3598,12 @@ function renderPdOptimax(sc) {
       <table class="om-table">
         <thead><tr>
           <th style="min-width:240px">Stage</th>
-          <th style="text-align:right;min-width:120px">Current # (${unitLabel})<div style="font-size:10px;font-weight:400;color:var(--tl)">Stage 1: per month · others: all-time</div></th>
-          <th style="text-align:right">Conv %</th>
-          <th style="text-align:right;min-width:110px">Target<div style="font-size:10px;font-weight:400;color:var(--tl)">per month</div></th>
-          <th style="text-align:right">Projected #<div style="font-size:10px;font-weight:400;color:var(--tl)">per month</div></th>
-          <th style="text-align:right">% Change</th>
+          <th style="text-align:right;min-width:90px">Current #<div style="font-size:10px;font-weight:400;color:var(--tl)">per month</div></th>
+          <th style="text-align:right;min-width:70px">Current %<div style="font-size:10px;font-weight:400;color:var(--tl)">conv rate</div></th>
+          <th style="text-align:right;min-width:100px">Target #<div style="font-size:10px;font-weight:400;color:var(--tl)">per month</div></th>
+          <th style="text-align:right;min-width:80px">Target %<div style="font-size:10px;font-weight:400;color:var(--tl)">set rate</div></th>
+          <th style="text-align:right;min-width:80px">Actual %<div style="font-size:10px;font-weight:400;color:var(--tl)">increase</div></th>
+          <th style="text-align:right;min-width:80px">Cumulative %<div style="font-size:10px;font-weight:400;color:var(--tl)">increase</div></th>
         </tr></thead>
         <tbody>
         ${omRowsHTML}
