@@ -261,7 +261,7 @@ const SUPABASE_URL = 'https://ysdonnjezvoyrrizadik.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlzZG9ubmplenZveXJyaXphZGlrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2ODY4MzYsImV4cCI6MjA5MzI2MjgzNn0.9bJ2FPEqV6NEtrnS567HBbwx0zcyQfshfcqWVRvH7RQ';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const KEYS = { sales:'sales', trials:'trials', website:'website', training:'training', content:'content', webinars:'webinars', linkedin_weekly:'linkedin_weekly', edm_2m:'edm_2m', weekly_tracker:'weekly_tracker' };
+const KEYS = { sales:'sales', trials:'trials', website:'website', website_daily:'website_daily', training:'training', content:'content', webinars:'webinars', linkedin_weekly:'linkedin_weekly', edm_2m:'edm_2m', weekly_tracker:'weekly_tracker' };
 
 // In-memory cache — loaded from Supabase on init, kept in sync on every save
 const _cache = {};
@@ -523,10 +523,11 @@ function renderHome(el) {
   }).length;
 
   const mods = [
-    { name: 'Trials Pipeline', last: ul,                   dk: 'week' },
-    { name: 'Website',         last: wl,                   dk: 'week' },
-    { name: 'Training',        last: training[training.length - 1], dk: 'date' },
-    { name: 'Marketing',       last: content[content.length - 1],   dk: 'date' },
+    { name: 'Pipedrive Deals',  last: _pd_deals_imported_at  ? { _ts: _pd_deals_imported_at }  : null, dk: '_ts' },
+    { name: 'Pipedrive People', last: _pd_people_imported_at ? { _ts: _pd_people_imported_at } : null, dk: '_ts' },
+    { name: 'Website',          last: wl,                    dk: 'week' },
+    { name: 'Training',         last: training[training.length - 1], dk: 'date' },
+    { name: 'Marketing content',last: content[content.length - 1],   dk: 'date' },
   ];
 
   el.innerHTML = `
@@ -590,7 +591,7 @@ function renderHome(el) {
     </div>
 
     <div class="box">
-      <div class="box-title">Training & data freshness</div>
+      <div class="box-title">Data currency</div>
       ${mods.map(m => {
         const dv = m.last ? m.last[m.dk] : null;
         const stale = !dv || (Date.now() - new Date(dv).getTime() > 10 * 86400000);
@@ -1157,8 +1158,99 @@ function saveTrials() {
 // ─────────────────────────────────────────
 function renderWebsite(el) {
   el = el || document.getElementById('main-content');
-  const data = load('website');
+  const granularity = activeSub.website_gran || 'weekly';
   const range = activeSub.website_range || '6m';
+
+  if (granularity === 'daily') {
+    // ── Daily view ────────────────────────────────────────────────────────
+    const dailyData = load('website_daily');
+    const daysMap = { '30d':30, '60d':60, '90d':90, 'all':9999 };
+    const dRange   = activeSub.website_drange || '60d';
+    const cutoff   = new Date(); cutoff.setDate(cutoff.getDate() - (daysMap[dRange]||60));
+    const recent   = dailyData.filter(r => !r.date || new Date(r.date) >= cutoff).sort((a,b)=>a.date>b.date?1:-1);
+    const today    = new Date().toISOString().split('T')[0];
+    const tmDaily  = dailyData.filter(r => r.date && r.date.startsWith(new Date().toISOString().slice(0,7)));
+
+    el.innerHTML = `
+      <div class="section-header">
+        <div>
+          <div class="section-title">Website</div>
+          <div class="section-sub">Daily traffic data</div>
+        </div>
+        <a class="src-link" href="https://lookerstudio.google.com" target="_blank">↗ Looker Studio</a>
+      </div>
+      ${cardsHTML([
+        ['Users this month (daily)', tmDaily.reduce((s,r)=>s+(r.users||0),0)||null],
+        ['Sessions this month', tmDaily.reduce((s,r)=>s+(r.sessions||0),0)||null],
+        ['CTA clicks (month)', tmDaily.reduce((s,r)=>s+(r.cta||0),0)||null],
+        ['Days logged', dailyData.length||null, null, null, 'total entries'],
+      ])}
+      <div class="box">
+        <div class="box-title">
+          Daily users
+          <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+            <div class="range-toggle">
+              <button class="range-btn${granularity==='daily'?' active':''}" onclick="setWebsiteGran('daily')">Daily</button>
+              <button class="range-btn${granularity==='weekly'?' active':''}" onclick="setWebsiteGran('weekly')">Weekly</button>
+            </div>
+            <div class="range-toggle">
+              ${['30d','60d','90d','all'].map(r=>`<button class="range-btn${dRange===r?' active':''}" onclick="setWebsiteDRange('${r}')">${r==='all'?'All':r}</button>`).join('')}
+            </div>
+          </div>
+        </div>
+        ${recent.length ? `<div class="chart-wrap" style="height:260px"><canvas id="web-daily-chart"></canvas></div>` : '<div class="no-data">No daily data yet. Add entries below.</div>'}
+      </div>
+
+      <div class="form-section">
+        <button class="add-btn" onclick="toggleForm('web-daily-form')">+ Add daily website data</button>
+        <div id="web-daily-form" style="display:none">
+          <div class="form-box">
+            <div class="form-grid">
+              <div class="form-group"><label>Date</label><input type="date" id="wbd-date" value="${today}"></div>
+              <div class="form-group"><label>Views</label><input type="number" id="wbd-views"></div>
+              <div class="form-group"><label>Users</label><input type="number" id="wbd-users"></div>
+              <div class="form-group"><label>Sessions</label><input type="number" id="wbd-sessions"></div>
+              <div class="form-group"><label>CTA clicks</label><input type="number" id="wbd-cta"></div>
+              <div class="form-group"><label>Trial EOI forms</label><input type="number" id="wbd-eoiform"></div>
+            </div>
+            <div class="form-actions">
+              <button class="btn-save" onclick="saveWebsiteDaily()">Save</button>
+              <button class="btn-cancel" onclick="toggleForm('web-daily-form')">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      ${tableHTML('website_daily', dailyData, [
+        { key: 'date',     label: 'Date',     render: r => fmtDate(r.date) },
+        { key: 'views',    label: 'Views',    render: r => fmtNum(r.views) },
+        { key: 'users',    label: 'Users',    render: r => fmtNum(r.users) },
+        { key: 'sessions', label: 'Sessions', render: r => fmtNum(r.sessions) },
+        { key: 'cta',      label: 'CTA',      render: r => fmtNum(r.cta) },
+      ], 'date')}
+    `;
+
+    if (recent.length) {
+      makeChart('web-daily-chart', {
+        type: 'bar',
+        data: {
+          labels: recent.map(r => fmtDate(r.date).slice(0,6)),
+          datasets: [
+            { label:'Daily users', data:recent.map(r=>r.users||0), backgroundColor:'rgba(46,139,192,.7)', borderRadius:2 },
+            { label:'Sessions',    data:recent.map(r=>r.sessions||0), backgroundColor:'rgba(26,60,94,.5)', borderRadius:2 },
+          ]
+        },
+        options: { responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
+          scales:{ x:{ grid:{display:false}, ticks:{ ...axStyle, maxTicksLimit:20, maxRotation:35 } }, y:{ grid:gridStyle, ticks:axStyle, beginAtZero:true } }
+        }
+      });
+    }
+    return;
+  }
+
+  // ── Weekly view ────────────────────────────────────────────────────────────
+  const data = load('website');
   const ranges = { '3m': 13, '6m': 26, '12m': 52, 'all': 9999 };
   const recent = data.slice(-ranges[range]);
   const tm = thisMonth(data);
@@ -1202,8 +1294,14 @@ function renderWebsite(el) {
     <div class="box">
       <div class="box-title">
         Weekly users + 4-week rolling average
-        <div class="range-toggle" style="margin-left:auto">
-          ${['3m','6m','12m','all'].map(r => `<button class="range-btn${range===r?' active':''}" onclick="setWebsiteRange('${r}')">${r==='all'?'All':r}</button>`).join('')}
+        <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+          <div class="range-toggle">
+            <button class="range-btn${granularity==='daily'?' active':''}" onclick="setWebsiteGran('daily')">Daily</button>
+            <button class="range-btn${granularity==='weekly'?' active':''}" onclick="setWebsiteGran('weekly')">Weekly</button>
+          </div>
+          <div class="range-toggle">
+            ${['3m','6m','12m','all'].map(r => `<button class="range-btn${range===r?' active':''}" onclick="setWebsiteRange('${r}')">${r==='all'?'All':r}</button>`).join('')}
+          </div>
         </div>
       </div>
       ${recent.length ? `<div class="chart-wrap" style="height:260px"><canvas id="web-users-chart"></canvas></div>` : '<div class="no-data">No data yet.</div>'}
@@ -1283,7 +1381,10 @@ function renderWebsite(el) {
   }
 }
 
-function setWebsiteRange(r) { activeSub.website_range = r; if (activeSub.content_sub === 'website') { renderMarketing(); } else { renderWebsite(); } }
+
+function setWebsiteRange(r)  { activeSub.website_range = r; if (activeSub.content_sub === 'website') { renderMarketing(); } else { renderWebsite(); } }
+function setWebsiteGran(g)   { activeSub.website_gran = g; if (activeSub.content_sub === 'website') { renderMarketing(); } else { renderWebsite(); } }
+function setWebsiteDRange(r) { activeSub.website_drange = r; if (activeSub.content_sub === 'website') { renderMarketing(); } else { renderWebsite(); } }
 
 function importWebsiteCSV() {
   const raw = document.getElementById('web-csv').value;
@@ -1332,6 +1433,23 @@ function saveWebsite() {
   save('website', arr);
   toggleForm('web-form');
   toast('Saved: week of ' + fmtDate(week));
+  renderWebsite();
+}
+
+function saveWebsiteDaily() {
+  const date = document.getElementById('wbd-date').value;
+  if (!date) { toast('Please select a date.'); return; }
+  const entry = { date };
+  ['views','users','sessions','cta','eoiform'].forEach(f => {
+    const v = document.getElementById('wbd-' + f)?.value;
+    if (v !== '' && v != null) entry[f] = Number(v);
+  });
+  const arr = load('website_daily').filter(r => r.date !== date);
+  arr.push(entry);
+  arr.sort((a, b) => a.date > b.date ? 1 : -1);
+  save('website_daily', arr);
+  toggleForm('web-daily-form');
+  toast('Daily data saved: ' + fmtDate(date));
   renderWebsite();
 }
 
@@ -1513,9 +1631,9 @@ function renderMarketing(el) {
     ])}
 
     <div class="sub-tabs">
-      ${['linkedin','webinars','edm','log','website','correlation','outcomes','tracker'].map(s =>
+      ${['linkedin','webinars','edm','log','website','correlation','tracker'].map(s =>
         `<button class="sub-tab${sub===s?' active':''}" onclick="setContentSub('${s}')">${
-          {linkedin:'LinkedIn',webinars:'Webinars',edm:'EDM',log:'All Content',website:'Website',correlation:'Correlation',outcomes:'Outcomes',tracker:'Weekly Tracker'}[s]
+          {linkedin:'LinkedIn',webinars:'Webinars',edm:'EDM',log:'All Content',website:'Website',correlation:'Correlation',tracker:'Weekly Tracker'}[s]
         }</button>`
       ).join('')}
     </div>
@@ -1870,51 +1988,106 @@ function setContentSub(sub, rerender = true, data, outcomes) {
     renderWebsite(sc);
 
   } else if (sub === 'correlation') {
-    sc.innerHTML = `<div class="box">
-      <div class="box-title">Content events vs website traffic</div>
-      <div style="font-size:13px;color:var(--tl);padding:10px 0 16px">Orange dots mark weeks where content was published. Hover for detail.</div>
-      <div id="corr-chart-wrap"></div>
-    </div>`;
-    const website = load('website').slice(-16);
     const allContent = data || load('content');
-    if (website.length) {
-      document.getElementById('corr-chart-wrap').innerHTML = `<canvas id="corr-chart" height="220"></canvas>`;
+    const websiteData = load('website');
+    const typeColors2 = { LinkedIn:'#0a66c2', YouTube:'#c0392b', EDM:'#2a7a4b', 'Viva Engage':'#c25a00', Webinar:'#3949ab', Blog:'#7b1fa2', Speaking:'#00796b' };
+    // Build last 90 days daily x-axis
+    const today90 = new Date(); today90.setHours(0,0,0,0);
+    const days90 = Array.from({length:90},(_,i)=>{ const d=new Date(today90); d.setDate(d.getDate()-89+i); return d.toISOString().split('T')[0]; });
+    // Map website weekly data: for each day find its week Sunday endpoint
+    const weekMap90 = {};
+    websiteData.forEach(w => { weekMap90[w.week] = w; });
+    function getWeekSun(dateStr) {
+      const d = new Date(dateStr); while(d.getDay()!==0) d.setDate(d.getDate()+1);
+      return d.toISOString().split('T')[0];
+    }
+    const dailyUsers90 = days90.map(d => { const w = weekMap90[getWeekSun(d)]; return w ? (w.users||0)||null : null; });
+    // Group content events by date
+    const eventsByDay90 = {};
+    allContent.forEach(c => { if(!c.date) return; if(!eventsByDay90[c.date]) eventsByDay90[c.date]=[]; eventsByDay90[c.date].push(c); });
+    // Build stacked bar datasets per type
+    const corrTypes = ['LinkedIn','YouTube','EDM','Viva Engage','Webinar','Blog','Speaking'];
+    const eventDatasets90 = corrTypes.map(type => ({
+      label: type,
+      data: days90.map(d => (eventsByDay90[d]||[]).filter(c=>c.type===type).length || null),
+      backgroundColor: typeColors2[type] || '#888',
+      borderColor: typeColors2[type] || '#888',
+      type: 'bar', stack: 'events',
+      yAxisID: 'y2', barThickness: 8,
+    })).filter(ds => ds.data.some(v=>v));
+    const corrLegend = corrTypes.filter(t=>eventDatasets90.some(d=>d.label===t)).map(t=>`<span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:${typeColors2[t]};display:inline-block"></span>${t}</span>`).join('');
+    const dayLabels90 = days90.map((d,i) => { const date=new Date(d); return (i%14===0||date.getDate()===1) ? fmtDate(d).slice(0,6) : ''; });
+    sc.innerHTML = `<div class="box">
+      <div class="box-title">Content events vs website traffic — daily (last 90 days)</div>
+      <div style="font-size:12px;color:var(--tl);padding:6px 0 14px;display:flex;flex-wrap:wrap;gap:10px">
+        ${corrLegend}
+        <span style="display:flex;align-items:center;gap:4px"><span style="width:22px;height:3px;background:#2e8bc0;display:inline-block;border-radius:2px"></span>Website users (weekly pts)</span>
+      </div>
+      <div id="corr-chart-wrap" class="chart-wrap" style="height:300px"></div>
+    </div>`;
+    if (websiteData.length || allContent.length) {
+      document.getElementById('corr-chart-wrap').innerHTML = '<canvas id="corr-chart"></canvas>';
       makeChart('corr-chart', {
         type: 'line',
         data: {
-          labels: website.map(r => fmtDate(r.week).slice(0, 6)),
-          datasets: [{
-            label: 'Website users', data: website.map(r => r.users || 0),
-            borderColor: '#2e8bc0', backgroundColor: 'rgba(46,139,192,.07)',
-            borderWidth: 2, fill: true, tension: .3,
-            pointRadius: website.map(w => { const wd = new Date(w.week); return allContent.some(c => Math.abs(new Date(c.date) - wd) < 7 * 86400000) ? 8 : 3; }),
-            pointBackgroundColor: website.map(w => { const wd = new Date(w.week); return allContent.some(c => Math.abs(new Date(c.date) - wd) < 7 * 86400000) ? '#c25a00' : '#2e8bc0'; }),
-          }]
+          labels: dayLabels90,
+          datasets: [
+            { label:'Website users', data:dailyUsers90, borderColor:'#2e8bc0', backgroundColor:'rgba(46,139,192,.08)', borderWidth:2, fill:true, tension:.3, pointRadius:0, spanGaps:true, yAxisID:'y1', order:10 },
+            ...eventDatasets90
+          ]
         },
-        options: { responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { display: false },
-            tooltip: { callbacks: { afterLabel: ctx => {
-              const w = website[ctx.dataIndex]; const wd = new Date(w.week);
-              const matches = allContent.filter(c => Math.abs(new Date(c.date) - wd) < 7 * 86400000);
-              return matches.length ? '\nContent this week:\n' + matches.map(c => '• ' + c.type + ': ' + (c.title||'Untitled')).join('\n') : '';
-            }}}
+        options: { responsive:true, maintainAspectRatio:false,
+          interaction:{ mode:'index', intersect:false },
+          plugins:{ legend:{display:false},
+            tooltip:{ callbacks:{
+              title: ctx=>{ const d=days90[ctx[0].dataIndex]; return fmtDate(d); },
+              afterBody: ctx=>{ const d=days90[ctx[0].dataIndex]; const evs=(eventsByDay90[d]||[]); return evs.length ? ['','Content:'].concat(evs.map(c=>'• '+c.type+(c.title?' — '+c.title.slice(0,40):''))) : []; }
+            }}
           },
-          scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: axStyle } }
+          scales:{
+            x:{ grid:{display:false}, ticks:{...axStyle, callback:(v,i)=>dayLabels90[i]||null, maxRotation:0} },
+            y1:{ position:'left', grid:gridStyle, ticks:axStyle, beginAtZero:true, title:{display:true,text:'Users',...axStyle} },
+            y2:{ position:'right', grid:{drawOnChartArea:false}, ticks:{...axStyle,stepSize:1}, beginAtZero:true, title:{display:true,text:'Events',...axStyle}, suggestedMax:4 }
+          }
         }
       });
+    } else {
+      document.getElementById('corr-chart-wrap').innerHTML = '<div class="no-data">Add website data and content items to see the chart.</div>';
     }
-
-  } else if (sub === 'outcomes') {
-    const outs = outcomes || (data || load('content')).filter(c => c.outcome && c.outcome.trim());
-    sc.innerHTML = `<div class="box">
-      <div class="box-title">Documented content outcomes</div>
-      ${outs.length ? outs.map(o => `<div class="outcome-item"><strong>${o.type}:</strong> ${o.title||'Untitled'}: ${o.outcome}</div>`).join('')
-        : '<div class="no-data">No outcomes logged yet.</div>'}
-    </div>`;
 
   } else if (sub === 'tracker') {
     // Lucy's weekly tracker
     const tracker = load('weekly_tracker');
+    const editingId = activeSub.editing_tracker || null;
+    const trkFields = ['jsImp','jmImp','lbImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','purchaseEnq','eoiTickets','trialsStarted'];
+
+    const trackerRowsHTML = tracker.length ? [...tracker].reverse().slice(0,8).map(r => {
+      if (r._id === editingId) {
+        // Inline edit mode
+        const inputs = trkFields.map(f => `<td><input type="number" id="trkedit-${f}" style="width:58px;padding:2px 4px;border:1px solid var(--acc);border-radius:3px;font-size:12px" step="${['edmOpen','edmCtr','wbEmailOpen','wbEmailCtr','wbRegPage'].includes(f)?'.1':'1'}" value="${r[f]??''}"></td>`).join('');
+        return `<tr style="background:#eef6ff">
+          <td style="font-weight:500">${fmtDate(r.week)}</td>
+          ${inputs}
+          <td style="white-space:nowrap">
+            <button class="btn-save" style="padding:3px 8px;font-size:11px" onclick="saveTrackerEdit('${r._id}')">Save</button>
+            <button class="btn-cancel" style="padding:3px 8px;font-size:11px;margin-left:4px" onclick="cancelTrackerEdit()">Cancel</button>
+          </td>
+        </tr>`;
+      }
+      return `<tr>
+        <td>${fmtDate(r.week)}</td>
+        <td>${fmtNum(r.jsImp)}</td><td>${fmtNum(r.jmImp)}</td><td>${fmtNum(r.lbImp)}</td>
+        <td>${fmtPct(r.edmOpen)}</td><td>${fmtPct(r.edmCtr)}</td>
+        <td>${fmtNum(r.wbEmailSend)}</td><td>${fmtPct(r.wbEmailOpen)}</td><td>${fmtPct(r.wbEmailCtr)}</td>
+        <td>${fmtPct(r.wbRegPage)}</td><td>${fmtNum(r.wbReg)}</td>
+        <td>${fmtNum(r.purchaseEnq)}</td><td>${fmtNum(r.eoiTickets)}</td><td>${fmtNum(r.trialsStarted)}</td>
+        <td style="white-space:nowrap">
+          <button class="btn-save" style="padding:3px 8px;font-size:11px;background:var(--acc)" onclick="startTrackerEdit('${r._id}')">Edit</button>
+          <button class="btn-del" style="margin-left:4px" onclick="delRow('weekly_tracker','${r._id}','_id')">Delete</button>
+        </td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="15" style="text-align:center;color:var(--tl);padding:24px">No tracker entries yet.</td></tr>';
+
     sc.innerHTML = `
       <div class="box">
         <div class="box-title">Weekly marketing tracker
@@ -1931,17 +2104,7 @@ function setContentSub(sub, rerender = true, data, outcomes) {
               <th>Purchase Enq.</th><th>EOI tickets</th><th>Trials started</th>
               <th></th>
             </tr></thead>
-            <tbody>
-              ${tracker.length ? [...tracker].reverse().slice(0,8).map(r => `<tr>
-                <td>${fmtDate(r.week)}</td>
-                <td>${fmtNum(r.jsImp)}</td><td>${fmtNum(r.jmImp)}</td><td>${fmtNum(r.lbImp)}</td>
-                <td>${fmtPct(r.edmOpen)}</td><td>${fmtPct(r.edmCtr)}</td>
-                <td>${fmtNum(r.wbEmailSend)}</td><td>${fmtPct(r.wbEmailOpen)}</td><td>${fmtPct(r.wbEmailCtr)}</td>
-                <td>${fmtPct(r.wbRegPage)}</td><td>${fmtNum(r.wbReg)}</td>
-                <td>${fmtNum(r.purchaseEnq)}</td><td>${fmtNum(r.eoiTickets)}</td><td>${fmtNum(r.trialsStarted)}</td>
-                <td><button class="btn-del" onclick="delRow('weekly_tracker','${r._id}','_id')">Delete</button></td>
-              </tr>`).join('') : '<tr><td colspan="15" style="text-align:center;color:var(--tl);padding:24px">No tracker entries yet.</td></tr>'}
-            </tbody>
+            <tbody>${trackerRowsHTML}</tbody>
           </table>
         </div>
       </div>
@@ -2033,6 +2196,34 @@ function saveTrackerWeek() {
   save('weekly_tracker', arr);
   toggleForm('tracker-form');
   toast('Tracker week saved.');
+  renderMarketing();
+}
+
+function startTrackerEdit(id) {
+  activeSub.editing_tracker = id;
+  renderMarketing();
+}
+
+function cancelTrackerEdit() {
+  activeSub.editing_tracker = null;
+  renderMarketing();
+}
+
+function saveTrackerEdit(id) {
+  const fields = ['jsImp','jmImp','lbImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','purchaseEnq','eoiTickets','trialsStarted'];
+  const arr = load('weekly_tracker');
+  const idx = arr.findIndex(r => r._id === id);
+  if (idx < 0) { toast('Row not found.'); return; }
+  fields.forEach(f => {
+    const el = document.getElementById('trkedit-' + f);
+    if (!el) return;
+    const v = el.value;
+    if (v !== '' && v != null) arr[idx][f] = Number(v);
+    else delete arr[idx][f];
+  });
+  save('weekly_tracker', arr);
+  activeSub.editing_tracker = null;
+  toast('Row updated.');
   renderMarketing();
 }
 
@@ -3167,8 +3358,8 @@ function renderPdOptimax(sc) {
       tgtKey:'upsell_pct_target',
       curr: null, currPct: t.upsell_pct_curr||null, tgtPct: t.upsell_pct_target },
     { id:'price',
-      label:'Annual price increase per licence',
-      desc:`Current increase: $${t.price_curr||0}/year · edit current below`,
+      label:'Increase average price per licence (by reducing public sector discounts)',
+      desc:`Current avg price increase: $${t.price_curr||0}/licence/year · edit current below`,
       currEditable:true, currKey:'price_curr', currStep:10, currPrefix:'$', isCurrCount:true,
       tgtKey:'price_target',
       curr: t.price_curr||0, tgt: t.price_target||0, currPct:null },
@@ -3190,6 +3381,28 @@ function renderPdOptimax(sc) {
   }
   const projWon    = proj.won;
   const projImpPct = wonCurr>0&&projWon!=null ? Math.round((projWon-wonCurr)/wonCurr*100) : null;
+
+  // ── Stage 5: Total Impact calculations ───────────────────────────────────
+  // Per-stage uplifts (projected vs current, as %)
+  const stageUpliftPairs = [
+    { curr: t.leads_curr,  prj: t.leads_target },
+    { curr: currCnts[0],   prj: proj.contact },
+    { curr: currCnts[1],   prj: proj.meeting },
+    { curr: currCnts[2],   prj: proj.neg },
+    { curr: currCnts[3],   prj: proj.order },
+    { curr: currCnts[5],   prj: proj.invoice },
+    { curr: wonCurr,       prj: proj.won },
+  ];
+  const stageUplifts = stageUpliftPairs
+    .map(x => (x.curr>0 && x.prj!=null) ? (x.prj - x.curr) / x.curr * 100 : null)
+    .filter(v => v !== null);
+  const avgUpliftPct     = stageUplifts.length ? stageUplifts.reduce((a,b)=>a+b,0)/stageUplifts.length : 0;
+  const cumulativeUplift = stageUplifts.reduce((prod,u) => prod*(1+u/100), 1) - 1;
+  // Monthly and annual revenue
+  const currRevMonth = monthsElapsed>0 ? Math.round(wonCurr / monthsElapsed * avgDealVal) : 0;
+  const projRevMonth = projWon!=null   ? Math.round(projWon  / monthsElapsed * avgDealVal) : currRevMonth;
+  const currRevYear  = currRevMonth * 12;
+  const projRevYear  = projRevMonth * 12;
 
   // ── Revenue projection (36-month ARR trajectory) ─────────────────────────
   const currMoRate = wonCurr / monthsElapsed;
@@ -3246,17 +3459,47 @@ function renderPdOptimax(sc) {
     </tr>`;
   }).join('');
 
+  // ── Stage 5 TOTAL IMPACT rows ─────────────────────────────────────────────
+  const avgUpliftDisp = avgUpliftPct.toFixed(1);
+  const cumUpliftDisp = (cumulativeUplift * 100).toFixed(1);
+  const omStage5HTML = `
+    <tr class="om-stage-hdr"><td colspan="7" style="background:#0d2b45">STAGE 5 — TOTAL IMPACT &amp; COMBINED UPLIFT EFFECT</td></tr>
+    <tr style="background:#f0f7ff">
+      <td>
+        <div style="font-weight:600;color:var(--navy)">Total Revenue Per Month</div>
+        <div style="font-size:11px;color:var(--tl);margin-top:2px">Based on won ${unitLabel} rate × avg deal value · model projection</div>
+      </td>
+      <td style="text-align:right;font-weight:600">${fmtDollar(currRevMonth)}<span style="font-size:10px;color:var(--tl)">/mo</span></td>
+      <td style="text-align:center;color:var(--tl)">→</td>
+      <td style="text-align:right;font-weight:600;color:var(--gr)">${fmtDollar(projRevMonth)}<span style="font-size:10px;color:var(--tl)">/mo</span></td>
+      <td style="text-align:right;font-weight:600;color:var(--gr)">${fmtDollar(projRevMonth - currRevMonth)}<span style="font-size:10px;color:var(--tl)">/mo uplift</span></td>
+      <td style="text-align:right"><span class="conv-pct ${avgUpliftPct>=0?'good':'bad'}">${avgUpliftPct>=0?'+':''}${avgUpliftDisp}%</span><div style="font-size:9px;color:var(--tl)">avg uplift</div></td>
+      <td style="text-align:right"><span class="conv-pct ${cumulativeUplift>=0?'good':'bad'}">${cumulativeUplift>=0?'+':''}${cumUpliftDisp}%</span><div style="font-size:9px;color:var(--tl)">cumulative</div></td>
+    </tr>
+    <tr style="background:#f0f7ff;border-top:1px solid #dce7f0">
+      <td>
+        <div style="font-weight:600;color:var(--navy)">Annual Revenue</div>
+        <div style="font-size:11px;color:var(--tl);margin-top:2px">Monthly rate × 12 · assumes constant win rate</div>
+      </td>
+      <td style="text-align:right;font-weight:600">${fmtDollar(currRevYear)}</td>
+      <td style="text-align:center;color:var(--tl)">→</td>
+      <td style="text-align:right;font-weight:600;color:var(--gr)">${fmtDollar(projRevYear)}</td>
+      <td style="text-align:right;font-weight:600;color:var(--gr)">${fmtDollar(projRevYear - currRevYear)}<span style="font-size:10px;color:var(--tl)">/yr uplift</span></td>
+      <td style="text-align:right;color:var(--tl);font-size:11px">—</td>
+      <td style="text-align:right"><span class="conv-pct ${cumulativeUplift>=0?'good':'bad'}">${cumulativeUplift>=0?'+':''}${cumUpliftDisp}%</span><div style="font-size:9px;color:var(--tl)">cumulative</div></td>
+    </tr>`;
+
   // ── Render ────────────────────────────────────────────────────────────────
   sc.innerHTML = `
   <div class="box">
     <div class="box-title">OPTI-MAX Sales Growth Model
       <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">
-        Pipedrive actuals (all-time since pipeline start) · edits save automatically
+        Stage 1 = per month targets · Stages 2–4 = all-time Pipedrive actuals · edits save automatically
       </span>
     </div>
     <p style="font-size:12px;color:var(--tm);margin-bottom:12px;line-height:1.5">
-      Small % improvements at each stage <strong>compound</strong> into significantly more won ${unitLabel}.
-      Stage 1 is manual. Stages 2–3 are live from Pipedrive.
+      Small % improvements at each stage <strong>compound</strong> into significantly more won ${unitLabel} <strong>per month</strong>.
+      Stage 1 (leads) and targets are set per-month. Stages 2–3 conversion rates are live from Pipedrive all-time data.
       <span style="color:var(--acc);font-weight:500">Blue input fields</span> are editable — projections update instantly.
     </p>
 
@@ -3275,24 +3518,25 @@ function renderPdOptimax(sc) {
 
     <div class="cards" style="margin-bottom:18px">
       <div class="card"><div class="card-label">Won ${unitLabel} (all time)</div><div class="card-value">${wonCurr}</div><div class="card-sub">2026 Sales pipeline</div></div>
-      <div class="card"><div class="card-label">Projected won (targets)</div><div class="card-value" style="color:var(--gr)">${projWon??'—'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">+${projImpPct}% improvement</div>`:''}</div>
-      <div class="card"><div class="card-label">Avg deal value</div><div class="card-value">${fmtDollar(avgDealVal)}</div><div class="card-sub">${fullPriceCnt} full · ${discountCnt} discounted</div></div>
-      <div class="card"><div class="card-label">ARR uplift (Year 1)</div><div class="card-value" style="color:var(--gr)">+${fmtM(targARR1y-currARR1y)}</div><div class="card-sub">current ${fmtM(currARR1y)} → target ${fmtM(targARR1y)}</div></div>
+      <div class="card"><div class="card-label">Projected won / month (target)</div><div class="card-value" style="color:var(--gr)">${projWon??'—'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">+${projImpPct}% improvement</div>`:''}</div>
+      <div class="card"><div class="card-label">Revenue / month (current)</div><div class="card-value">${fmtDollar(currRevMonth)}</div><div class="card-sub">${fmtDollar(currRevYear)}/yr at current rate</div></div>
+      <div class="card"><div class="card-label">Revenue / month (target)</div><div class="card-value" style="color:var(--gr)">${fmtDollar(projRevMonth)}</div><div class="card-sub" style="color:var(--gr)">+${fmtDollar(projRevMonth-currRevMonth)}/mo uplift</div></div>
     </div>
 
     <div style="overflow-x:auto">
       <table class="om-table">
         <thead><tr>
           <th style="min-width:240px">Stage</th>
-          <th style="text-align:right;min-width:120px">Current # (${unitLabel})</th>
+          <th style="text-align:right;min-width:120px">Current # (${unitLabel})<div style="font-size:10px;font-weight:400;color:var(--tl)">Stage 1: per month · others: all-time</div></th>
           <th style="text-align:right">Conv %</th>
-          <th style="text-align:right;min-width:110px">Target</th>
-          <th style="text-align:right">Projected #</th>
+          <th style="text-align:right;min-width:110px">Target<div style="font-size:10px;font-weight:400;color:var(--tl)">per month</div></th>
+          <th style="text-align:right">Projected #<div style="font-size:10px;font-weight:400;color:var(--tl)">per month</div></th>
           <th style="text-align:right">Δ</th>
           <th style="text-align:right">Uplift</th>
         </tr></thead>
         <tbody>
         ${omRowsHTML}
+        ${omStage5HTML}
         </tbody>
       </table>
     </div>
