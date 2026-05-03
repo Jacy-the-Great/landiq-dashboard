@@ -3397,7 +3397,9 @@ function renderPdOptimax(sc) {
     .map(x => (x.curr>0 && x.prj!=null) ? (x.prj - x.curr) / x.curr * 100 : null)
     .filter(v => v !== null);
   const avgUpliftPct     = stageUplifts.length ? stageUplifts.reduce((a,b)=>a+b,0)/stageUplifts.length : 0;
-  const cumulativeUplift = stageUplifts.reduce((prod,u) => prod*(1+u/100), 1) - 1;
+  // Cumulative = actual end-to-end improvement in won deals (leads → won, chained)
+  // NOT a product of individual stage uplifts (that would double-count the chain effects)
+  const cumulativeUplift = wonCurr>0 && projWon!=null ? (projWon - wonCurr) / wonCurr * 100 : 0;
   // Monthly and annual revenue
   const currRevMonth = monthsElapsed>0 ? Math.round(wonCurr / monthsElapsed * avgDealVal) : 0;
   const projRevMonth = projWon!=null   ? Math.round(projWon  / monthsElapsed * avgDealVal) : currRevMonth;
@@ -3418,7 +3420,7 @@ function renderPdOptimax(sc) {
 
   // ── Pre-compute rows HTML (avoids nested template literal escaping issues) ─
   const omRowsHTML = ROWS.map(r => {
-    if (r.isHdr) return `<tr class="om-stage-hdr"><td colspan="7">${r.label}</td></tr>`;
+    if (r.isHdr) return `<tr class="om-stage-hdr"><td colspan="6">${r.label}</td></tr>`;
     const prj    = proj[r.id];
     const curr   = r.isCurrPct ? null : r.curr;
     const delta  = prj!=null&&curr!=null&&!r.isCurrPct ? prj-curr : null;
@@ -3445,8 +3447,7 @@ function renderPdOptimax(sc) {
     const convPct = r.currPct!=null
       ? `<span class="conv-pct ${r.currPct>=70?'good':r.currPct>=40?'mid':'bad'}">${fmtPct(r.currPct)}</span>`
       : r.id==='contact' ? `<span style="font-size:11px;color:var(--tl)">of leads</span>` : '—';
-    const deltaHTML = delta!=null ? `<span style="color:${delta>=0?'var(--gr)':'var(--re)'}">${delta>=0?'+':''}${delta.toLocaleString()}</span>` : '—';
-    const upliftHTML= uplift!=null? `<span class="conv-pct ${uplift>=0?'good':'bad'}">${uplift>=0?'+':''}${uplift}%</span>` : '—';
+    const upliftHTML = uplift!=null ? `<span class="conv-pct ${uplift>=0?'good':'bad'}">${uplift>=0?'+':''}${uplift}%</span>` : '—';
 
     return `<tr>
       <td><div style="font-weight:500">${r.label}</div>${r.desc?`<div style="font-size:11px;color:var(--tl);margin-top:2px">${r.desc}</div>`:''}</td>
@@ -3454,16 +3455,15 @@ function renderPdOptimax(sc) {
       <td style="text-align:right">${convPct}</td>
       <td style="text-align:right">${tgtCell}</td>
       <td style="text-align:right;font-weight:500;color:var(--gr)">${prj!=null?prj.toLocaleString():'—'}</td>
-      <td style="text-align:right">${deltaHTML}</td>
       <td style="text-align:right">${upliftHTML}</td>
     </tr>`;
   }).join('');
 
   // ── Stage 5 TOTAL IMPACT rows ─────────────────────────────────────────────
   const avgUpliftDisp = avgUpliftPct.toFixed(1);
-  const cumUpliftDisp = (cumulativeUplift * 100).toFixed(1);
+  const cumUpliftDisp = cumulativeUplift.toFixed(1);
   const omStage5HTML = `
-    <tr class="om-stage-hdr"><td colspan="7" style="background:#0d2b45">STAGE 5 — TOTAL IMPACT &amp; COMBINED UPLIFT EFFECT</td></tr>
+    <tr class="om-stage-hdr"><td colspan="6" style="background:#0d2b45">STAGE 5 — TOTAL IMPACT &amp; COMBINED UPLIFT EFFECT</td></tr>
     <tr style="background:#f0f7ff">
       <td>
         <div style="font-weight:600;color:var(--navy)">Total Revenue Per Month</div>
@@ -3473,8 +3473,10 @@ function renderPdOptimax(sc) {
       <td style="text-align:center;color:var(--tl)">→</td>
       <td style="text-align:right;font-weight:600;color:var(--gr)">${fmtDollar(projRevMonth)}<span style="font-size:10px;color:var(--tl)">/mo</span></td>
       <td style="text-align:right;font-weight:600;color:var(--gr)">${fmtDollar(projRevMonth - currRevMonth)}<span style="font-size:10px;color:var(--tl)">/mo uplift</span></td>
-      <td style="text-align:right"><span class="conv-pct ${avgUpliftPct>=0?'good':'bad'}">${avgUpliftPct>=0?'+':''}${avgUpliftDisp}%</span><div style="font-size:9px;color:var(--tl)">avg uplift</div></td>
-      <td style="text-align:right"><span class="conv-pct ${cumulativeUplift>=0?'good':'bad'}">${cumulativeUplift>=0?'+':''}${cumUpliftDisp}%</span><div style="font-size:9px;color:var(--tl)">cumulative</div></td>
+      <td style="text-align:right">
+        <div><span class="conv-pct ${avgUpliftPct>=0?'good':'bad'}">${avgUpliftPct>=0?'+':''}${avgUpliftDisp}%</span><div style="font-size:9px;color:var(--tl)">avg per stage</div></div>
+        <div style="margin-top:4px"><span class="conv-pct ${cumulativeUplift>=0?'good':'bad'}">${cumulativeUplift>=0?'+':''}${cumUpliftDisp}%</span><div style="font-size:9px;color:var(--tl)">cumulative (leads→won)</div></div>
+      </td>
     </tr>
     <tr style="background:#f0f7ff;border-top:1px solid #dce7f0">
       <td>
@@ -3485,7 +3487,6 @@ function renderPdOptimax(sc) {
       <td style="text-align:center;color:var(--tl)">→</td>
       <td style="text-align:right;font-weight:600;color:var(--gr)">${fmtDollar(projRevYear)}</td>
       <td style="text-align:right;font-weight:600;color:var(--gr)">${fmtDollar(projRevYear - currRevYear)}<span style="font-size:10px;color:var(--tl)">/yr uplift</span></td>
-      <td style="text-align:right;color:var(--tl);font-size:11px">—</td>
       <td style="text-align:right"><span class="conv-pct ${cumulativeUplift>=0?'good':'bad'}">${cumulativeUplift>=0?'+':''}${cumUpliftDisp}%</span><div style="font-size:9px;color:var(--tl)">cumulative</div></td>
     </tr>`;
 
@@ -3531,8 +3532,7 @@ function renderPdOptimax(sc) {
           <th style="text-align:right">Conv %</th>
           <th style="text-align:right;min-width:110px">Target<div style="font-size:10px;font-weight:400;color:var(--tl)">per month</div></th>
           <th style="text-align:right">Projected #<div style="font-size:10px;font-weight:400;color:var(--tl)">per month</div></th>
-          <th style="text-align:right">Δ</th>
-          <th style="text-align:right">Uplift</th>
+          <th style="text-align:right">% Change</th>
         </tr></thead>
         <tbody>
         ${omRowsHTML}
