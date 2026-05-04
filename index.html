@@ -261,7 +261,7 @@ const SUPABASE_URL = 'https://ysdonnjezvoyrrizadik.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlzZG9ubmplenZveXJyaXphZGlrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2ODY4MzYsImV4cCI6MjA5MzI2MjgzNn0.9bJ2FPEqV6NEtrnS567HBbwx0zcyQfshfcqWVRvH7RQ';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const KEYS = { sales:'sales', trials:'trials', website:'website', website_daily:'website_daily', training:'training', content:'content', webinars:'webinars', linkedin_weekly:'linkedin_weekly', edm_2m:'edm_2m', weekly_tracker:'weekly_tracker' };
+const KEYS = { sales:'sales', trials:'trials', website:'website', website_daily:'website_daily', training:'training', content:'content', webinars:'webinars', linkedin_weekly:'linkedin_weekly', edm_2m:'edm_2m', weekly_tracker:'weekly_tracker', activity_giraffe:'activity_giraffe', activity_sdk:'activity_sdk', activity_labs:'activity_labs' };
 
 // In-memory cache — loaded from Supabase on init, kept in sync on every save
 const _cache = {};
@@ -411,6 +411,7 @@ const TABS = [
   { id: 'pipedrive', label: 'Pipedrive' },
   { id: 'marketing', label: 'Marketing' },
   { id: 'training',  label: 'Training' },
+  { id: 'activity',  label: 'Activity' },
 ];
 
 let activeTab = 'home';
@@ -432,7 +433,7 @@ function switchTab(id) {
 function renderTab(id) {
   const mc = document.getElementById('main-content');
   destroyAllCharts();
-  const renderers = { home: renderHome, pipedrive: renderPipedrive, training: renderTraining, marketing: renderMarketing };
+  const renderers = { home: renderHome, pipedrive: renderPipedrive, training: renderTraining, marketing: renderMarketing, activity: renderActivity };
   if (renderers[id]) renderers[id](mc);
 }
 
@@ -1451,6 +1452,364 @@ function saveWebsiteDaily() {
   toggleForm('web-daily-form');
   toast('Daily data saved: ' + fmtDate(date));
   renderWebsite();
+}
+
+// ─────────────────────────────────────────
+// ACTIVITY TAB
+// ─────────────────────────────────────────
+function renderActivity(el) {
+  el = el || document.getElementById('main-content');
+  const sub = activeSub.activity_sub || 'giraffe';
+
+  const giraffe = load('activity_giraffe');
+  const sdk     = load('activity_sdk');
+  const labs    = load('activity_labs');
+
+  // Summary stats (most recent entry)
+  const gLast  = giraffe.length ? giraffe[giraffe.length - 1] : null;
+  const lLast  = labs.length    ? labs[labs.length - 1]       : null;
+  const sdkThisMonth = thisMonth(sdk, 'date');
+  const sdkEvents    = sdkThisMonth.reduce((s, r) => s + (r.events || 0), 0);
+  const sdkUsers     = sdkThisMonth.reduce((s, r) => s + (r.active_users || 0), 0);
+
+  el.innerHTML = `
+    <div class="section-header">
+      <div>
+        <div class="section-title">Activity</div>
+        <div class="section-sub">User activity across Land iQ · data sourced from PostHog dashboards</div>
+      </div>
+    </div>
+
+    <div class="callout info" style="margin-bottom:16px">
+      <div class="callout-label">About this tab</div>
+      <div class="callout-text">
+        Tracks user activity across all Land iQ surfaces — <strong>Giraffe</strong> (main platform logins &amp; session data via PostHog),
+        <strong>SDK</strong> (usage per app and component embedded in the Land iQ tool, from PostHog),
+        and <strong>Land iQ Labs</strong> (activity in the Labs app). All data is entered manually from the relevant PostHog dashboards.
+      </div>
+    </div>
+
+    ${cardsHTML([
+      ['Giraffe active users', gLast?.active_users || null, null, null, gLast ? 'week of ' + fmtDate(gLast.week) : 'no data yet'],
+      ['Giraffe logins', gLast?.logins || null, null, null, 'latest week'],
+      ['SDK events (month)', sdkEvents || null, null, null, 'all components'],
+      ['Labs active users', lLast?.active_users || null, null, null, lLast ? 'week of ' + fmtDate(lLast.week) : 'no data yet'],
+    ])}
+
+    <div class="sub-tabs">
+      ${['giraffe','sdk','labs'].map(s =>
+        `<button class="sub-tab${sub===s?' active':''}" onclick="setActivitySub('${s}')">${
+          {giraffe:'Giraffe',sdk:'SDK Activity',labs:'Land iQ Labs'}[s]
+        }</button>`
+      ).join('')}
+    </div>
+
+    <div id="activity-sub-content"></div>
+  `;
+
+  setActivitySub(sub, false, { giraffe, sdk, labs });
+}
+
+function setActivitySub(sub, rerender = true, data) {
+  activeSub.activity_sub = sub;
+  if (rerender) { renderActivity(); return; }
+
+  const sc = document.getElementById('activity-sub-content');
+  if (!sc) return;
+
+  const giraffe = data?.giraffe || load('activity_giraffe');
+  const sdk     = data?.sdk     || load('activity_sdk');
+  const labs    = data?.labs    || load('activity_labs');
+
+  // ── GIRAFFE ─────────────────────────────────────────────────────────────
+  if (sub === 'giraffe') {
+    const recent = [...giraffe].reverse().slice(0, 16);
+
+    const gApps = ['Giraffe','Lens','Hub']; // known Giraffe PostHog apps / projects
+    sc.innerHTML = `
+      <div class="box">
+        <div class="box-title">Giraffe — user activity (PostHog)
+          <a class="src-link" href="https://posthog.com" target="_blank" style="margin-left:auto">↗ PostHog</a>
+        </div>
+        <p style="font-size:12px;color:var(--tm);margin-bottom:14px;line-height:1.5">
+          Weekly snapshots of login and active user data from the Giraffe PostHog project.
+          Enter data manually from the PostHog dashboard each week.
+        </p>
+        ${giraffe.length ? `<div class="chart-wrap" style="height:240px"><canvas id="act-giraffe-chart"></canvas></div>` : '<div class="no-data">No Giraffe activity data yet. Add entries below.</div>'}
+      </div>
+
+      <div class="box">
+        <div class="box-title">Weekly data</div>
+        ${giraffe.length ? `<div class="tbl-scroll"><table>
+          <thead><tr><th>Week</th><th>Logins</th><th>Active users</th><th>New users</th><th>First login</th><th>Last login</th><th>DAU/MAU</th><th>Avg session (min)</th><th>Notes</th><th></th></tr></thead>
+          <tbody>${[...giraffe].reverse().slice(0,12).map(r => `<tr>
+            <td>${fmtDate(r.week)}</td>
+            <td>${fmtNum(r.logins)}</td>
+            <td>${fmtNum(r.active_users)}</td>
+            <td>${fmtNum(r.new_users)}</td>
+            <td>${r.first_login ? fmtDate(r.first_login) : '—'}</td>
+            <td>${r.last_login  ? fmtDate(r.last_login)  : '—'}</td>
+            <td>${r.dau_mau != null ? r.dau_mau.toFixed(1)+'%' : '—'}</td>
+            <td>${r.avg_session != null ? r.avg_session : '—'}</td>
+            <td style="color:var(--tl)">${r.notes||'—'}</td>
+            <td><button class="btn-del" onclick="delRow('activity_giraffe','${r._id}','_id')">Delete</button></td>
+          </tr>`).join('')}</tbody>
+        </table></div>` : ''}
+      </div>
+
+      <div class="form-section">
+        <button class="add-btn" onclick="toggleForm('act-giraffe-form')">+ Add Giraffe weekly snapshot</button>
+        <div id="act-giraffe-form" style="display:none"><div class="form-box">
+          <div class="form-grid">
+            <div class="form-group"><label>Week ending</label><input type="date" id="ag-week"></div>
+            <div class="form-group"><label>Total logins</label><input type="number" id="ag-logins"></div>
+            <div class="form-group"><label>Active users (unique)</label><input type="number" id="ag-active"></div>
+            <div class="form-group"><label>New users (first login)</label><input type="number" id="ag-new"></div>
+            <div class="form-group"><label>First login date</label><input type="date" id="ag-first"></div>
+            <div class="form-group"><label>Last login date</label><input type="date" id="ag-last"></div>
+            <div class="form-group"><label>DAU/MAU ratio (%)</label><input type="number" id="ag-daumau" step=".1"></div>
+            <div class="form-group"><label>Avg session (minutes)</label><input type="number" id="ag-session" step="1"></div>
+            <div class="form-group"><label>Notes</label><input type="text" id="ag-notes"></div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-save" onclick="saveGiraffeActivity()">Save</button>
+            <button class="btn-cancel" onclick="toggleForm('act-giraffe-form')">Cancel</button>
+          </div>
+        </div></div>
+      </div>
+    `;
+
+    if (giraffe.length && recent.length) {
+      makeChart('act-giraffe-chart', {
+        type: 'line',
+        data: {
+          labels: [...recent].reverse().map(r => fmtDate(r.week).slice(0,6)),
+          datasets: [
+            { label: 'Active users', data: [...recent].reverse().map(r => r.active_users||0), borderColor: '#2e8bc0', backgroundColor: 'rgba(46,139,192,.07)', borderWidth: 2, fill: true, tension: .3, pointRadius: 3 },
+            { label: 'Logins',       data: [...recent].reverse().map(r => r.logins||0),       borderColor: '#2a7a4b', borderWidth: 2, fill: false, tension: .3, pointRadius: 3 },
+            { label: 'New users',    data: [...recent].reverse().map(r => r.new_users||0),    borderColor: '#c25a00', borderWidth: 2, fill: false, tension: .3, borderDash:[5,4], pointRadius: 3 },
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+          scales: { x: { grid: { display: false }, ticks: { ...axStyle, maxRotation: 35 } }, y: { grid: gridStyle, ticks: axStyle, beginAtZero: true } }
+        }
+      });
+    }
+
+  // ── SDK ──────────────────────────────────────────────────────────────────
+  } else if (sub === 'sdk') {
+    // Group by app name for chart
+    const appNames = [...new Set(sdk.map(r => r.app_name).filter(Boolean))].sort();
+    const recentSdk = sdk.filter(r => {
+      if (!r.date) return false;
+      const d = new Date(r.date);
+      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 90);
+      return d >= cutoff;
+    });
+
+    // Events per app (all time)
+    const appEvents = {};
+    const appUsers  = {};
+    sdk.forEach(r => {
+      if (!r.app_name) return;
+      appEvents[r.app_name] = (appEvents[r.app_name] || 0) + (r.events || 0);
+      appUsers[r.app_name]  = Math.max(appUsers[r.app_name] || 0, r.active_users || 0);
+    });
+    const appNamesSorted = Object.entries(appEvents).sort((a,b) => b[1]-a[1]).map(([k]) => k);
+
+    sc.innerHTML = `
+      <div class="box">
+        <div class="box-title">SDK Activity — by app / component (PostHog)
+          <a class="src-link" href="https://posthog.com" target="_blank" style="margin-left:auto">↗ PostHog</a>
+        </div>
+        <p style="font-size:12px;color:var(--tm);margin-bottom:14px;line-height:1.5">
+          Tracks SDK events and active users per app or component of the Land iQ tool.
+          Enter snapshots from the PostHog SDK dashboard — one row per app per period.
+        </p>
+        ${sdk.length ? `<div class="chart-wrap" style="height:240px"><canvas id="act-sdk-chart"></canvas></div>` : '<div class="no-data">No SDK activity data yet. Add entries below.</div>'}
+      </div>
+
+      <div class="box">
+        <div class="box-title">All SDK entries</div>
+        ${sdk.length ? `<div class="tbl-scroll"><table>
+          <thead><tr><th>Date</th><th>App / Component</th><th>Events</th><th>Active users</th><th>Notes</th><th></th></tr></thead>
+          <tbody>${[...sdk].reverse().slice(0,20).map(r => `<tr>
+            <td>${fmtDate(r.date)}</td>
+            <td style="font-weight:500">${r.app_name||'—'}</td>
+            <td>${fmtNum(r.events)}</td>
+            <td>${fmtNum(r.active_users)}</td>
+            <td style="color:var(--tl)">${r.notes||'—'}</td>
+            <td><button class="btn-del" onclick="delRow('activity_sdk','${r._id}','_id')">Delete</button></td>
+          </tr>`).join('')}</tbody>
+        </table></div>` : ''}
+      </div>
+
+      <div class="form-section">
+        <button class="add-btn" onclick="toggleForm('act-sdk-form')">+ Add SDK snapshot</button>
+        <div id="act-sdk-form" style="display:none"><div class="form-box">
+          <div class="form-grid">
+            <div class="form-group"><label>Date</label><input type="date" id="as-date"></div>
+            <div class="form-group"><label>App / Component name</label><input type="text" id="as-app" placeholder="e.g. Basemaps, Analytics, Property Search"></div>
+            <div class="form-group"><label>Total events / calls</label><input type="number" id="as-events"></div>
+            <div class="form-group"><label>Active users</label><input type="number" id="as-users"></div>
+            <div class="form-group"><label>Notes</label><input type="text" id="as-notes"></div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-save" onclick="saveSdkActivity()">Save</button>
+            <button class="btn-cancel" onclick="toggleForm('act-sdk-form')">Cancel</button>
+          </div>
+        </div></div>
+      </div>
+    `;
+
+    if (appNamesSorted.length) {
+      makeChart('act-sdk-chart', {
+        type: 'bar',
+        data: {
+          labels: appNamesSorted,
+          datasets: [
+            { label: 'Total events (all time)', data: appNamesSorted.map(a => appEvents[a]||0), backgroundColor: '#2e8bc0', borderRadius: 4 },
+            { label: 'Peak active users',        data: appNamesSorted.map(a => appUsers[a]||0),  backgroundColor: '#2a7a4b', borderRadius: 4 },
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+          scales: { x: { grid: { display: false }, ticks: { ...axStyle, maxRotation: 35 } }, y: { grid: gridStyle, ticks: axStyle, beginAtZero: true } }
+        }
+      });
+    }
+
+  // ── LABS ─────────────────────────────────────────────────────────────────
+  } else if (sub === 'labs') {
+    const recentLabs = [...labs].reverse().slice(0, 16);
+
+    sc.innerHTML = `
+      <div class="box">
+        <div class="box-title">Land iQ Labs — activity (PostHog)
+          <a class="src-link" href="https://posthog.com" target="_blank" style="margin-left:auto">↗ PostHog</a>
+        </div>
+        <p style="font-size:12px;color:var(--tm);margin-bottom:14px;line-height:1.5">
+          Weekly usage snapshots of the Land iQ Labs app from its PostHog project.
+        </p>
+        ${labs.length ? `<div class="chart-wrap" style="height:240px"><canvas id="act-labs-chart"></canvas></div>` : '<div class="no-data">No Labs activity data yet. Add entries below.</div>'}
+      </div>
+
+      <div class="box">
+        <div class="box-title">Weekly data</div>
+        ${labs.length ? `<div class="tbl-scroll"><table>
+          <thead><tr><th>Week</th><th>Logins</th><th>Active users</th><th>Sessions</th><th>Avg session (min)</th><th>Most used feature</th><th>Notes</th><th></th></tr></thead>
+          <tbody>${[...labs].reverse().slice(0,12).map(r => `<tr>
+            <td>${fmtDate(r.week)}</td>
+            <td>${fmtNum(r.logins)}</td>
+            <td>${fmtNum(r.active_users)}</td>
+            <td>${fmtNum(r.sessions)}</td>
+            <td>${r.avg_session != null ? r.avg_session : '—'}</td>
+            <td style="font-weight:500">${r.top_feature||'—'}</td>
+            <td style="color:var(--tl)">${r.notes||'—'}</td>
+            <td><button class="btn-del" onclick="delRow('activity_labs','${r._id}','_id')">Delete</button></td>
+          </tr>`).join('')}</tbody>
+        </table></div>` : ''}
+      </div>
+
+      <div class="form-section">
+        <button class="add-btn" onclick="toggleForm('act-labs-form')">+ Add Labs weekly snapshot</button>
+        <div id="act-labs-form" style="display:none"><div class="form-box">
+          <div class="form-grid">
+            <div class="form-group"><label>Week ending</label><input type="date" id="al-week"></div>
+            <div class="form-group"><label>Total logins</label><input type="number" id="al-logins"></div>
+            <div class="form-group"><label>Active users (unique)</label><input type="number" id="al-active"></div>
+            <div class="form-group"><label>Sessions</label><input type="number" id="al-sessions"></div>
+            <div class="form-group"><label>Avg session (minutes)</label><input type="number" id="al-session" step="1"></div>
+            <div class="form-group"><label>Most used feature / tool</label><input type="text" id="al-feature" placeholder="e.g. Property lookup, Zoning viewer"></div>
+            <div class="form-group"><label>Notes</label><input type="text" id="al-notes"></div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-save" onclick="saveLabsActivity()">Save</button>
+            <button class="btn-cancel" onclick="toggleForm('act-labs-form')">Cancel</button>
+          </div>
+        </div></div>
+      </div>
+    `;
+
+    if (labs.length && recentLabs.length) {
+      makeChart('act-labs-chart', {
+        type: 'line',
+        data: {
+          labels: [...recentLabs].reverse().map(r => fmtDate(r.week).slice(0,6)),
+          datasets: [
+            { label: 'Active users', data: [...recentLabs].reverse().map(r => r.active_users||0), borderColor: '#3949ab', backgroundColor: 'rgba(57,73,171,.07)', borderWidth: 2, fill: true, tension: .3, pointRadius: 3 },
+            { label: 'Logins',       data: [...recentLabs].reverse().map(r => r.logins||0),       borderColor: '#7b1fa2', borderWidth: 2, fill: false, tension: .3, pointRadius: 3 },
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+          scales: { x: { grid: { display: false }, ticks: { ...axStyle, maxRotation: 35 } }, y: { grid: gridStyle, ticks: axStyle, beginAtZero: true } }
+        }
+      });
+    }
+  }
+}
+
+function saveGiraffeActivity() {
+  const week = document.getElementById('ag-week').value;
+  if (!week) { toast('Select a week ending date.'); return; }
+  const entry = {
+    _id: 'ag-' + Date.now(), week,
+    logins:      Number(document.getElementById('ag-logins').value)  || null,
+    active_users:Number(document.getElementById('ag-active').value)  || null,
+    new_users:   Number(document.getElementById('ag-new').value)     || null,
+    first_login: document.getElementById('ag-first').value           || null,
+    last_login:  document.getElementById('ag-last').value            || null,
+    dau_mau:     parseFloat(document.getElementById('ag-daumau').value) || null,
+    avg_session: Number(document.getElementById('ag-session').value) || null,
+    notes:       document.getElementById('ag-notes').value           || null,
+  };
+  const arr = load('activity_giraffe').filter(r => r.week !== week);
+  arr.push(entry);
+  arr.sort((a,b) => a.week > b.week ? 1 : -1);
+  save('activity_giraffe', arr);
+  toggleForm('act-giraffe-form');
+  toast('Giraffe snapshot saved.');
+  renderActivity();
+}
+
+function saveSdkActivity() {
+  const date    = document.getElementById('as-date').value;
+  const appName = document.getElementById('as-app').value.trim();
+  if (!date || !appName) { toast('Select a date and enter an app name.'); return; }
+  const entry = {
+    _id: 'as-' + Date.now(), date,
+    app_name:    appName,
+    events:      Number(document.getElementById('as-events').value) || null,
+    active_users:Number(document.getElementById('as-users').value)  || null,
+    notes:       document.getElementById('as-notes').value          || null,
+  };
+  save('activity_sdk', [...load('activity_sdk'), entry].sort((a,b) => a.date > b.date ? 1 : -1));
+  toggleForm('act-sdk-form');
+  toast('SDK snapshot saved.');
+  renderActivity();
+}
+
+function saveLabsActivity() {
+  const week = document.getElementById('al-week').value;
+  if (!week) { toast('Select a week ending date.'); return; }
+  const entry = {
+    _id: 'al-' + Date.now(), week,
+    logins:      Number(document.getElementById('al-logins').value)   || null,
+    active_users:Number(document.getElementById('al-active').value)   || null,
+    sessions:    Number(document.getElementById('al-sessions').value) || null,
+    avg_session: Number(document.getElementById('al-session').value)  || null,
+    top_feature: document.getElementById('al-feature').value          || null,
+    notes:       document.getElementById('al-notes').value            || null,
+  };
+  const arr = load('activity_labs').filter(r => r.week !== week);
+  arr.push(entry);
+  arr.sort((a,b) => a.week > b.week ? 1 : -1);
+  save('activity_labs', arr);
+  toggleForm('act-labs-form');
+  toast('Labs snapshot saved.');
+  renderActivity();
 }
 
 // ─────────────────────────────────────────
