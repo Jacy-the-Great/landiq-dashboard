@@ -4,7 +4,7 @@
 -- (https://supabase.com/dashboard/project/ysdonnjezvoyrrizadik/editor)
 --
 -- What this does:
---   1. Adds performance indexes on posthog.events
+--   1. Adds performance indexes on posthog."Posthog Events"
 --   2. Creates materialized views for pre-aggregated metrics
 --   3. Creates SECURITY DEFINER RPC functions in the public schema
 --      so the anon key can call them via sb.rpc(...)
@@ -18,14 +18,14 @@
 -- ================================================================
 /*
 SELECT event, COUNT(*) AS cnt
-FROM posthog.events
+FROM posthog."Posthog Events"
 GROUP BY event
 ORDER BY cnt DESC
 LIMIT 50;
 
 -- Also inspect what property keys look like for common events:
 SELECT DISTINCT jsonb_object_keys(properties) AS prop_key
-FROM posthog.events
+FROM posthog."Posthog Events"
 WHERE event = '$pageview'   -- swap for your login event name
 LIMIT 100;
 */
@@ -36,30 +36,30 @@ LIMIT 100;
 -- ================================================================
 
 CREATE INDEX IF NOT EXISTS idx_ph_events_timestamp
-  ON posthog.events (timestamp);
+  ON posthog."Posthog Events" (timestamp);
 
 CREATE INDEX IF NOT EXISTS idx_ph_events_event
-  ON posthog.events (event);
+  ON posthog."Posthog Events" (event);
 
 CREATE INDEX IF NOT EXISTS idx_ph_events_distinct_id
-  ON posthog.events (distinct_id);
+  ON posthog."Posthog Events" (distinct_id);
 
 -- Composite index: most queries filter by date range + event type
 CREATE INDEX IF NOT EXISTS idx_ph_events_event_ts
-  ON posthog.events (event, timestamp DESC);
+  ON posthog."Posthog Events" (event, timestamp DESC);
 
 -- JSONB GIN indexes for property lookups (adjust key names after running STEP 0)
 CREATE INDEX IF NOT EXISTS idx_ph_events_props_gin
-  ON posthog.events USING GIN (properties);
+  ON posthog."Posthog Events" USING GIN (properties);
 
 -- Partial index for pageviews only (very common filter)
 CREATE INDEX IF NOT EXISTS idx_ph_events_pageview_ts
-  ON posthog.events (timestamp DESC)
+  ON posthog."Posthog Events" (timestamp DESC)
   WHERE event = '$pageview';
 
 -- Functional index on date (used by DAU queries)
 CREATE INDEX IF NOT EXISTS idx_ph_events_date
-  ON posthog.events ( (timestamp::date) );
+  ON posthog."Posthog Events" ( (timestamp::date) );
 
 
 -- ================================================================
@@ -81,12 +81,12 @@ SELECT
   timestamp::date                         AS day,
   COUNT(DISTINCT distinct_id)             AS active_users,
   COUNT(*)                                AS total_events,
-  -- Logins: adjust event name(s) to match your PostHog setup
+  -- Logins: $identify fires when PostHog recognises a returning user (your login proxy)
   COUNT(DISTINCT CASE
-    WHEN event IN ('login', 'user signed in', 'Logged In', '$identify', 'user_logged_in')
+    WHEN event = '$identify'
     THEN distinct_id
   END)                                    AS login_users
-FROM posthog.events
+FROM posthog."Posthog Events"
 GROUP BY timestamp::date
 ORDER BY day;
 
@@ -102,17 +102,17 @@ SELECT
   COUNT(DISTINCT distinct_id)             AS active_users,
   COUNT(*)                                AS total_events,
   COUNT(DISTINCT CASE
-    WHEN event IN ('login', 'user signed in', 'Logged In', '$identify', 'user_logged_in')
+    WHEN event = '$identify'
     THEN distinct_id
   END)                                    AS login_users,
   -- New users: first event in this week
   COUNT(DISTINCT CASE
     WHEN timestamp::date = first_seen.min_date THEN distinct_id
   END)                                    AS new_users
-FROM posthog.events
+FROM posthog."Posthog Events"
 LEFT JOIN (
   SELECT distinct_id, MIN(timestamp::date) AS min_date
-  FROM posthog.events
+  FROM posthog."Posthog Events"
   GROUP BY distinct_id
 ) first_seen USING (distinct_id)
 GROUP BY DATE_TRUNC('week', timestamp)::date
@@ -133,7 +133,7 @@ SELECT
   COUNT(*)                                AS total_events,
   DATE_TRUNC('week', MIN(timestamp))::date AS cohort_week,
   DATE_TRUNC('month', MIN(timestamp))::date AS cohort_month
-FROM posthog.events
+FROM posthog."Posthog Events"
 GROUP BY distinct_id;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_lifecycle_user
@@ -156,44 +156,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_newusers_week
   ON posthog.mv_new_users_by_week (week_start);
 
 
--- ── 2e. Feature / SDK usage per app or component ─────────────────
+-- ── 2e. Feature / app usage — extracted from event name prefix ────
 --
--- PostHog SDK events typically carry one of these property keys:
---   properties->>'$app_namespace'    (PostHog SDK default)
---   properties->>'app'               (custom)
---   properties->>'component'         (custom)
---   properties->>'$feature'          (feature flags)
---
--- We COALESCE across all common keys so nothing is missed.
--- After running STEP 0 diagnostic, narrow this to your actual keys.
+-- Your events are named like: sitegen.generation.started
+-- The prefix before the first dot is the app/feature name.
+-- Internal PostHog events start with '$' — we exclude those.
 -- ─────────────────────────────────────────────────────────────────
 DROP MATERIALIZED VIEW IF EXISTS posthog.mv_feature_usage CASCADE;
 CREATE MATERIALIZED VIEW posthog.mv_feature_usage AS
 SELECT
-  timestamp::date                                               AS day,
-  COALESCE(
-    NULLIF(properties->>'app', ''),
-    NULLIF(properties->>'component', ''),
-    NULLIF(properties->>'$app_namespace', ''),
-    NULLIF(properties->>'feature', ''),
-    NULLIF(properties->>'$feature_flag', ''),
-    '(untagged)'
-  )                                                             AS feature,
-  event                                                         AS event_name,
-  COUNT(DISTINCT distinct_id)                                   AS active_users,
-  COUNT(*)                                                      AS events
-FROM posthog.events
+  timestamp::date                         AS day,
+  SPLIT_PART(event, '.', 1)              AS feature,   -- e.g. 'sitegen', 'powerpoint', 'levelup'
+  event                                   AS event_name,
+  COUNT(DISTINCT distinct_id)             AS active_users,
+  COUNT(*)                                AS events
+FROM posthog."Posthog Events"
 WHERE
-  -- only include events that carry a feature/app tag
-  (
-    properties->>'app'              IS NOT NULL OR
-    properties->>'component'        IS NOT NULL OR
-    properties->>'$app_namespace'   IS NOT NULL OR
-    properties->>'feature'          IS NOT NULL OR
-    properties->>'$feature_flag'    IS NOT NULL
-  )
-  -- exclude internal PostHog housekeeping events
-  AND event NOT IN ('$feature_flag_called', '$$plugin_metrics')
+  event NOT LIKE '$%'          -- exclude internal PostHog events ($pageview, $identify etc.)
+  AND event NOT LIKE '%click%' -- exclude generic click noise ($autocapture, map.click)
+  AND event NOT IN ('$web_vitals', '$dead_click', '$rageclick', '$pageleave')
 GROUP BY day, feature, event_name
 ORDER BY day DESC, events DESC;
 
@@ -210,7 +191,7 @@ WITH monthly AS (
   SELECT
     DATE_TRUNC('month', timestamp)::date AS month_start,
     COUNT(DISTINCT distinct_id)          AS mau
-  FROM posthog.events
+  FROM posthog."Posthog Events"
   GROUP BY 1
 ),
 daily AS (

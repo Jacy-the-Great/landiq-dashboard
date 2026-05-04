@@ -275,13 +275,18 @@ let _ph = {
   loaded: false,
   error: null,
   refreshedAt: null,
-  summary: null,       // { total_users, total_events, first_event_date, last_event_date, avg_active_days }
-  weekly: [],          // [{ week_start, active_users, login_users, new_users, total_events }]
-  daily: [],           // [{ day, active_users, login_users, total_events }]
-  dauMau: [],          // [{ day, dau, mau, dau_mau_pct }]
-  features: [],        // [{ feature, total_events, active_users, latest_day }]
-  newUsers: [],        // [{ week_start, new_users }]
-  retention: [],       // [{ cohort_week, cohort_size, retained_w1..w8 }]
+  summary: null,         // { total_users, total_events, first_event_date, last_event_date, avg_active_days }
+  weekly: [],            // [{ week_start, active_users, login_users, new_users, total_events }]
+  daily: [],             // [{ day, active_users, login_users, total_events }]
+  dauMau: [],            // [{ day, dau, mau, dau_mau_pct }]
+  features: [],          // [{ feature, total_events, active_users, latest_day }]
+  newUsers: [],          // [{ week_start, new_users }]
+  retention: [],         // [{ cohort_week, cohort_size, retained_w1..w8 }]
+  segments: [],          // [{ segment, user_count }]
+  atRisk: [],            // [{ distinct_id, first_seen, last_seen, active_days, total_events }]
+  featureAdoption: [],   // [{ feature, users_who_tried, total_users, adoption_pct }]
+  featureCompletion: [], // [{ feature, started, completed, completion_pct }]
+  powerUsers: [],        // [{ distinct_id, first_seen, last_seen, active_days, total_events }]
 };
 
 async function fetchAllRows(table, columns) {
@@ -323,7 +328,8 @@ async function loadPostHogLive(forceRefresh = false) {
   if (_ph.loaded && !forceRefresh) return;
   _ph.error = null;
   try {
-    const [summaryRes, weeklyRes, dailyRes, dauMauRes, featuresRes, newUsersRes, retentionRes] = await Promise.all([
+    const [summaryRes, weeklyRes, dailyRes, dauMauRes, featuresRes, newUsersRes, retentionRes,
+           segmentsRes, atRiskRes, adoptionRes, completionRes, powerRes] = await Promise.all([
       sb.rpc('ph_summary'),
       sb.rpc('ph_weekly_stats',        { weeks_back: 16 }),
       sb.rpc('ph_daily_active_users',  { days_back:  30 }),
@@ -331,19 +337,30 @@ async function loadPostHogLive(forceRefresh = false) {
       sb.rpc('ph_feature_usage',       { days_back:  30 }),
       sb.rpc('ph_new_users',           { weeks_back: 16 }),
       sb.rpc('ph_retention_cohort',    { cohort_weeks_back: 12 }),
+      sb.rpc('ph_user_segments'),
+      sb.rpc('ph_at_risk_users',       { min_active_days: 3, days_threshold: 14 }),
+      sb.rpc('ph_feature_adoption'),
+      sb.rpc('ph_feature_completion'),
+      sb.rpc('ph_power_users',         { user_limit: 25 }),
     ]);
     // Check for errors (SQL migration may not have run yet)
-    const errs = [summaryRes, weeklyRes, dailyRes, dauMauRes, featuresRes, newUsersRes, retentionRes]
+    const errs = [summaryRes, weeklyRes, dailyRes, dauMauRes, featuresRes, newUsersRes, retentionRes,
+                  segmentsRes, atRiskRes, adoptionRes, completionRes, powerRes]
       .map(r => r.error).filter(Boolean);
     if (errs.length) throw new Error(errs[0].message);
 
-    _ph.summary   = summaryRes.data?.[0]   || null;
-    _ph.weekly    = weeklyRes.data          || [];
-    _ph.daily     = dailyRes.data           || [];
-    _ph.dauMau    = dauMauRes.data          || [];
-    _ph.features  = featuresRes.data        || [];
-    _ph.newUsers  = newUsersRes.data        || [];
-    _ph.retention = retentionRes.data       || [];
+    _ph.summary           = summaryRes.data?.[0]   || null;
+    _ph.weekly            = weeklyRes.data          || [];
+    _ph.daily             = dailyRes.data           || [];
+    _ph.dauMau            = dauMauRes.data          || [];
+    _ph.features          = featuresRes.data        || [];
+    _ph.newUsers          = newUsersRes.data        || [];
+    _ph.retention         = retentionRes.data       || [];
+    _ph.segments          = segmentsRes.data        || [];
+    _ph.atRisk            = atRiskRes.data          || [];
+    _ph.featureAdoption   = adoptionRes.data        || [];
+    _ph.featureCompletion = completionRes.data      || [];
+    _ph.powerUsers        = powerRes.data           || [];
     _ph.loaded     = true;
     _ph.refreshedAt = new Date();
   } catch (e) {
@@ -1540,10 +1557,15 @@ function renderActivity(el) {
   const sdkThisMonth = thisMonth(sdk, 'date');
   const sdkEvents    = sdkThisMonth.reduce((s, r) => s + (r.events || 0), 0);
 
-  const wauVal    = phLive ? (phWLast?.active_users ?? null) : (gLast?.active_users ?? null);
-  const loginVal  = phLive ? (phWLast?.login_users  ?? null) : (gLast?.logins      ?? null);
+  const wauVal     = phLive ? (phWLast?.active_users ?? null) : (gLast?.active_users ?? null);
+  const loginVal   = phLive ? (phWLast?.login_users  ?? null) : (gLast?.logins      ?? null);
   const totalUsers = phLive ? (_ph.summary?.total_users ?? null) : null;
-  const dauMauVal = phLive ? (phDAULast?.dau_mau_pct ?? null) : null;
+  const rawDauMau  = phLive ? (phDAULast?.dau_mau_pct ?? null) : null;
+  const dauMauVal  = (rawDauMau != null && !isNaN(rawDauMau)) ? rawDauMau : null;
+  // User health segments for summary
+  const segMap = Object.fromEntries((_ph.segments||[]).map(s => [s.segment, s.user_count]));
+  const activeCount  = (segMap['Active']  || 0);
+  const atRiskCount  = (segMap['At-risk'] || 0);
 
   // ── Status / setup callout ────────────────────────────────────────────────
   let statusHTML = '';
@@ -1588,16 +1610,16 @@ function renderActivity(el) {
     ${statusHTML}
 
     ${cardsHTML([
-      ['Weekly active users',  wauVal,      null, null, phLive ? 'Giraffe · live from PostHog' : (gLast ? 'week of '+fmtDate(gLast.week) : 'no data yet')],
-      ['Weekly logins',        loginVal,    null, null, phLive ? 'unique users who logged in'  : 'latest week'],
-      ['Total users (all time)', totalUsers, null, null, phLive ? 'all time · PostHog'         : 'run SQL migration to enable'],
-      ['DAU/MAU ratio',        dauMauVal != null ? dauMauVal+'%' : (gLast?.dau_mau != null ? gLast.dau_mau.toFixed(1)+'%' : null), null, null, 'engagement depth'],
+      ['Weekly active users',    wauVal,      null, null, phLive ? 'live · PostHog' : (gLast ? 'week of '+fmtDate(gLast.week) : 'no data yet')],
+      ['Total users (all time)', totalUsers,  null, null, phLive ? 'all time · PostHog' : 'run SQL migration to enable'],
+      ['Active users',           phLive ? activeCount : null, null, null, 'seen in last 14 days'],
+      ['At-risk users',          phLive ? atRiskCount : null, null, null, 'active but gone quiet 14d+'],
     ])}
 
     <div class="sub-tabs">
-      ${['giraffe','sdk','labs','retention'].map(s =>
+      ${['giraffe','sdk','labs','retention','insights'].map(s =>
         `<button class="sub-tab${sub===s?' active':''}" onclick="setActivitySub('${s}')">${
-          {giraffe:'Giraffe',sdk:'SDK / Features',labs:'Land iQ Labs',retention:'Retention'}[s]
+          {giraffe:'Giraffe',sdk:'SDK / Features',labs:'Land iQ Labs',retention:'Retention',insights:'Insights'}[s]
         }</button>`
       ).join('')}
     </div>
@@ -2056,6 +2078,159 @@ function setActivitySub(sub, rerender = true, data) {
           scales:{
             x:{ grid:{ display:false }, ticks:axStyle },
             y:{ grid:gridStyle, ticks:{ ...axStyle, callback: v => v+'%' }, beginAtZero:true, max:100 }
+          }
+        }
+      });
+    }
+
+  // ── INSIGHTS ─────────────────────────────────────────────────────────────
+  } else if (sub === 'insights') {
+    const hasData = phLive && _ph.featureAdoption.length > 0;
+
+    // Segment donut data
+    const segMap = Object.fromEntries((_ph.segments||[]).map(s => [s.segment, Number(s.user_count)]));
+    const segTotal = Object.values(segMap).reduce((a,b)=>a+b,0);
+    const segColours = { New:'#2e8bc0', Active:'#2a7a4b', 'At-risk':'#c25a00', Dormant:'#8a9fb0' };
+
+    // Feature adoption table rows
+    const adoptionRows = (_ph.featureAdoption||[]).slice(0,15).map(f =>
+      '<tr>' +
+      '<td style="font-weight:500;text-transform:capitalize">' + f.feature + '</td>' +
+      '<td style="text-align:right">' + fmtNum(f.users_who_tried) + '</td>' +
+      '<td style="text-align:right">' +
+        '<div style="display:flex;align-items:center;gap:8px;justify-content:flex-end">' +
+        '<div style="width:80px;height:6px;background:var(--bd);border-radius:3px;overflow:hidden">' +
+        '<div style="width:' + Math.min(f.adoption_pct,100) + '%;height:100%;background:var(--acc);border-radius:3px"></div>' +
+        '</div>' + f.adoption_pct + '%</div></td>' +
+      '</tr>'
+    ).join('');
+
+    // Feature completion rows
+    const completionRows = (_ph.featureCompletion||[]).map(f =>
+      '<tr>' +
+      '<td style="font-weight:500;text-transform:capitalize">' + f.feature + '</td>' +
+      '<td style="text-align:right">' + fmtNum(f.started) + '</td>' +
+      '<td style="text-align:right">' + fmtNum(f.completed) + '</td>' +
+      '<td style="text-align:right">' +
+        '<span style="color:' + (f.completion_pct >= 80 ? '#2a7a4b' : f.completion_pct >= 50 ? '#c25a00' : '#c0392b') + ';font-weight:600">' +
+        f.completion_pct + '%</span></td>' +
+      '</tr>'
+    ).join('');
+
+    // At-risk users rows
+    const atRiskRows = (_ph.atRisk||[]).slice(0,20).map(u =>
+      '<tr>' +
+      '<td style="font-family:monospace;font-size:11px;color:var(--tm)">' + (u.distinct_id||'').slice(0,24) + '…</td>' +
+      '<td style="text-align:right">' + (u.first_seen||'').slice(0,10) + '</td>' +
+      '<td style="text-align:right;color:var(--wa);font-weight:600">' + (u.last_seen||'').slice(0,10) + '</td>' +
+      '<td style="text-align:right">' + fmtNum(u.active_days) + 'd</td>' +
+      '<td style="text-align:right">' + fmtNum(u.total_events) + '</td>' +
+      '</tr>'
+    ).join('');
+
+    // Power users rows
+    const powerRows = (_ph.powerUsers||[]).map((u,i) =>
+      '<tr>' +
+      '<td style="color:var(--tl);font-size:11px">#' + (i+1) + '</td>' +
+      '<td style="font-family:monospace;font-size:11px;color:var(--tm)">' + (u.distinct_id||'').slice(0,28) + '…</td>' +
+      '<td style="text-align:right">' + fmtNum(u.total_events) + '</td>' +
+      '<td style="text-align:right">' + fmtNum(u.active_days) + 'd</td>' +
+      '<td style="text-align:right;color:var(--tl)">' + (u.last_seen||'').slice(0,10) + '</td>' +
+      '</tr>'
+    ).join('');
+
+    sc.innerHTML = `
+      ${!hasData ? '<div class="callout warn"><div class="callout-text">Run the SQL migration and click Refresh PostHog to load Insights data.</div></div>' : ''}
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+
+        <div class="box">
+          <div class="box-title">User health segments</div>
+          ${segTotal > 0 ? `
+            <div class="chart-wrap" style="height:200px"><canvas id="act-segments-chart"></canvas></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
+              ${['New','Active','At-risk','Dormant'].map(s => `
+                <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--sur);border-radius:6px">
+                  <span style="width:8px;height:8px;border-radius:50%;background:${segColours[s]};flex-shrink:0"></span>
+                  <div>
+                    <div style="font-size:13px;font-weight:600">${fmtNum(segMap[s]||0)}</div>
+                    <div style="font-size:11px;color:var(--tl)">${s}</div>
+                  </div>
+                </div>`).join('')}
+            </div>` : '<div class="no-data">No segment data yet.</div>'}
+        </div>
+
+        <div class="box">
+          <div class="box-title">Feature completion rates
+            <span style="font-size:10px;font-weight:400;color:var(--tl);margin-left:6px">started → completed</span>
+          </div>
+          ${completionRows ? `<div class="tbl-scroll"><table>
+            <thead><tr><th>Feature</th><th style="text-align:right">Started</th><th style="text-align:right">Completed</th><th style="text-align:right">Rate</th></tr></thead>
+            <tbody>${completionRows}</tbody>
+          </table></div>` : '<div class="no-data">No completion data.</div>'}
+        </div>
+      </div>
+
+      <div class="box">
+        <div class="box-title">Feature adoption — % of all users who have tried each feature</div>
+        ${adoptionRows ? `
+          <div class="chart-wrap" style="height:220px;margin-bottom:16px"><canvas id="act-adoption-chart"></canvas></div>
+          <div class="tbl-scroll"><table>
+            <thead><tr><th>Feature</th><th style="text-align:right">Users</th><th style="text-align:right">Adoption</th></tr></thead>
+            <tbody>${adoptionRows}</tbody>
+          </table></div>` : '<div class="no-data">No adoption data.</div>'}
+      </div>
+
+      <div class="box">
+        <div class="box-title">At-risk users
+          <span style="font-size:10px;font-weight:400;color:var(--tl);margin-left:6px">previously active · not seen in 14+ days</span>
+        </div>
+        ${atRiskRows ? `<div class="tbl-scroll"><table>
+          <thead><tr><th>User ID</th><th style="text-align:right">First seen</th><th style="text-align:right">Last seen</th><th style="text-align:right">Active days</th><th style="text-align:right">Events</th></tr></thead>
+          <tbody>${atRiskRows}</tbody>
+        </table></div>` : '<div class="no-data">No at-risk users — great sign!</div>'}
+      </div>
+
+      <div class="box">
+        <div class="box-title">Power users — top 25 by activity</div>
+        ${powerRows ? `<div class="tbl-scroll"><table>
+          <thead><tr><th>#</th><th>User ID</th><th style="text-align:right">Events</th><th style="text-align:right">Active days</th><th style="text-align:right">Last seen</th></tr></thead>
+          <tbody>${powerRows}</tbody>
+        </table></div>` : '<div class="no-data">No data.</div>'}
+      </div>
+    `;
+
+    // Segments donut chart
+    if (segTotal > 0) {
+      makeChart('act-segments-chart', {
+        type: 'doughnut',
+        data: {
+          labels: ['New','Active','At-risk','Dormant'],
+          datasets: [{ data: ['New','Active','At-risk','Dormant'].map(s=>segMap[s]||0),
+            backgroundColor: ['#2e8bc0','#2a7a4b','#c25a00','#8a9fb0'], borderWidth: 2, borderColor: '#fff' }]
+        },
+        options: { responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ display:false }, tooltip:{ callbacks:{ label: ctx => ctx.label+': '+fmtNum(ctx.raw)+' users' } } },
+          cutout: '60%'
+        }
+      });
+    }
+
+    // Feature adoption bar chart
+    if (_ph.featureAdoption.length) {
+      const top = _ph.featureAdoption.slice(0,12);
+      makeChart('act-adoption-chart', {
+        type:'bar',
+        data:{
+          labels: top.map(f => f.feature),
+          datasets:[{ label:'Adoption %', data:top.map(f=>f.adoption_pct||0),
+            backgroundColor:'rgba(46,139,192,.75)', borderRadius:4 }]
+        },
+        options:{ responsive:true, maintainAspectRatio:false, indexAxis:'y',
+          plugins:{ legend:{ display:false } },
+          scales:{
+            x:{ grid:gridStyle, ticks:{ ...axStyle, callback: v=>v+'%' }, beginAtZero:true, max:100 },
+            y:{ grid:{ display:false }, ticks:{ ...axStyle, font:{ size:11 } } }
           }
         }
       });
