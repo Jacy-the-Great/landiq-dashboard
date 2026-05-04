@@ -270,6 +270,20 @@ let _pd_people = [];
 let _pd_deals_imported_at = null;
 let _pd_people_imported_at = null;
 
+// PostHog live data cache (populated by loadPostHogLive)
+let _ph = {
+  loaded: false,
+  error: null,
+  refreshedAt: null,
+  summary: null,       // { total_users, total_events, first_event_date, last_event_date, avg_active_days }
+  weekly: [],          // [{ week_start, active_users, login_users, new_users, total_events }]
+  daily: [],           // [{ day, active_users, login_users, total_events }]
+  dauMau: [],          // [{ day, dau, mau, dau_mau_pct }]
+  features: [],        // [{ feature, total_events, active_users, latest_day }]
+  newUsers: [],        // [{ week_start, new_users }]
+  retention: [],       // [{ cohort_week, cohort_size, retained_w1..w8 }]
+};
+
 async function fetchAllRows(table, columns) {
   const PAGE = 1000;
   let all = [], offset = 0, done = false;
@@ -303,6 +317,57 @@ async function loadAll() {
 }
 
 function load(key) { return _cache[KEYS[key]] || []; }
+
+// ── PostHog live data loader ─────────────────────────────────────
+async function loadPostHogLive(forceRefresh = false) {
+  if (_ph.loaded && !forceRefresh) return;
+  _ph.error = null;
+  try {
+    const [summaryRes, weeklyRes, dailyRes, dauMauRes, featuresRes, newUsersRes, retentionRes] = await Promise.all([
+      sb.rpc('ph_summary'),
+      sb.rpc('ph_weekly_stats',        { weeks_back: 16 }),
+      sb.rpc('ph_daily_active_users',  { days_back:  30 }),
+      sb.rpc('ph_dau_mau',             { days_back:  30 }),
+      sb.rpc('ph_feature_usage',       { days_back:  30 }),
+      sb.rpc('ph_new_users',           { weeks_back: 16 }),
+      sb.rpc('ph_retention_cohort',    { cohort_weeks_back: 12 }),
+    ]);
+    // Check for errors (SQL migration may not have run yet)
+    const errs = [summaryRes, weeklyRes, dailyRes, dauMauRes, featuresRes, newUsersRes, retentionRes]
+      .map(r => r.error).filter(Boolean);
+    if (errs.length) throw new Error(errs[0].message);
+
+    _ph.summary   = summaryRes.data?.[0]   || null;
+    _ph.weekly    = weeklyRes.data          || [];
+    _ph.daily     = dailyRes.data           || [];
+    _ph.dauMau    = dauMauRes.data          || [];
+    _ph.features  = featuresRes.data        || [];
+    _ph.newUsers  = newUsersRes.data        || [];
+    _ph.retention = retentionRes.data       || [];
+    _ph.loaded     = true;
+    _ph.refreshedAt = new Date();
+  } catch (e) {
+    _ph.error = e.message || 'PostHog RPC failed';
+    console.warn('PostHog live load failed:', e.message);
+    // Not a fatal error — the tab still works with manual data
+  }
+}
+
+async function refreshPostHog() {
+  // Trigger materialized view refresh then reload
+  const el = document.getElementById('ph-refresh-btn');
+  if (el) { el.disabled = true; el.textContent = 'Refreshing…'; }
+  try {
+    await sb.rpc('ph_refresh_views');
+    await loadPostHogLive(true);
+    renderActivity();
+    toast('PostHog data refreshed.');
+  } catch (e) {
+    toast('Refresh failed: ' + (e.message || e));
+  } finally {
+    if (el) { el.disabled = false; el.textContent = '↺ Refresh PostHog'; }
+  }
+}
 
 function save(key, arr) {
   _cache[KEYS[key]] = arr;
@@ -1465,41 +1530,74 @@ function renderActivity(el) {
   const sdk     = load('activity_sdk');
   const labs    = load('activity_labs');
 
-  // Summary stats (most recent entry)
+  // ── Summary cards: prefer live PostHog data, fall back to manual ──────────
+  const phLive = _ph.loaded && _ph.weekly.length > 0;
+  const phWLast = phLive ? _ph.weekly[_ph.weekly.length - 1] : null;
+  const phDAULast = phLive && _ph.dauMau.length ? _ph.dauMau[_ph.dauMau.length - 1] : null;
+
   const gLast  = giraffe.length ? giraffe[giraffe.length - 1] : null;
   const lLast  = labs.length    ? labs[labs.length - 1]       : null;
   const sdkThisMonth = thisMonth(sdk, 'date');
   const sdkEvents    = sdkThisMonth.reduce((s, r) => s + (r.events || 0), 0);
-  const sdkUsers     = sdkThisMonth.reduce((s, r) => s + (r.active_users || 0), 0);
+
+  const wauVal    = phLive ? (phWLast?.active_users ?? null) : (gLast?.active_users ?? null);
+  const loginVal  = phLive ? (phWLast?.login_users  ?? null) : (gLast?.logins      ?? null);
+  const totalUsers = phLive ? (_ph.summary?.total_users ?? null) : null;
+  const dauMauVal = phLive ? (phDAULast?.dau_mau_pct ?? null) : null;
+
+  // ── Status / setup callout ────────────────────────────────────────────────
+  let statusHTML = '';
+  if (_ph.error) {
+    statusHTML = `
+      <div class="callout warn" style="margin-bottom:16px">
+        <div class="callout-label">PostHog live data — setup needed</div>
+        <div class="callout-text">
+          Could not connect to Supabase PostHog views (<code style="font-size:11px">${_ph.error}</code>).
+          Run the SQL migration file to enable live data:
+          <strong>posthog_migrations.sql</strong> (next to index.html) →
+          paste into the
+          <a href="https://supabase.com/dashboard/project/ysdonnjezvoyrrizadik/editor" target="_blank" style="color:var(--acc)">Supabase SQL Editor</a>.
+          Until then, use manual entry below.
+        </div>
+      </div>`;
+  } else if (phLive) {
+    const refreshStr = _ph.refreshedAt ? _ph.refreshedAt.toLocaleTimeString() : '';
+    statusHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:#2a7a4b;background:#e8f5ee;border:1px solid #b3dfc5;border-radius:20px;padding:3px 10px">
+          <span style="width:6px;height:6px;background:#2a7a4b;border-radius:50%;display:inline-block"></span> Live · PostHog via Supabase
+        </span>
+        <span style="font-size:11px;color:var(--tl)">Updated ${refreshStr}</span>
+        <button id="ph-refresh-btn" onclick="refreshPostHog()" style="margin-left:auto;font-size:11px;padding:4px 10px;background:none;border:1px solid var(--bd);border-radius:6px;cursor:pointer;font-family:inherit;color:var(--tm)">↺ Refresh PostHog</button>
+      </div>`;
+  } else {
+    statusHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+        <span style="font-size:11px;color:var(--tl);background:var(--sur);border:1px solid var(--bd);border-radius:20px;padding:3px 10px">PostHog data loading…</span>
+      </div>`;
+  }
 
   el.innerHTML = `
     <div class="section-header">
       <div>
         <div class="section-title">Activity</div>
-        <div class="section-sub">User activity across Land iQ · data sourced from PostHog dashboards</div>
+        <div class="section-sub">User activity across Land iQ surfaces · Giraffe · SDK · Labs</div>
       </div>
     </div>
 
-    <div class="callout info" style="margin-bottom:16px">
-      <div class="callout-label">About this tab</div>
-      <div class="callout-text">
-        Tracks user activity across all Land iQ surfaces — <strong>Giraffe</strong> (main platform logins &amp; session data via PostHog),
-        <strong>SDK</strong> (usage per app and component embedded in the Land iQ tool, from PostHog),
-        and <strong>Land iQ Labs</strong> (activity in the Labs app). All data is entered manually from the relevant PostHog dashboards.
-      </div>
-    </div>
+    ${statusHTML}
 
     ${cardsHTML([
-      ['Giraffe active users', gLast?.active_users || null, null, null, gLast ? 'week of ' + fmtDate(gLast.week) : 'no data yet'],
-      ['Giraffe logins', gLast?.logins || null, null, null, 'latest week'],
-      ['SDK events (month)', sdkEvents || null, null, null, 'all components'],
-      ['Labs active users', lLast?.active_users || null, null, null, lLast ? 'week of ' + fmtDate(lLast.week) : 'no data yet'],
+      ['Weekly active users',  wauVal,      null, null, phLive ? 'Giraffe · live from PostHog' : (gLast ? 'week of '+fmtDate(gLast.week) : 'no data yet')],
+      ['Weekly logins',        loginVal,    null, null, phLive ? 'unique users who logged in'  : 'latest week'],
+      ['Total users (all time)', totalUsers, null, null, phLive ? 'all time · PostHog'         : 'run SQL migration to enable'],
+      ['DAU/MAU ratio',        dauMauVal != null ? dauMauVal+'%' : (gLast?.dau_mau != null ? gLast.dau_mau.toFixed(1)+'%' : null), null, null, 'engagement depth'],
     ])}
 
     <div class="sub-tabs">
-      ${['giraffe','sdk','labs'].map(s =>
+      ${['giraffe','sdk','labs','retention'].map(s =>
         `<button class="sub-tab${sub===s?' active':''}" onclick="setActivitySub('${s}')">${
-          {giraffe:'Giraffe',sdk:'SDK Activity',labs:'Land iQ Labs'}[s]
+          {giraffe:'Giraffe',sdk:'SDK / Features',labs:'Land iQ Labs',retention:'Retention'}[s]
         }</button>`
       ).join('')}
     </div>
@@ -1520,46 +1618,74 @@ function setActivitySub(sub, rerender = true, data) {
   const giraffe = data?.giraffe || load('activity_giraffe');
   const sdk     = data?.sdk     || load('activity_sdk');
   const labs    = data?.labs    || load('activity_labs');
+  const phLive  = _ph.loaded && !_ph.error;
 
   // ── GIRAFFE ─────────────────────────────────────────────────────────────
   if (sub === 'giraffe') {
-    const recent = [...giraffe].reverse().slice(0, 16);
+    const hasLive   = phLive && _ph.weekly.length > 0;
+    const hasDau    = phLive && _ph.daily.length > 0;
+    const hasDauMau = phLive && _ph.dauMau.length > 0;
 
-    const gApps = ['Giraffe','Lens','Hub']; // known Giraffe PostHog apps / projects
+    // Pre-compute weekly table rows (live preferred, else manual)
+    let weeklyTableHTML = '';
+    if (hasLive) {
+      const liveRows = [..._ph.weekly].slice(-12).reverse().map(r =>
+        '<tr>' +
+        '<td>' + (r.week_start||'').slice(0,10) + '</td>' +
+        '<td style="text-align:right">' + fmtNum(r.active_users) + '</td>' +
+        '<td style="text-align:right">' + fmtNum(r.login_users) + '</td>' +
+        '<td style="text-align:right">' + fmtNum(r.new_users) + '</td>' +
+        '<td style="text-align:right">' + fmtNum(r.total_events) + '</td>' +
+        '</tr>'
+      ).join('');
+      weeklyTableHTML = '<div class="tbl-scroll"><table>' +
+        '<thead><tr><th>Week start</th><th style="text-align:right">Active users</th><th style="text-align:right">Login users</th><th style="text-align:right">New users</th><th style="text-align:right">Events</th></tr></thead>' +
+        '<tbody>' + liveRows + '</tbody></table></div>';
+    } else if (giraffe.length) {
+      const manualRows = [...giraffe].reverse().slice(0,12).map(r =>
+        '<tr>' +
+        '<td>' + fmtDate(r.week) + '</td>' +
+        '<td style="text-align:right">' + fmtNum(r.logins) + '</td>' +
+        '<td style="text-align:right">' + fmtNum(r.active_users) + '</td>' +
+        '<td style="text-align:right">' + fmtNum(r.new_users) + '</td>' +
+        '<td style="text-align:right">' + (r.dau_mau != null ? r.dau_mau.toFixed(1)+'%' : '—') + '</td>' +
+        '<td style="text-align:right">' + (r.avg_session != null ? r.avg_session+'m' : '—') + '</td>' +
+        '<td style="color:var(--tl)">' + (r.notes||'—') + '</td>' +
+        '<td><button class="btn-del" onclick="delRow(\'activity_giraffe\',\'' + r._id + '\',\'_id\')">Delete</button></td>' +
+        '</tr>'
+      ).join('');
+      weeklyTableHTML = '<div class="tbl-scroll"><table>' +
+        '<thead><tr><th>Week</th><th style="text-align:right">Logins</th><th style="text-align:right">Active users</th><th style="text-align:right">New users</th><th style="text-align:right">DAU/MAU</th><th style="text-align:right">Avg session</th><th>Notes</th><th></th></tr></thead>' +
+        '<tbody>' + manualRows + '</tbody></table></div>';
+    }
+
+    const chartWrap1 = (hasLive || giraffe.length) ? '<div class="chart-wrap" style="height:240px"><canvas id="act-giraffe-chart"></canvas></div>' : '<div class="no-data">No Giraffe activity data yet.</div>';
+    const chartWrap2 = hasDau ? '<div class="chart-wrap" style="height:200px;margin-top:16px"><canvas id="act-dau-chart"></canvas></div>' : '';
+    const chartWrap3 = hasDauMau ? '<div class="chart-wrap" style="height:180px;margin-top:16px"><canvas id="act-daumau-chart"></canvas></div>' : '';
+
     sc.innerHTML = `
       <div class="box">
-        <div class="box-title">Giraffe — user activity (PostHog)
+        <div class="box-title">Giraffe — Weekly active users
+          <span style="margin-left:8px;font-size:10px;font-weight:400;color:var(--tl)">${hasLive ? 'PostHog · live' : 'manual entry'}</span>
           <a class="src-link" href="https://posthog.com" target="_blank" style="margin-left:auto">↗ PostHog</a>
         </div>
-        <p style="font-size:12px;color:var(--tm);margin-bottom:14px;line-height:1.5">
-          Weekly snapshots of login and active user data from the Giraffe PostHog project.
-          Enter data manually from the PostHog dashboard each week.
-        </p>
-        ${giraffe.length ? `<div class="chart-wrap" style="height:240px"><canvas id="act-giraffe-chart"></canvas></div>` : '<div class="no-data">No Giraffe activity data yet. Add entries below.</div>'}
+        ${chartWrap1}
+        ${chartWrap2}
       </div>
 
+      ${hasDauMau ? `<div class="box"><div class="box-title">DAU / MAU ratio — 30 days</div>${chartWrap3}</div>` : ''}
+
       <div class="box">
-        <div class="box-title">Weekly data</div>
-        ${giraffe.length ? `<div class="tbl-scroll"><table>
-          <thead><tr><th>Week</th><th>Logins</th><th>Active users</th><th>New users</th><th>First login</th><th>Last login</th><th>DAU/MAU</th><th>Avg session (min)</th><th>Notes</th><th></th></tr></thead>
-          <tbody>${[...giraffe].reverse().slice(0,12).map(r => `<tr>
-            <td>${fmtDate(r.week)}</td>
-            <td>${fmtNum(r.logins)}</td>
-            <td>${fmtNum(r.active_users)}</td>
-            <td>${fmtNum(r.new_users)}</td>
-            <td>${r.first_login ? fmtDate(r.first_login) : '—'}</td>
-            <td>${r.last_login  ? fmtDate(r.last_login)  : '—'}</td>
-            <td>${r.dau_mau != null ? r.dau_mau.toFixed(1)+'%' : '—'}</td>
-            <td>${r.avg_session != null ? r.avg_session : '—'}</td>
-            <td style="color:var(--tl)">${r.notes||'—'}</td>
-            <td><button class="btn-del" onclick="delRow('activity_giraffe','${r._id}','_id')">Delete</button></td>
-          </tr>`).join('')}</tbody>
-        </table></div>` : ''}
+        <div class="box-title">Weekly breakdown</div>
+        ${weeklyTableHTML || '<div class="no-data">No data yet.</div>'}
       </div>
 
       <div class="form-section">
-        <button class="add-btn" onclick="toggleForm('act-giraffe-form')">+ Add Giraffe weekly snapshot</button>
+        <button class="add-btn" onclick="toggleForm('act-giraffe-form')">+ Add manual weekly snapshot</button>
         <div id="act-giraffe-form" style="display:none"><div class="form-box">
+          <p style="font-size:11px;color:var(--tl);margin-bottom:12px">
+            Manual snapshots supplement live PostHog data — useful for adding session duration, notes, or backfilling gaps.
+          </p>
           <div class="form-grid">
             <div class="form-group"><label>Week ending</label><input type="date" id="ag-week"></div>
             <div class="form-group"><label>Total logins</label><input type="number" id="ag-logins"></div>
@@ -1579,74 +1705,145 @@ function setActivitySub(sub, rerender = true, data) {
       </div>
     `;
 
-    if (giraffe.length && recent.length) {
+    // Chart 1: WAU line (live preferred)
+    if (hasLive) {
+      const wkData = [..._ph.weekly].slice(-16);
       makeChart('act-giraffe-chart', {
         type: 'line',
         data: {
-          labels: [...recent].reverse().map(r => fmtDate(r.week).slice(0,6)),
+          labels: wkData.map(r => (r.week_start||'').slice(5,10)),
           datasets: [
-            { label: 'Active users', data: [...recent].reverse().map(r => r.active_users||0), borderColor: '#2e8bc0', backgroundColor: 'rgba(46,139,192,.07)', borderWidth: 2, fill: true, tension: .3, pointRadius: 3 },
-            { label: 'Logins',       data: [...recent].reverse().map(r => r.logins||0),       borderColor: '#2a7a4b', borderWidth: 2, fill: false, tension: .3, pointRadius: 3 },
-            { label: 'New users',    data: [...recent].reverse().map(r => r.new_users||0),    borderColor: '#c25a00', borderWidth: 2, fill: false, tension: .3, borderDash:[5,4], pointRadius: 3 },
+            { label: 'Active users', data: wkData.map(r => r.active_users||0),  borderColor:'#2e8bc0', backgroundColor:'rgba(46,139,192,.07)', borderWidth:2, fill:true,  tension:.3, pointRadius:3 },
+            { label: 'Login users',  data: wkData.map(r => r.login_users||0),   borderColor:'#2a7a4b', borderWidth:2, fill:false, tension:.3, pointRadius:3 },
+            { label: 'New users',    data: wkData.map(r => r.new_users||0),     borderColor:'#c25a00', borderWidth:2, fill:false, tension:.3, pointRadius:3, borderDash:[5,4] },
           ]
         },
-        options: { responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
-          scales: { x: { grid: { display: false }, ticks: { ...axStyle, maxRotation: 35 } }, y: { grid: gridStyle, ticks: axStyle, beginAtZero: true } }
+        options: { responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ position:'bottom', labels:{ font:{ family:'DM Sans', size:11 }, boxWidth:12 } } },
+          scales:{ x:{ grid:{ display:false }, ticks:{ ...axStyle, maxRotation:35 } }, y:{ grid:gridStyle, ticks:axStyle, beginAtZero:true } }
+        }
+      });
+    } else if (giraffe.length) {
+      const recent = [...giraffe].slice(-16);
+      makeChart('act-giraffe-chart', {
+        type: 'line',
+        data: {
+          labels: recent.map(r => fmtDate(r.week).slice(0,6)),
+          datasets: [
+            { label:'Active users', data:recent.map(r=>r.active_users||0), borderColor:'#2e8bc0', backgroundColor:'rgba(46,139,192,.07)', borderWidth:2, fill:true, tension:.3, pointRadius:3 },
+            { label:'Logins',       data:recent.map(r=>r.logins||0),       borderColor:'#2a7a4b', borderWidth:2, fill:false, tension:.3, pointRadius:3 },
+            { label:'New users',    data:recent.map(r=>r.new_users||0),    borderColor:'#c25a00', borderWidth:2, fill:false, tension:.3, pointRadius:3, borderDash:[5,4] },
+          ]
+        },
+        options:{ responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ position:'bottom', labels:{ font:{ family:'DM Sans', size:11 }, boxWidth:12 } } },
+          scales:{ x:{ grid:{ display:false }, ticks:{ ...axStyle, maxRotation:35 } }, y:{ grid:gridStyle, ticks:axStyle, beginAtZero:true } }
         }
       });
     }
 
-  // ── SDK ──────────────────────────────────────────────────────────────────
-  } else if (sub === 'sdk') {
-    // Group by app name for chart
-    const appNames = [...new Set(sdk.map(r => r.app_name).filter(Boolean))].sort();
-    const recentSdk = sdk.filter(r => {
-      if (!r.date) return false;
-      const d = new Date(r.date);
-      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 90);
-      return d >= cutoff;
-    });
+    // Chart 2: DAU (last 30 days)
+    if (hasDau) {
+      const dData = _ph.daily.slice(-30);
+      makeChart('act-dau-chart', {
+        type:'bar',
+        data:{
+          labels: dData.map(r => (r.day||'').slice(5,10)),
+          datasets:[
+            { label:'Daily active users', data:dData.map(r=>r.active_users||0), backgroundColor:'rgba(46,139,192,.6)', borderRadius:2, barThickness:'flex' },
+          ]
+        },
+        options:{ responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ display:false }, tooltip:{ callbacks:{ title: ctx => 'Day: '+ctx[0].label } } },
+          scales:{ x:{ grid:{ display:false }, ticks:{ ...axStyle, maxRotation:45, font:{ size:9 } } }, y:{ grid:gridStyle, ticks:axStyle, beginAtZero:true } }
+        }
+      });
+    }
 
-    // Events per app (all time)
+    // Chart 3: DAU/MAU
+    if (hasDauMau) {
+      const dmData = _ph.dauMau.slice(-30);
+      makeChart('act-daumau-chart', {
+        type:'line',
+        data:{
+          labels: dmData.map(r => (r.day||'').slice(5,10)),
+          datasets:[
+            { label:'DAU/MAU %', data:dmData.map(r=>r.dau_mau_pct||0), borderColor:'#7b1fa2', backgroundColor:'rgba(123,31,162,.06)', fill:true, borderWidth:2, tension:.3, pointRadius:2 },
+          ]
+        },
+        options:{ responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ display:false } },
+          scales:{
+            x:{ grid:{ display:false }, ticks:{ ...axStyle, maxRotation:45, font:{ size:9 } } },
+            y:{ grid:gridStyle, ticks:{ ...axStyle, callback: v => v+'%' }, beginAtZero:true, max:100 }
+          }
+        }
+      });
+    }
+
+  // ── SDK / FEATURES ───────────────────────────────────────────────────────
+  } else if (sub === 'sdk') {
+    const hasFeat = phLive && _ph.features.length > 0;
+
+    // Manual SDK data (fallback)
     const appEvents = {};
     const appUsers  = {};
     sdk.forEach(r => {
       if (!r.app_name) return;
-      appEvents[r.app_name] = (appEvents[r.app_name] || 0) + (r.events || 0);
-      appUsers[r.app_name]  = Math.max(appUsers[r.app_name] || 0, r.active_users || 0);
+      appEvents[r.app_name] = (appEvents[r.app_name]||0) + (r.events||0);
+      appUsers[r.app_name]  = Math.max(appUsers[r.app_name]||0, r.active_users||0);
     });
-    const appNamesSorted = Object.entries(appEvents).sort((a,b) => b[1]-a[1]).map(([k]) => k);
+    const appNamesSorted = Object.entries(appEvents).sort((a,b)=>b[1]-a[1]).map(([k])=>k);
+
+    // Live feature table rows
+    let featTableHTML = '';
+    if (hasFeat) {
+      const liveFeats = _ph.features.slice(0,20).map(f =>
+        '<tr>' +
+        '<td style="font-weight:500">' + (f.feature||'—') + '</td>' +
+        '<td style="text-align:right">' + fmtNum(f.total_events) + '</td>' +
+        '<td style="text-align:right">' + fmtNum(f.active_users) + '</td>' +
+        '<td style="color:var(--tl)">' + ((f.latest_day||'').slice(0,10)) + '</td>' +
+        '</tr>'
+      ).join('');
+      featTableHTML = '<div class="tbl-scroll"><table>' +
+        '<thead><tr><th>Feature / App</th><th style="text-align:right">Events (30d)</th><th style="text-align:right">Active users</th><th>Last seen</th></tr></thead>' +
+        '<tbody>' + liveFeats + '</tbody></table></div>';
+    }
+
+    // Manual SDK table rows
+    let sdkTableHTML = '';
+    if (sdk.length) {
+      const manualRows = [...sdk].reverse().slice(0,20).map(r =>
+        '<tr>' +
+        '<td>' + fmtDate(r.date) + '</td>' +
+        '<td style="font-weight:500">' + (r.app_name||'—') + '</td>' +
+        '<td style="text-align:right">' + fmtNum(r.events) + '</td>' +
+        '<td style="text-align:right">' + fmtNum(r.active_users) + '</td>' +
+        '<td style="color:var(--tl)">' + (r.notes||'—') + '</td>' +
+        '<td><button class="btn-del" onclick="delRow(\'activity_sdk\',\'' + r._id + '\',\'_id\')">Delete</button></td>' +
+        '</tr>'
+      ).join('');
+      sdkTableHTML = '<div class="tbl-scroll"><table>' +
+        '<thead><tr><th>Date</th><th>App / Component</th><th style="text-align:right">Events</th><th style="text-align:right">Active users</th><th>Notes</th><th></th></tr></thead>' +
+        '<tbody>' + manualRows + '</tbody></table></div>';
+    }
 
     sc.innerHTML = `
       <div class="box">
-        <div class="box-title">SDK Activity — by app / component (PostHog)
+        <div class="box-title">SDK &amp; Feature Usage — by app / component
+          <span style="margin-left:8px;font-size:10px;font-weight:400;color:var(--tl)">${hasFeat ? 'PostHog · live · last 30 days' : 'manual entry'}</span>
           <a class="src-link" href="https://posthog.com" target="_blank" style="margin-left:auto">↗ PostHog</a>
         </div>
-        <p style="font-size:12px;color:var(--tm);margin-bottom:14px;line-height:1.5">
-          Tracks SDK events and active users per app or component of the Land iQ tool.
-          Enter snapshots from the PostHog SDK dashboard — one row per app per period.
-        </p>
-        ${sdk.length ? `<div class="chart-wrap" style="height:240px"><canvas id="act-sdk-chart"></canvas></div>` : '<div class="no-data">No SDK activity data yet. Add entries below.</div>'}
+        ${hasFeat || appNamesSorted.length ? '<div class="chart-wrap" style="height:260px"><canvas id="act-sdk-chart"></canvas></div>' : '<div class="no-data">No SDK / feature data yet. Add entries below or run the SQL migration for live data.</div>'}
       </div>
 
-      <div class="box">
-        <div class="box-title">All SDK entries</div>
-        ${sdk.length ? `<div class="tbl-scroll"><table>
-          <thead><tr><th>Date</th><th>App / Component</th><th>Events</th><th>Active users</th><th>Notes</th><th></th></tr></thead>
-          <tbody>${[...sdk].reverse().slice(0,20).map(r => `<tr>
-            <td>${fmtDate(r.date)}</td>
-            <td style="font-weight:500">${r.app_name||'—'}</td>
-            <td>${fmtNum(r.events)}</td>
-            <td>${fmtNum(r.active_users)}</td>
-            <td style="color:var(--tl)">${r.notes||'—'}</td>
-            <td><button class="btn-del" onclick="delRow('activity_sdk','${r._id}','_id')">Delete</button></td>
-          </tr>`).join('')}</tbody>
-        </table></div>` : ''}
-      </div>
+      ${hasFeat ? '<div class="box"><div class="box-title">Feature breakdown — last 30 days</div>' + featTableHTML + '</div>' : ''}
+
+      ${sdk.length ? '<div class="box"><div class="box-title">Manual snapshots</div>' + sdkTableHTML + '</div>' : ''}
 
       <div class="form-section">
-        <button class="add-btn" onclick="toggleForm('act-sdk-form')">+ Add SDK snapshot</button>
+        <button class="add-btn" onclick="toggleForm('act-sdk-form')">+ Add manual SDK snapshot</button>
         <div id="act-sdk-form" style="display:none"><div class="form-box">
           <div class="form-grid">
             <div class="form-group"><label>Date</label><input type="date" id="as-date"></div>
@@ -1663,53 +1860,79 @@ function setActivitySub(sub, rerender = true, data) {
       </div>
     `;
 
-    if (appNamesSorted.length) {
+    if (hasFeat) {
+      const feats = _ph.features.slice(0, 12);
       makeChart('act-sdk-chart', {
-        type: 'bar',
-        data: {
-          labels: appNamesSorted,
-          datasets: [
-            { label: 'Total events (all time)', data: appNamesSorted.map(a => appEvents[a]||0), backgroundColor: '#2e8bc0', borderRadius: 4 },
-            { label: 'Peak active users',        data: appNamesSorted.map(a => appUsers[a]||0),  backgroundColor: '#2a7a4b', borderRadius: 4 },
+        type:'bar',
+        data:{
+          labels: feats.map(f => f.feature),
+          datasets:[
+            { label:'Events (30d)',   data:feats.map(f=>f.total_events||0), backgroundColor:'#2e8bc0', borderRadius:4 },
+            { label:'Active users',  data:feats.map(f=>f.active_users||0),  backgroundColor:'rgba(42,122,75,.7)', borderRadius:4 },
           ]
         },
-        options: { responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
-          scales: { x: { grid: { display: false }, ticks: { ...axStyle, maxRotation: 35 } }, y: { grid: gridStyle, ticks: axStyle, beginAtZero: true } }
+        options:{ responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ position:'bottom', labels:{ font:{ family:'DM Sans', size:11 }, boxWidth:12 } } },
+          scales:{ x:{ grid:{ display:false }, ticks:{ ...axStyle, maxRotation:35 } }, y:{ grid:gridStyle, ticks:axStyle, beginAtZero:true } }
+        }
+      });
+    } else if (appNamesSorted.length) {
+      makeChart('act-sdk-chart', {
+        type:'bar',
+        data:{
+          labels: appNamesSorted,
+          datasets:[
+            { label:'Total events (all time)', data:appNamesSorted.map(a=>appEvents[a]||0), backgroundColor:'#2e8bc0', borderRadius:4 },
+            { label:'Peak active users',        data:appNamesSorted.map(a=>appUsers[a]||0),  backgroundColor:'rgba(42,122,75,.7)', borderRadius:4 },
+          ]
+        },
+        options:{ responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ position:'bottom', labels:{ font:{ family:'DM Sans', size:11 }, boxWidth:12 } } },
+          scales:{ x:{ grid:{ display:false }, ticks:{ ...axStyle, maxRotation:35 } }, y:{ grid:gridStyle, ticks:axStyle, beginAtZero:true } }
         }
       });
     }
 
   // ── LABS ─────────────────────────────────────────────────────────────────
   } else if (sub === 'labs') {
-    const recentLabs = [...labs].reverse().slice(0, 16);
+    const recentLabs = [...labs].slice(-16);
+
+    let labsTableHTML = '';
+    if (labs.length) {
+      const rows = [...labs].reverse().slice(0,12).map(r =>
+        '<tr>' +
+        '<td>' + fmtDate(r.week) + '</td>' +
+        '<td style="text-align:right">' + fmtNum(r.logins) + '</td>' +
+        '<td style="text-align:right">' + fmtNum(r.active_users) + '</td>' +
+        '<td style="text-align:right">' + fmtNum(r.sessions) + '</td>' +
+        '<td style="text-align:right">' + (r.avg_session!=null?r.avg_session+'m':'—') + '</td>' +
+        '<td style="font-weight:500">' + (r.top_feature||'—') + '</td>' +
+        '<td style="color:var(--tl)">' + (r.notes||'—') + '</td>' +
+        '<td><button class="btn-del" onclick="delRow(\'activity_labs\',\'' + r._id + '\',\'_id\')">Delete</button></td>' +
+        '</tr>'
+      ).join('');
+      labsTableHTML = '<div class="tbl-scroll"><table>' +
+        '<thead><tr><th>Week</th><th style="text-align:right">Logins</th><th style="text-align:right">Active users</th><th style="text-align:right">Sessions</th><th style="text-align:right">Avg session</th><th>Top feature</th><th>Notes</th><th></th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table></div>';
+    }
 
     sc.innerHTML = `
       <div class="box">
-        <div class="box-title">Land iQ Labs — activity (PostHog)
+        <div class="box-title">Land iQ Labs — activity
           <a class="src-link" href="https://posthog.com" target="_blank" style="margin-left:auto">↗ PostHog</a>
         </div>
-        <p style="font-size:12px;color:var(--tm);margin-bottom:14px;line-height:1.5">
-          Weekly usage snapshots of the Land iQ Labs app from its PostHog project.
-        </p>
-        ${labs.length ? `<div class="chart-wrap" style="height:240px"><canvas id="act-labs-chart"></canvas></div>` : '<div class="no-data">No Labs activity data yet. Add entries below.</div>'}
+        <div class="callout info" style="margin-bottom:14px">
+          <div class="callout-text" style="font-size:12px">
+            Labs uses its own PostHog project. If the Supabase batch export covers Labs events, they will appear in the
+            Feature Usage tab once tagged with <code>app: "Labs"</code> or similar. Otherwise, use manual entry here.
+          </div>
+        </div>
+        ${labs.length ? '<div class="chart-wrap" style="height:240px"><canvas id="act-labs-chart"></canvas></div>' : '<div class="no-data">No Labs activity data yet. Add entries below.</div>'}
       </div>
 
       <div class="box">
         <div class="box-title">Weekly data</div>
-        ${labs.length ? `<div class="tbl-scroll"><table>
-          <thead><tr><th>Week</th><th>Logins</th><th>Active users</th><th>Sessions</th><th>Avg session (min)</th><th>Most used feature</th><th>Notes</th><th></th></tr></thead>
-          <tbody>${[...labs].reverse().slice(0,12).map(r => `<tr>
-            <td>${fmtDate(r.week)}</td>
-            <td>${fmtNum(r.logins)}</td>
-            <td>${fmtNum(r.active_users)}</td>
-            <td>${fmtNum(r.sessions)}</td>
-            <td>${r.avg_session != null ? r.avg_session : '—'}</td>
-            <td style="font-weight:500">${r.top_feature||'—'}</td>
-            <td style="color:var(--tl)">${r.notes||'—'}</td>
-            <td><button class="btn-del" onclick="delRow('activity_labs','${r._id}','_id')">Delete</button></td>
-          </tr>`).join('')}</tbody>
-        </table></div>` : ''}
+        ${labsTableHTML || '<div class="no-data">No entries yet.</div>'}
       </div>
 
       <div class="form-section">
@@ -1734,17 +1957,106 @@ function setActivitySub(sub, rerender = true, data) {
 
     if (labs.length && recentLabs.length) {
       makeChart('act-labs-chart', {
-        type: 'line',
-        data: {
-          labels: [...recentLabs].reverse().map(r => fmtDate(r.week).slice(0,6)),
-          datasets: [
-            { label: 'Active users', data: [...recentLabs].reverse().map(r => r.active_users||0), borderColor: '#3949ab', backgroundColor: 'rgba(57,73,171,.07)', borderWidth: 2, fill: true, tension: .3, pointRadius: 3 },
-            { label: 'Logins',       data: [...recentLabs].reverse().map(r => r.logins||0),       borderColor: '#7b1fa2', borderWidth: 2, fill: false, tension: .3, pointRadius: 3 },
+        type:'line',
+        data:{
+          labels: recentLabs.map(r => fmtDate(r.week).slice(0,6)),
+          datasets:[
+            { label:'Active users', data:recentLabs.map(r=>r.active_users||0), borderColor:'#3949ab', backgroundColor:'rgba(57,73,171,.07)', borderWidth:2, fill:true, tension:.3, pointRadius:3 },
+            { label:'Logins',       data:recentLabs.map(r=>r.logins||0),       borderColor:'#7b1fa2', borderWidth:2, fill:false, tension:.3, pointRadius:3 },
           ]
         },
-        options: { responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
-          scales: { x: { grid: { display: false }, ticks: { ...axStyle, maxRotation: 35 } }, y: { grid: gridStyle, ticks: axStyle, beginAtZero: true } }
+        options:{ responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ position:'bottom', labels:{ font:{ family:'DM Sans', size:11 }, boxWidth:12 } } },
+          scales:{ x:{ grid:{ display:false }, ticks:{ ...axStyle, maxRotation:35 } }, y:{ grid:gridStyle, ticks:axStyle, beginAtZero:true } }
+        }
+      });
+    }
+
+  // ── RETENTION ────────────────────────────────────────────────────────────
+  } else if (sub === 'retention') {
+    const hasRet  = phLive && _ph.retention.length > 0;
+    const hasNew  = phLive && _ph.newUsers.length > 0;
+
+    let retTableHTML = '';
+    if (hasRet) {
+      const rows = _ph.retention.slice(-12).reverse().map(r => {
+        const pct = v => r.cohort_size > 0 ? Math.round(v / r.cohort_size * 100) + '%' : '—';
+        return '<tr>' +
+          '<td>' + (r.cohort_week||'').slice(0,10) + '</td>' +
+          '<td style="text-align:right;font-weight:600">' + fmtNum(r.cohort_size) + '</td>' +
+          '<td style="text-align:right">' + pct(r.retained_w1) + '</td>' +
+          '<td style="text-align:right">' + pct(r.retained_w2) + '</td>' +
+          '<td style="text-align:right">' + pct(r.retained_w4) + '</td>' +
+          '<td style="text-align:right">' + pct(r.retained_w8) + '</td>' +
+          '</tr>';
+      }).join('');
+      retTableHTML = '<div class="tbl-scroll"><table>' +
+        '<thead><tr><th>Cohort week</th><th style="text-align:right">Cohort size</th><th style="text-align:right">W1 retained</th><th style="text-align:right">W2 retained</th><th style="text-align:right">W4 retained</th><th style="text-align:right">W8 retained</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table></div>';
+    }
+
+    sc.innerHTML = `
+      ${!phLive ? '<div class="callout warn" style="margin-bottom:16px"><div class="callout-text">Retention data requires the PostHog SQL migration. Run <strong>posthog_migrations.sql</strong> in the <a href="https://supabase.com/dashboard/project/ysdonnjezvoyrrizadik/editor" target="_blank" style="color:var(--acc)">Supabase SQL Editor</a> first.</div></div>' : ''}
+
+      ${hasNew ? `<div class="box">
+        <div class="box-title">New users per week — last 16 weeks</div>
+        <div class="chart-wrap" style="height:200px"><canvas id="act-newusers-chart"></canvas></div>
+      </div>` : ''}
+
+      <div class="box">
+        <div class="box-title">Cohort retention — % of new users still active after N weeks</div>
+        ${hasRet ? retTableHTML : '<div class="no-data">No retention data. Run SQL migration to enable.</div>'}
+      </div>
+
+      ${hasRet ? `<div class="box">
+        <div class="box-title">Retention curve — latest cohorts</div>
+        <div class="chart-wrap" style="height:240px"><canvas id="act-retention-chart"></canvas></div>
+      </div>` : ''}
+    `;
+
+    if (hasNew) {
+      const nuData = _ph.newUsers.slice(-16);
+      makeChart('act-newusers-chart', {
+        type:'bar',
+        data:{
+          labels: nuData.map(r => (r.week_start||'').slice(5,10)),
+          datasets:[{ label:'New users', data:nuData.map(r=>r.new_users||0), backgroundColor:'rgba(46,139,192,.7)', borderRadius:3 }]
+        },
+        options:{ responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ display:false } },
+          scales:{ x:{ grid:{ display:false }, ticks:{ ...axStyle, maxRotation:35 } }, y:{ grid:gridStyle, ticks:axStyle, beginAtZero:true } }
+        }
+      });
+    }
+
+    if (hasRet) {
+      // Radar-style cohort retention line chart (latest 6 cohorts)
+      const cohorts = _ph.retention.slice(-6);
+      const palette = ['#2e8bc0','#2a7a4b','#c25a00','#7b1fa2','#c0392b','#f39c12'];
+      const datasets = cohorts.map((r, i) => ({
+        label: (r.cohort_week||'').slice(0,10),
+        data: [
+          100,
+          r.cohort_size > 0 ? Math.round(r.retained_w1/r.cohort_size*100) : 0,
+          r.cohort_size > 0 ? Math.round(r.retained_w2/r.cohort_size*100) : 0,
+          r.cohort_size > 0 ? Math.round(r.retained_w4/r.cohort_size*100) : 0,
+          r.cohort_size > 0 ? Math.round(r.retained_w8/r.cohort_size*100) : 0,
+        ],
+        borderColor: palette[i % palette.length],
+        borderWidth: 2,
+        fill: false,
+        tension: .3,
+        pointRadius: 4,
+      }));
+      makeChart('act-retention-chart', {
+        type:'line',
+        data:{ labels:['Week 0','Week 1','Week 2','Week 4','Week 8'], datasets },
+        options:{ responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ position:'bottom', labels:{ font:{ family:'DM Sans', size:10 }, boxWidth:10 } } },
+          scales:{
+            x:{ grid:{ display:false }, ticks:axStyle },
+            y:{ grid:gridStyle, ticks:{ ...axStyle, callback: v => v+'%' }, beginAtZero:true, max:100 }
+          }
         }
       });
     }
@@ -4082,6 +4394,11 @@ async function init() {
   await loadAll();
   buildNav();
   renderTab('home');
+  // Load PostHog live data in background (non-blocking)
+  loadPostHogLive().then(() => {
+    // If user is on Activity tab, refresh it with live data
+    if (activeTab === 'activity') renderActivity();
+  });
 }
 
 if (sessionStorage.getItem('liq_auth') === '1') {
