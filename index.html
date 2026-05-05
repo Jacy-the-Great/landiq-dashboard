@@ -3230,13 +3230,18 @@ function importTrackerCSV(input) {
           'registrations':           'wbReg',
         },
         website: {
-          'total users':             'websiteVisits',
           'total users (visits)':    'websiteVisits',
+          'total users':             'websiteVisits',
           'website visits':          'websiteVisits',
+          'users':                   'websiteVisits',
           'purchase enquiries':      'purchaseEnq',
+          'purchase enquiry':        'purchaseEnq',
+          'purchase':                'purchaseEnq',
           'eoi tickets':             'eoiTickets',
+          'eoi ticket':              'eoiTickets',
           'eoi':                     'eoiTickets',
           'trials started':          'trialsStarted',
+          'trial':                   'trialsStarted',
         },
       };
 
@@ -3267,8 +3272,17 @@ function importTrackerCSV(input) {
         if (!currentSection) continue;
 
         // Look up the field key for this metric label
-        const labelNorm = label.toLowerCase().replace(/\s+/g, ' ');
-        const fieldKey  = SECTION_MAP[currentSection]?.[labelNorm];
+        // Try exact match first, then starts-with (handles suffixes like "(Consolidated)", "(visits)")
+        const labelNorm = label.toLowerCase().replace(/\s+/g, ' ').trim();
+        const secMap = SECTION_MAP[currentSection] || {};
+        let fieldKey = secMap[labelNorm];
+        if (!fieldKey) {
+          // Longest key first so "email open rate" beats "open rate"
+          const keys = Object.keys(secMap).sort((a, b) => b.length - a.length);
+          for (const k of keys) {
+            if (labelNorm.startsWith(k)) { fieldKey = secMap[k]; break; }
+          }
+        }
         if (!fieldKey) continue;
 
         // Read each column's value
