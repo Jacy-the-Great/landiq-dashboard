@@ -2998,7 +2998,14 @@ function setContentSub(sub, rerender = true, data, outcomes) {
         </div>
       </div>
       <div class="form-section">
-        <button class="add-btn" onclick="toggleForm('tracker-form')">+ Add tracker week</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+          <button class="add-btn" onclick="toggleForm('tracker-form')">+ Add tracker week</button>
+          <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:500;color:var(--acc);background:var(--acc2);border:1px solid var(--acc);border-radius:6px;padding:6px 12px">
+            ↑ Import CSV
+            <input type="file" accept=".csv" style="display:none" onchange="importTrackerCSV(this)">
+          </label>
+          <span style="font-size:11px;color:var(--tl)">Columns: Week, JS Impr., JM Impr., LB Impr., EDM Open%, EDM CTR%, WB Email Send, WB Email Open%, WB CTR%, WB Reg Page, Registrations, Purchase Enq., EOI Tickets, Trials Started</span>
+        </div>
         <div id="tracker-form" style="display:none"><div class="form-box">
           <div class="form-grid">
             <div class="form-group"><label>Week ending</label><input type="date" id="tr2-week"></div>
@@ -3114,6 +3121,51 @@ function saveTrackerEdit(id) {
   activeSub.editing_tracker = null;
   toast('Row updated.');
   renderMarketing();
+}
+
+function importTrackerCSV(input) {
+  const file = input.files[0];
+  if (!file) return;
+  Papa.parse(file, {
+    header: false, skipEmptyLines: true,
+    complete: (results) => {
+      const rows = results.data;
+      let imported = 0;
+      const existing = load('weekly_tracker');
+      const map = Object.fromEntries(existing.map(r => [r.week, r]));
+      rows.forEach(p => {
+        if (!p[0] || p[0].toLowerCase().includes('week') || p[0].toLowerCase().includes('date')) return;
+        const dt = new Date(p[0]);
+        if (isNaN(dt.getTime())) return;
+        const week = dt.toISOString().split('T')[0];
+        const existing = map[week] || { _id: 'tr-' + Date.now() + '-' + imported };
+        map[week] = {
+          ...existing,
+          week,
+          jsImp:        p[1]  !== '' ? Number(p[1])  : existing.jsImp,
+          jmImp:        p[2]  !== '' ? Number(p[2])  : existing.jmImp,
+          lbImp:        p[3]  !== '' ? Number(p[3])  : existing.lbImp,
+          edmOpen:      p[4]  !== '' ? Number(p[4])  : existing.edmOpen,
+          edmCtr:       p[5]  !== '' ? Number(p[5])  : existing.edmCtr,
+          wbEmailSend:  p[6]  !== '' ? Number(p[6])  : existing.wbEmailSend,
+          wbEmailOpen:  p[7]  !== '' ? Number(p[7])  : existing.wbEmailOpen,
+          wbEmailCtr:   p[8]  !== '' ? Number(p[8])  : existing.wbEmailCtr,
+          wbRegPage:    p[9]  !== '' ? Number(p[9])  : existing.wbRegPage,
+          wbReg:        p[10] !== '' ? Number(p[10]) : existing.wbReg,
+          purchaseEnq:  p[11] !== '' ? Number(p[11]) : existing.purchaseEnq,
+          eoiTickets:   p[12] !== '' ? Number(p[12]) : existing.eoiTickets,
+          trialsStarted:p[13] !== '' ? Number(p[13]) : existing.trialsStarted,
+        };
+        imported++;
+      });
+      const merged = Object.values(map).sort((a,b) => a.week > b.week ? 1 : -1);
+      save('weekly_tracker', merged);
+      input.value = '';
+      toast('Imported ' + imported + ' tracker weeks.');
+      renderMarketing();
+    },
+    error: err => toast('CSV parse error: ' + err.message)
+  });
 }
 
 function updateContentFields() {
