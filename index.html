@@ -1285,8 +1285,15 @@ function renderWebsite(el) {
       </div>
 
       <div class="form-section">
-        <button class="add-btn" onclick="toggleForm('web-daily-form')">+ Add daily website data</button>
-        <div id="web-daily-form" style="display:none">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="add-btn" onclick="toggleForm('web-daily-form')">+ Add single day</button>
+          <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:500;color:var(--acc);background:var(--acc2);border:1px solid var(--acc);border-radius:6px;padding:6px 12px">
+            ↑ Import CSV
+            <input type="file" accept=".csv" style="display:none" onchange="importWebsiteDailyCSV(this)">
+          </label>
+          <span style="font-size:11px;color:var(--tl)">CSV columns: Date, Views, Users, Sessions, CTA clicks, EOI forms</span>
+        </div>
+        <div id="web-daily-form" style="display:none;margin-top:10px">
           <div class="form-box">
             <div class="form-grid">
               <div class="form-group"><label>Date</label><input type="date" id="wbd-date" value="${today}"></div>
@@ -1500,6 +1507,42 @@ function importWebsiteCSV() {
   toggleForm('web-form');
   toast('Imported ' + newRows.length + ' weeks of website data.');
   renderWebsite();
+}
+
+function importWebsiteDailyCSV(input) {
+  const file = input.files[0];
+  if (!file) return;
+  Papa.parse(file, {
+    header: false, skipEmptyLines: true,
+    complete: (results) => {
+      const rows = results.data;
+      let imported = 0;
+      const existing = load('website_daily');
+      const map = Object.fromEntries(existing.map(r => [r.date, r]));
+      rows.forEach(p => {
+        // Skip header row
+        if (!p[0] || p[0].toLowerCase().includes('date')) return;
+        const dt = new Date(p[0]);
+        if (isNaN(dt.getTime())) return;
+        const date = dt.toISOString().split('T')[0];
+        map[date] = {
+          date,
+          views:    parseInt(p[1]) || map[date]?.views    || null,
+          users:    parseInt(p[2]) || map[date]?.users    || null,
+          sessions: parseInt(p[3]) || map[date]?.sessions || null,
+          cta:      parseInt(p[4]) || map[date]?.cta      || null,
+          eoiform:  parseInt(p[5]) || map[date]?.eoiform  || null,
+        };
+        imported++;
+      });
+      const merged = Object.values(map).sort((a,b) => a.date > b.date ? 1 : -1);
+      save('website_daily', merged);
+      input.value = '';
+      toast('Imported ' + imported + ' days of website data.');
+      renderWebsite();
+    },
+    error: err => toast('CSV parse error: ' + err.message)
+  });
 }
 
 function saveWebsite() {
