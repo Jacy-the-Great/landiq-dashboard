@@ -2945,66 +2945,93 @@ function setContentSub(sub, rerender = true, data, outcomes) {
     }
 
   } else if (sub === 'tracker') {
-    // Lucy's weekly tracker
-    const tracker = load('weekly_tracker');
-    const editingId = activeSub.editing_tracker || null;
-    const trkFields = ['jsImp','jmImp','lbImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','purchaseEnq','eoiTickets','trialsStarted'];
+    // Lucy's weekly tracker — metrics as rows, weeks as columns
+    const TRACKER_SECTIONS = [
+      { label: 'LinkedIn', key: 'linkedin', rows: [
+        { key: 'jsImp',         label: 'JS Post Impressions',   fmt: 'num' },
+        { key: 'jmImp',         label: 'JM Post Impressions',   fmt: 'num' },
+        { key: 'lbImp',         label: 'LB Post Impressions',   fmt: 'num' },
+      ]},
+      { label: 'EDM', key: 'edm', rows: [
+        { key: 'edmOpen',        label: 'Email Open Rate',       fmt: 'pct' },
+        { key: 'edmCtr',         label: 'Click through Rate',    fmt: 'pct' },
+      ]},
+      { label: 'Webinar', key: 'webinar', rows: [
+        { key: 'wbEmailSend',   label: 'Email Send',             fmt: 'num' },
+        { key: 'wbEmailOpen',   label: 'Email Open Rate',        fmt: 'pct' },
+        { key: 'wbEmailCtr',    label: 'Click through Rate',     fmt: 'pct' },
+        { key: 'wbRegPage',     label: 'Event Reg. Page',        fmt: 'pct' },
+        { key: 'wbReg',         label: 'Registrations',          fmt: 'num' },
+      ]},
+      { label: 'Website', key: 'website', rows: [
+        { key: 'websiteVisits', label: 'Total Users (visits)',   fmt: 'num' },
+        { key: 'purchaseEnq',   label: 'Purchase Enquiries',     fmt: 'num' },
+        { key: 'eoiTickets',    label: 'EOI Tickets',            fmt: 'num' },
+        { key: 'trialsStarted', label: 'Trials Started',         fmt: 'num' },
+      ]},
+    ];
 
-    const trackerRowsHTML = tracker.length ? [...tracker].reverse().slice(0,8).map(r => {
-      if (r._id === editingId) {
-        // Inline edit mode
-        const inputs = trkFields.map(f => `<td><input type="number" id="trkedit-${f}" style="width:58px;padding:2px 4px;border:1px solid var(--acc);border-radius:3px;font-size:12px" step="${['edmOpen','edmCtr','wbEmailOpen','wbEmailCtr','wbRegPage'].includes(f)?'.1':'1'}" value="${r[f]??''}"></td>`).join('');
-        return `<tr style="background:#eef6ff">
-          <td style="font-weight:500">${fmtDate(r.week)}</td>
-          ${inputs}
-          <td style="white-space:nowrap">
-            <button class="btn-save" style="padding:3px 8px;font-size:11px" onclick="saveTrackerEdit('${r._id}')">Save</button>
-            <button class="btn-cancel" style="padding:3px 8px;font-size:11px;margin-left:4px" onclick="cancelTrackerEdit()">Cancel</button>
-          </td>
+    const tracker = load('weekly_tracker');
+    // Sort ascending, take last 10 weeks
+    const weeks = [...tracker].sort((a,b) => a.week > b.week ? 1 : -1).slice(-10);
+    const colSpan = weeks.length + 1;
+
+    const weekHeaders = weeks.map(r =>
+      `<th style="text-align:center;min-width:76px;white-space:nowrap;font-weight:600">
+        ${fmtDate(r.week)}
+        <div style="margin-top:3px">
+          <button onclick="delTrackerWeek('${r._id}')" style="background:none;border:none;color:#bbb;cursor:pointer;font-size:10px;padding:0 2px;line-height:1" title="Delete this week">✕</button>
+        </div>
+      </th>`
+    ).join('');
+
+    let bodyRows = '';
+    if (weeks.length) {
+      TRACKER_SECTIONS.forEach(sec => {
+        bodyRows += `<tr style="background:var(--acc2)">
+          <td colspan="${colSpan}" style="font-weight:700;font-size:11px;color:var(--acc);padding:6px 10px;letter-spacing:.6px;text-transform:uppercase">${sec.label}</td>
         </tr>`;
-      }
-      return `<tr>
-        <td>${fmtDate(r.week)}</td>
-        <td>${fmtNum(r.jsImp)}</td><td>${fmtNum(r.jmImp)}</td><td>${fmtNum(r.lbImp)}</td>
-        <td>${fmtPct(r.edmOpen)}</td><td>${fmtPct(r.edmCtr)}</td>
-        <td>${fmtNum(r.wbEmailSend)}</td><td>${fmtPct(r.wbEmailOpen)}</td><td>${fmtPct(r.wbEmailCtr)}</td>
-        <td>${fmtPct(r.wbRegPage)}</td><td>${fmtNum(r.wbReg)}</td>
-        <td>${fmtNum(r.purchaseEnq)}</td><td>${fmtNum(r.eoiTickets)}</td><td>${fmtNum(r.trialsStarted)}</td>
-        <td style="white-space:nowrap">
-          <button class="btn-save" style="padding:3px 8px;font-size:11px;background:var(--acc)" onclick="startTrackerEdit('${r._id}')">Edit</button>
-          <button class="btn-del" style="margin-left:4px" onclick="delRow('weekly_tracker','${r._id}','_id')">Delete</button>
-        </td>
-      </tr>`;
-    }).join('') : '<tr><td colspan="15" style="text-align:center;color:var(--tl);padding:24px">No tracker entries yet.</td></tr>';
+        sec.rows.forEach(row => {
+          const cells = weeks.map(r => {
+            const val = r[row.key];
+            const disp = (val == null || val === '')
+              ? `<span style="color:#ccc">—</span>`
+              : row.fmt === 'pct' ? fmtPct(val) : fmtNum(val);
+            return `<td style="text-align:center;padding:5px 8px">${disp}</td>`;
+          }).join('');
+          bodyRows += `<tr>
+            <td style="padding:5px 10px 5px 20px;color:var(--tx);white-space:nowrap">${row.label}</td>
+            ${cells}
+          </tr>`;
+        });
+      });
+    } else {
+      bodyRows = `<tr><td colspan="${colSpan}" style="text-align:center;color:var(--tl);padding:32px">No tracker data yet — import Lucy's CSV or add a week manually.</td></tr>`;
+    }
 
     sc.innerHTML = `
       <div class="box">
         <div class="box-title">Weekly marketing tracker
-          <span style="font-size:11px;color:var(--tl);font-weight:400;margin-left:4px">Based on Lucy's spreadsheet: enter weekly actuals</span>
+          <span style="font-size:11px;color:var(--tl);font-weight:400;margin-left:6px">last ${weeks.length} weeks · metrics as rows, newest week on right</span>
         </div>
         <div class="tbl-scroll">
-          <table>
+          <table style="min-width:500px;border-collapse:collapse">
             <thead><tr>
-              <th>Week</th>
-              <th>JS Post Impr.</th><th>JM Post Impr.</th><th>LB Post Impr.</th>
-              <th>EDM Open %</th><th>EDM CTR %</th>
-              <th>Webinar Email Send</th><th>Webinar Email Open %</th><th>Webinar CTR %</th>
-              <th>Webinar Reg. page</th><th>Registrations</th>
-              <th>Purchase Enq.</th><th>EOI tickets</th><th>Trials started</th>
-              <th></th>
+              <th style="min-width:190px;text-align:left">Metric</th>
+              ${weekHeaders}
             </tr></thead>
-            <tbody>${trackerRowsHTML}</tbody>
+            <tbody>${bodyRows}</tbody>
           </table>
         </div>
       </div>
       <div class="form-section">
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
-          <button class="add-btn" onclick="toggleForm('tracker-form')">+ Add tracker week</button>
+          <button class="add-btn" onclick="toggleForm('tracker-form')">+ Add / edit week</button>
           <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:500;color:var(--acc);background:var(--acc2);border:1px solid var(--acc);border-radius:6px;padding:6px 12px">
-            ↑ Import CSV
+            ↑ Import CSV (Lucy's format)
             <input type="file" accept=".csv" style="display:none" onchange="importTrackerCSV(this)">
           </label>
-          <span style="font-size:11px;color:var(--tl)">Columns: Week, JS Impr., JM Impr., LB Impr., EDM Open%, EDM CTR%, WB Email Send, WB Email Open%, WB CTR%, WB Reg Page, Registrations, Purchase Enq., EOI Tickets, Trials Started</span>
+          <span style="font-size:11px;color:var(--tl)">Dates as column headers, metric names in first column — matches Lucy's spreadsheet layout</span>
         </div>
         <div id="tracker-form" style="display:none"><div class="form-box">
           <div class="form-grid">
@@ -3019,6 +3046,7 @@ function setContentSub(sub, rerender = true, data, outcomes) {
             <div class="form-group"><label>Webinar email CTR (%)</label><input type="number" id="tr2-wbEmailCtr" step=".1"></div>
             <div class="form-group"><label>Webinar reg. page visits (%)</label><input type="number" id="tr2-wbRegPage" step=".1"></div>
             <div class="form-group"><label>Webinar registrations</label><input type="number" id="tr2-wbReg"></div>
+            <div class="form-group"><label>Website visits (total users)</label><input type="number" id="tr2-websiteVisits"></div>
             <div class="form-group"><label>Purchase enquiries</label><input type="number" id="tr2-purchaseEnq"></div>
             <div class="form-group"><label>EOI tickets</label><input type="number" id="tr2-eoiTickets"></div>
             <div class="form-group"><label>Trials started</label><input type="number" id="tr2-trialsStarted"></div>
@@ -3080,8 +3108,10 @@ function save2MGrowth() {
 function saveTrackerWeek() {
   const week = document.getElementById('tr2-week').value;
   if (!week) { toast('Select a week.'); return; }
-  const fields = ['jsImp','jmImp','lbImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','purchaseEnq','eoiTickets','trialsStarted'];
-  const entry = { _id: 'trk-' + Date.now(), week };
+  const fields = ['jsImp','jmImp','lbImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','purchaseEnq','eoiTickets','trialsStarted'];
+  // Preserve existing _id if this week already exists
+  const existing = load('weekly_tracker').find(r => r.week === week);
+  const entry = { _id: existing?._id || ('trk-' + Date.now()), week };
   fields.forEach(f => {
     const v = document.getElementById('tr2-' + f)?.value;
     if (v !== '' && v != null && v !== undefined) entry[f] = Number(v);
@@ -3106,7 +3136,7 @@ function cancelTrackerEdit() {
 }
 
 function saveTrackerEdit(id) {
-  const fields = ['jsImp','jmImp','lbImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','purchaseEnq','eoiTickets','trialsStarted'];
+  const fields = ['jsImp','jmImp','lbImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','purchaseEnq','eoiTickets','trialsStarted'];
   const arr = load('weekly_tracker');
   const idx = arr.findIndex(r => r._id === id);
   if (idx < 0) { toast('Row not found.'); return; }
@@ -3123,6 +3153,40 @@ function saveTrackerEdit(id) {
   renderMarketing();
 }
 
+// Parse a date string from Lucy's CSV header (e.g. "6-Nov", "26-Mar", "1-Apr-25", ISO dates)
+function parseTrackerDate(str) {
+  if (!str || !str.trim()) return null;
+  str = str.trim();
+  // Try standard ISO / JS parse first
+  let d = new Date(str);
+  if (!isNaN(d.getTime()) && d.getFullYear() > 2000) {
+    return d.toISOString().split('T')[0];
+  }
+  // Match "6-Nov", "26-Mar", "1 Apr", "6-Nov-25", "6-Nov-2025"
+  const months = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+  const m = str.match(/^(\d{1,2})[\s\-\/]([a-zA-Z]{3})(?:[\s\-\/](\d{2,4}))?$/);
+  if (m) {
+    const day = parseInt(m[1]);
+    const mo  = months[m[2].toLowerCase()];
+    if (mo === undefined) return null;
+    let year = m[3]
+      ? (m[3].length === 2 ? 2000 + parseInt(m[3]) : parseInt(m[3]))
+      : new Date().getFullYear();
+    // If result is more than 6 months in the future, assume previous year
+    const candidate = new Date(year, mo, day);
+    if (candidate - new Date() > 180 * 86400000) year--;
+    return new Date(year, mo, day).toISOString().split('T')[0];
+  }
+  return null;
+}
+
+function delTrackerWeek(id) {
+  if (!confirm('Delete tracker data for this week?')) return;
+  save('weekly_tracker', load('weekly_tracker').filter(r => r._id !== id));
+  toast('Week deleted.');
+  renderMarketing();
+}
+
 function importTrackerCSV(input) {
   const file = input.files[0];
   if (!file) return;
@@ -3130,38 +3194,110 @@ function importTrackerCSV(input) {
     header: false, skipEmptyLines: true,
     complete: (results) => {
       const rows = results.data;
-      let imported = 0;
-      const existing = load('weekly_tracker');
-      const map = Object.fromEntries(existing.map(r => [r.week, r]));
-      rows.forEach(p => {
-        if (!p[0] || p[0].toLowerCase().includes('week') || p[0].toLowerCase().includes('date')) return;
-        const dt = new Date(p[0]);
-        if (isNaN(dt.getTime())) return;
-        const week = dt.toISOString().split('T')[0];
-        const existing = map[week] || { _id: 'tr-' + Date.now() + '-' + imported };
-        map[week] = {
-          ...existing,
-          week,
-          jsImp:        p[1]  !== '' ? Number(p[1])  : existing.jsImp,
-          jmImp:        p[2]  !== '' ? Number(p[2])  : existing.jmImp,
-          lbImp:        p[3]  !== '' ? Number(p[3])  : existing.lbImp,
-          edmOpen:      p[4]  !== '' ? Number(p[4])  : existing.edmOpen,
-          edmCtr:       p[5]  !== '' ? Number(p[5])  : existing.edmCtr,
-          wbEmailSend:  p[6]  !== '' ? Number(p[6])  : existing.wbEmailSend,
-          wbEmailOpen:  p[7]  !== '' ? Number(p[7])  : existing.wbEmailOpen,
-          wbEmailCtr:   p[8]  !== '' ? Number(p[8])  : existing.wbEmailCtr,
-          wbRegPage:    p[9]  !== '' ? Number(p[9])  : existing.wbRegPage,
-          wbReg:        p[10] !== '' ? Number(p[10]) : existing.wbReg,
-          purchaseEnq:  p[11] !== '' ? Number(p[11]) : existing.purchaseEnq,
-          eoiTickets:   p[12] !== '' ? Number(p[12]) : existing.eoiTickets,
-          trialsStarted:p[13] !== '' ? Number(p[13]) : existing.trialsStarted,
-        };
-        imported++;
+      if (rows.length < 2) { toast('CSV appears empty.'); return; }
+
+      // Row 0 = header: [label col, date1, date2, ...]
+      const headerRow = rows[0];
+      const dateKeys = []; // ISO date string per column (null if unparseable)
+      for (let c = 1; c < headerRow.length; c++) {
+        dateKeys.push(parseTrackerDate(String(headerRow[c] || '').trim()));
+      }
+
+      // Section-aware field mapping
+      const SECTION_MAP = {
+        linkedin: {
+          'js post impressions': 'jsImp',
+          'jm post impressions': 'jmImp',
+          'lb post impressions': 'lbImp',
+        },
+        edm: {
+          'email open rate':     'edmOpen',
+          'open rate':           'edmOpen',
+          'click through rate':  'edmCtr',
+          'click-through rate':  'edmCtr',
+          'ctr':                 'edmCtr',
+        },
+        webinar: {
+          'email send':              'wbEmailSend',
+          'email sends':             'wbEmailSend',
+          'email open rate':         'wbEmailOpen',
+          'open rate':               'wbEmailOpen',
+          'click through rate':      'wbEmailCtr',
+          'click-through rate':      'wbEmailCtr',
+          'ctr':                     'wbEmailCtr',
+          'event registration page': 'wbRegPage',
+          'registration page':       'wbRegPage',
+          'registrations':           'wbReg',
+        },
+        website: {
+          'total users':             'websiteVisits',
+          'total users (visits)':    'websiteVisits',
+          'website visits':          'websiteVisits',
+          'purchase enquiries':      'purchaseEnq',
+          'eoi tickets':             'eoiTickets',
+          'eoi':                     'eoiTickets',
+          'trials started':          'trialsStarted',
+        },
+      };
+
+      // Detect section from a row label
+      function detectSection(label) {
+        const l = label.toLowerCase();
+        if (l.includes('linkedin'))                           return 'linkedin';
+        if (l.includes('edm') || l.includes('2m growth') || l.includes('email marketing')) return 'edm';
+        if (l.includes('webinar'))                            return 'webinar';
+        if (l.includes('website') || l.includes('landing page')) return 'website';
+        return null;
+      }
+
+      // Accumulate values per week
+      const dataMap = {}; // { isoDate: { fieldKey: value } }
+      dateKeys.forEach(dk => { if (dk) dataMap[dk] = dataMap[dk] || {}; });
+
+      let currentSection = null;
+
+      for (let ri = 1; ri < rows.length; ri++) {
+        const row = rows[ri];
+        const label = String(row[0] || '').trim();
+        if (!label) continue;
+
+        // Check if this row is a section header
+        const sec = detectSection(label);
+        if (sec) { currentSection = sec; continue; }
+        if (!currentSection) continue;
+
+        // Look up the field key for this metric label
+        const labelNorm = label.toLowerCase().replace(/\s+/g, ' ');
+        const fieldKey  = SECTION_MAP[currentSection]?.[labelNorm];
+        if (!fieldKey) continue;
+
+        // Read each column's value
+        for (let c = 1; c < row.length; c++) {
+          const dk = dateKeys[c - 1];
+          if (!dk) continue;
+          const raw = String(row[c] || '').trim().replace(/%/g, '').replace(/,/g, '');
+          if (!raw || raw === '-' || raw === '—') continue;
+          const num = parseFloat(raw);
+          if (!isNaN(num)) dataMap[dk][fieldKey] = num;
+        }
+      }
+
+      // Merge with existing tracker records
+      const existing   = load('weekly_tracker');
+      const existingMap = Object.fromEntries(existing.map(r => [r.week, r]));
+      let count = 0;
+      Object.entries(dataMap).forEach(([week, fields]) => {
+        if (!Object.keys(fields).length) return;
+        const prev = existingMap[week] || { _id: 'trk-' + Date.now() + '-' + (++count) };
+        existingMap[week] = { ...prev, week, ...fields };
+        count++;
       });
-      const merged = Object.values(map).sort((a,b) => a.week > b.week ? 1 : -1);
+
+      const merged = Object.values(existingMap).sort((a,b) => a.week > b.week ? 1 : -1);
       save('weekly_tracker', merged);
       input.value = '';
-      toast('Imported ' + imported + ' tracker weeks.');
+      const weekCount = Object.values(dataMap).filter(f => Object.keys(f).length > 0).length;
+      toast(`Imported ${weekCount} weeks from CSV.`);
       renderMarketing();
     },
     error: err => toast('CSV parse error: ' + err.message)
