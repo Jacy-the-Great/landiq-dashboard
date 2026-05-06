@@ -276,7 +276,7 @@ async function sendOtp() {
   const btn = document.getElementById('lock-send-btn');
   btn.disabled = true; btn.textContent = 'Sending…'; showLockErr('');
   try {
-    const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+    const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false } });
     if (error) throw error;
     _authEmail = email;
     document.getElementById('lock-step-email').style.display = 'none';
