@@ -317,7 +317,7 @@ async function _doInitAuth(session) {
   _authSession = session;
   _authState   = 'authenticated';
   // Persist in sessionStorage so reload within same tab skips re-auth
-  try { sessionStorage.setItem('liq_session', JSON.stringify(session)); } catch {}
+  try { localStorage.setItem('liq_session', JSON.stringify(session)); } catch {}
   scheduleTokenRefresh(session.expires_at);
   showApp();
 }
@@ -342,7 +342,7 @@ async function doTokenRefresh() {
     console.warn('Token refresh failed:', e.message);
     _authState = 'unauthenticated';
     _authSession = null;
-    sessionStorage.removeItem('liq_session');
+    localStorage.removeItem('liq_session');
     toast('Session expired — please sign in again.');
     showLock();
   }
@@ -352,7 +352,7 @@ function signOut() {
   if (_refreshTimer) clearTimeout(_refreshTimer);
   _authSession = null;
   _authState   = 'unauthenticated';
-  sessionStorage.removeItem('liq_session');
+  localStorage.removeItem('liq_session');
   sb.auth.signOut().catch(() => {});
   showLock();
 }
@@ -393,7 +393,7 @@ document.getElementById('lock-otp').addEventListener('keydown',   e => { if (e.k
   document.getElementById('lock-step-loading').style.display = 'block';
   let restored = false;
   try {
-    const stored = JSON.parse(sessionStorage.getItem('liq_session') || 'null');
+    const stored = JSON.parse(localStorage.getItem('liq_session') || 'null');
     if (stored?.access_token && stored?.refresh_token) {
       const { data, error } = await sb.auth.setSession({
         access_token:  stored.access_token,
