@@ -331,45 +331,66 @@ async function loadAll() {
       fetchAllRows('liq_pipedrive_people', 'raw, imported_at')
     ]);
     if (mainRes.error) throw mainRes.error;
-    mainRes.data.forEach(row => { _cache[row.key] = row.value || []; });
+    mainRes.data.forEach(row => {
+      _cache[row.key] = row.value || [];
+      lsWrite(row.key, row.value || []); // keep localStorage in sync
+    });
     _pd_deals  = dealsRows.map(r => r.raw);
     _pd_people = peopleRows.map(r => r.raw);
     if (dealsRows.length)  _pd_deals_imported_at  = dealsRows[0].imported_at;
     if (peopleRows.length) _pd_people_imported_at = peopleRows[0].imported_at;
 
-    // ── Auto-restore: if Supabase is empty but localStorage has data, push it back ──
-    let restored = 0;
-    Object.keys(KEYS).forEach(k => {
-      const sbKey = KEYS[k];
-      if (!_cache[sbKey] || _cache[sbKey].length === 0) {
-        const backup = lsRead(sbKey);
-        if (backup && backup.length > 0) {
-          _cache[sbKey] = backup;
-          // Re-push silently to Supabase
-          sb.from('dashboard_data')
-            .upsert({ key: sbKey, value: backup, updated_at: new Date().toISOString() })
-            .then(({ error }) => { if (error) console.warn('Restore push failed for', sbKey, error); });
-          restored++;
-        }
+    // ── Auto-restore: if main table is missing keys, try Supabase backup table first ──
+    const missingKeys = Object.values(KEYS).filter(k => !_cache[k] || _cache[k].length === 0);
+    if (missingKeys.length > 0) {
+      const { data: backupRows } = await sb.rpc('get_latest_backups');
+      if (backupRows?.length) {
+        let restored = 0;
+        backupRows.forEach(row => {
+          if (missingKeys.includes(row.key) && row.value?.length > 0) {
+            _cache[row.key] = row.value;
+            lsWrite(row.key, row.value);
+            // Re-push to main dashboard_data table
+            sb.from('dashboard_data')
+              .upsert({ key: row.key, value: row.value, updated_at: new Date().toISOString() })
+              .then(({ error }) => { if (error) console.warn('Restore push failed for', row.key, error); });
+            restored++;
+          }
+        });
+        if (restored > 0) toast(`⚡ Restored ${restored} data set${restored>1?'s':''} from Supabase backup`);
       }
-      // Always keep localStorage in sync with whatever is in cache
-      if (_cache[sbKey]?.length > 0) lsWrite(sbKey, _cache[sbKey]);
-    });
-    if (restored > 0) toast(`⚡ Restored ${restored} data set${restored>1?'s':''} from local backup`);
 
-    _dbStatus = { ok: true, error: null, deals: dealsRows.length, people: peopleRows.length, dashboardRows: mainRes.data.length + restored, checkedAt: new Date() };
+      // ── Tertiary: localStorage fallback for anything still missing ──
+      Object.keys(KEYS).forEach(k => {
+        const sbKey = KEYS[k];
+        if (!_cache[sbKey] || _cache[sbKey].length === 0) {
+          const local = lsRead(sbKey);
+          if (local?.length > 0) {
+            _cache[sbKey] = local;
+            // Push back to both main table and backup
+            sb.from('dashboard_data')
+              .upsert({ key: sbKey, value: local, updated_at: new Date().toISOString() })
+              .then(() => {});
+            sb.from('dashboard_backups')
+              .insert({ key: sbKey, value: local })
+              .then(() => {});
+          }
+        }
+      });
+    }
+
+    const totalRows = Object.values(KEYS).filter(k => _cache[k]?.length > 0).length;
+    _dbStatus = { ok: true, error: null, deals: dealsRows.length, people: peopleRows.length, dashboardRows: totalRows, checkedAt: new Date() };
   } catch (e) {
     console.error('Supabase load failed:', e);
-    // Fall back to localStorage entirely
+    // Full fallback: localStorage only
     let restoredFromLocal = 0;
     Object.keys(KEYS).forEach(k => {
       const backup = lsRead(KEYS[k]);
-      if (backup && backup.length > 0) { _cache[KEYS[k]] = backup; restoredFromLocal++; }
+      if (backup?.length > 0) { _cache[KEYS[k]] = backup; restoredFromLocal++; }
     });
     _dbStatus = { ok: false, error: e.message || String(e), deals: 0, people: 0, dashboardRows: restoredFromLocal, checkedAt: new Date() };
-    if (e.message?.includes('RLS') || e.message?.includes('policy') || e.message?.includes('permission')) {
-      toast('⚠️ Database access blocked (RLS). Run supabase_harden.sql to fix.');
-    } else if (e.message?.includes('timeout')) {
+    if (e.message?.includes('timeout')) {
       toast('⚠️ Database timeout. Try refreshing in a moment.');
     } else {
       toast(`⚠️ DB offline — showing local backup (${restoredFromLocal} sets)`);
@@ -445,17 +466,25 @@ async function refreshPostHog() {
 function save(key, arr) {
   const sbKey = KEYS[key];
   _cache[sbKey] = arr;
-  lsWrite(sbKey, arr); // always write to localStorage immediately
+  lsWrite(sbKey, arr); // 1. localStorage — instant, works offline
+
+  // 2. Main table — upsert (overwrite latest)
   sb.from('dashboard_data')
     .upsert({ key: sbKey, value: arr, updated_at: new Date().toISOString() })
     .then(({ error }) => {
       if (error) {
         console.error('Supabase save failed:', error);
-        toast('⚠️ Save failed — data kept locally. Error: ' + (error.message || error.code || 'unknown'));
-        _dbStatus.ok = false;
-        _dbStatus.error = error.message;
+        toast('⚠️ Cloud save failed — data kept locally. ' + (error.message || error.code || ''));
+        _dbStatus.ok = false; _dbStatus.error = error.message;
         updateDbStatusPill();
       }
+    });
+
+  // 3. Backup table — append (never overwrites, survives main table wipes)
+  sb.from('dashboard_backups')
+    .insert({ key: sbKey, value: arr })
+    .then(({ error }) => {
+      if (error) console.warn('Backup insert failed for', sbKey, error.message);
     });
 }
 
