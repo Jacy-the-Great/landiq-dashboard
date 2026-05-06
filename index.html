@@ -212,6 +212,10 @@ tr:hover td{background:#fafcfe}
     <div class="h-logo">Land <span>iQ</span> Performance</div>
     <div class="h-tag">INTERNAL</div>
     <div class="h-space"></div>
+    <div id="db-status-pill" style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--tl);background:var(--sur);border:1px solid var(--bd);border-radius:20px;padding:3px 10px;cursor:default" title="Database connection status">
+      <span id="db-status-dot" style="width:7px;height:7px;border-radius:50%;background:#ccc;display:inline-block"></span>
+      <span id="db-status-text">Connecting…</span>
+    </div>
     <div class="h-actions">
       <button class="h-link" onclick="exportData()">⬇ Export</button>
       <button class="h-link" onclick="document.getElementById('import-file').click()">⬆ Import</button>
@@ -302,6 +306,8 @@ async function fetchAllRows(table, columns) {
   return all;
 }
 
+let _dbStatus = { ok: false, error: null, deals: 0, people: 0, dashboardRows: 0, checkedAt: null };
+
 async function loadAll() {
   try {
     const [mainRes, dealsRows, peopleRows] = await Promise.all([
@@ -315,9 +321,18 @@ async function loadAll() {
     _pd_people = peopleRows.map(r => r.raw);
     if (dealsRows.length)  _pd_deals_imported_at  = dealsRows[0].imported_at;
     if (peopleRows.length) _pd_people_imported_at = peopleRows[0].imported_at;
+    _dbStatus = { ok: true, error: null, deals: dealsRows.length, people: peopleRows.length, dashboardRows: mainRes.data.length, checkedAt: new Date() };
   } catch (e) {
     console.error('Supabase load failed:', e);
-    toast('Could not connect to database. Check your connection.');
+    _dbStatus = { ok: false, error: e.message || String(e), deals: 0, people: 0, dashboardRows: 0, checkedAt: new Date() };
+    // Diagnose the specific problem
+    if (e.message?.includes('RLS') || e.message?.includes('policy') || e.message?.includes('permission')) {
+      toast('⚠️ Database access blocked (RLS). Run supabase_harden.sql to fix.');
+    } else if (e.message?.includes('timeout')) {
+      toast('⚠️ Database timeout. Try refreshing in a moment.');
+    } else {
+      toast('⚠️ Could not load database. Check connection.');
+    }
   }
 }
 
@@ -4810,8 +4825,26 @@ function renderPdOptimax(sc) {
   });
 }
 
+function updateDbStatusPill() {
+  const dot  = document.getElementById('db-status-dot');
+  const text = document.getElementById('db-status-text');
+  if (!dot || !text) return;
+  if (_dbStatus.ok) {
+    dot.style.background  = '#2a7a4b';
+    text.textContent = `DB · ${_dbStatus.deals} deals · ${_dbStatus.dashboardRows} keys`;
+    document.getElementById('db-status-pill').title =
+      `Connected · ${_dbStatus.deals} deals · ${_dbStatus.people} contacts · ${_dbStatus.dashboardRows} data keys · checked ${_dbStatus.checkedAt?.toLocaleTimeString()}`;
+  } else {
+    dot.style.background  = '#e05252';
+    text.textContent = 'DB offline';
+    document.getElementById('db-status-pill').title =
+      `Error: ${_dbStatus.error || 'unknown'} · Run supabase_harden.sql if RLS issue`;
+  }
+}
+
 async function init() {
   await loadAll();
+  updateDbStatusPill();
   buildNav();
   renderTab('home');
   // Load PostHog live data in background (non-blocking)
