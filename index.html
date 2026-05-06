@@ -308,6 +308,21 @@ async function fetchAllRows(table, columns) {
 
 let _dbStatus = { ok: false, error: null, deals: 0, people: 0, dashboardRows: 0, checkedAt: null };
 
+// ── Local storage backup helpers ─────────────────────────────────
+// Every save() writes to localStorage as well as Supabase.
+// On load, if Supabase returns empty for a key but localStorage has data,
+// we restore from local and re-push to Supabase automatically.
+const LS_PREFIX = 'liq_bk_';
+function lsWrite(sbKey, arr) {
+  try { localStorage.setItem(LS_PREFIX + sbKey, JSON.stringify(arr)); } catch(e) {}
+}
+function lsRead(sbKey) {
+  try {
+    const raw = localStorage.getItem(LS_PREFIX + sbKey);
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) { return null; }
+}
+
 async function loadAll() {
   try {
     const [mainRes, dealsRows, peopleRows] = await Promise.all([
@@ -321,17 +336,43 @@ async function loadAll() {
     _pd_people = peopleRows.map(r => r.raw);
     if (dealsRows.length)  _pd_deals_imported_at  = dealsRows[0].imported_at;
     if (peopleRows.length) _pd_people_imported_at = peopleRows[0].imported_at;
-    _dbStatus = { ok: true, error: null, deals: dealsRows.length, people: peopleRows.length, dashboardRows: mainRes.data.length, checkedAt: new Date() };
+
+    // ── Auto-restore: if Supabase is empty but localStorage has data, push it back ──
+    let restored = 0;
+    Object.keys(KEYS).forEach(k => {
+      const sbKey = KEYS[k];
+      if (!_cache[sbKey] || _cache[sbKey].length === 0) {
+        const backup = lsRead(sbKey);
+        if (backup && backup.length > 0) {
+          _cache[sbKey] = backup;
+          // Re-push silently to Supabase
+          sb.from('dashboard_data')
+            .upsert({ key: sbKey, value: backup, updated_at: new Date().toISOString() })
+            .then(({ error }) => { if (error) console.warn('Restore push failed for', sbKey, error); });
+          restored++;
+        }
+      }
+      // Always keep localStorage in sync with whatever is in cache
+      if (_cache[sbKey]?.length > 0) lsWrite(sbKey, _cache[sbKey]);
+    });
+    if (restored > 0) toast(`⚡ Restored ${restored} data set${restored>1?'s':''} from local backup`);
+
+    _dbStatus = { ok: true, error: null, deals: dealsRows.length, people: peopleRows.length, dashboardRows: mainRes.data.length + restored, checkedAt: new Date() };
   } catch (e) {
     console.error('Supabase load failed:', e);
-    _dbStatus = { ok: false, error: e.message || String(e), deals: 0, people: 0, dashboardRows: 0, checkedAt: new Date() };
-    // Diagnose the specific problem
+    // Fall back to localStorage entirely
+    let restoredFromLocal = 0;
+    Object.keys(KEYS).forEach(k => {
+      const backup = lsRead(KEYS[k]);
+      if (backup && backup.length > 0) { _cache[KEYS[k]] = backup; restoredFromLocal++; }
+    });
+    _dbStatus = { ok: false, error: e.message || String(e), deals: 0, people: 0, dashboardRows: restoredFromLocal, checkedAt: new Date() };
     if (e.message?.includes('RLS') || e.message?.includes('policy') || e.message?.includes('permission')) {
       toast('⚠️ Database access blocked (RLS). Run supabase_harden.sql to fix.');
     } else if (e.message?.includes('timeout')) {
       toast('⚠️ Database timeout. Try refreshing in a moment.');
     } else {
-      toast('⚠️ Could not load database. Check connection.');
+      toast(`⚠️ DB offline — showing local backup (${restoredFromLocal} sets)`);
     }
   }
 }
@@ -402,10 +443,20 @@ async function refreshPostHog() {
 }
 
 function save(key, arr) {
-  _cache[KEYS[key]] = arr;
+  const sbKey = KEYS[key];
+  _cache[sbKey] = arr;
+  lsWrite(sbKey, arr); // always write to localStorage immediately
   sb.from('dashboard_data')
-    .upsert({ key: KEYS[key], value: arr, updated_at: new Date().toISOString() })
-    .then(({ error }) => { if (error) console.error('Supabase save failed:', error); });
+    .upsert({ key: sbKey, value: arr, updated_at: new Date().toISOString() })
+    .then(({ error }) => {
+      if (error) {
+        console.error('Supabase save failed:', error);
+        toast('⚠️ Save failed — data kept locally. Error: ' + (error.message || error.code || 'unknown'));
+        _dbStatus.ok = false;
+        _dbStatus.error = error.message;
+        updateDbStatusPill();
+      }
+    });
 }
 
 function exportData() {
