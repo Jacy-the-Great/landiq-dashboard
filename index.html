@@ -262,6 +262,24 @@ let _authEmail   = null;
 let _refreshTimer = null;
 let _initInFlight = null; // deduplication: prevents concurrent initialiseDatabaseAuth calls
 
+// ─────────────────────────────────────────
+// SUPABASE CLIENT (must be defined before any sb.auth.* calls below)
+// ─────────────────────────────────────────
+const SUPABASE_URL = 'https://ysdonnjezvoyrrizadik.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlzZG9ubmplenZveXJyaXphZGlrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2ODY4MzYsImV4cCI6MjA5MzI2MjgzNn0.9bJ2FPEqV6NEtrnS567HBbwx0zcyQfshfcqWVRvH7RQ';
+// Auth config per Database Authentication protocol:
+// - persistSession: false  (app manages sessions manually)
+// - autoRefreshToken: false (we schedule refresh 5 min before expiry)
+// - null storage (no cookies / localStorage leaking tokens)
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: {
+    persistSession:     false,
+    autoRefreshToken:   false,
+    detectSessionInUrl: true,   // needed to capture the magic link token on redirect
+    storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+  }
+});
+
 function showLockErr(msg) { document.getElementById('lock-err').textContent = msg || ''; }
 
 function backToEmail() {
@@ -386,12 +404,20 @@ function showLock() {
 // Keyboard shortcut
 document.getElementById('lock-email').addEventListener('keydown', e => { if (e.key === 'Enter') sendMagicLink(); });
 
-// ── On page load: try to restore session from sessionStorage ─────
+// ── On page load: restore session or show lock ───────────────────
+// onAuthStateChange handles magic link redirects (fires SIGNED_IN before
+// this IIFE can check localStorage). We must not call showLock() if
+// onAuthStateChange already authenticated the user.
 (async () => {
-  // Show loading state briefly
+  // Show loading briefly while we check
   document.getElementById('lock').style.display = 'flex';
   document.getElementById('lock-step-email').style.display   = 'none';
   document.getElementById('lock-step-loading').style.display = 'block';
+
+  // Give onAuthStateChange a tick to fire first (handles magic link URLs)
+  await new Promise(r => setTimeout(r, 100));
+  if (_authState === 'authenticated') return; // already handled by onAuthStateChange
+
   let restored = false;
   try {
     const stored = JSON.parse(localStorage.getItem('liq_session') || 'null');
@@ -401,33 +427,22 @@ document.getElementById('lock-email').addEventListener('keydown', e => { if (e.k
         refresh_token: stored.refresh_token
       });
       if (!error && data?.session) {
-        await initialiseDatabaseAuth(data.session);
+        // onAuthStateChange will fire SIGNED_IN and call initialiseDatabaseAuth
         restored = true;
+        // Wait briefly for the event to process
+        await new Promise(r => setTimeout(r, 200));
       }
     }
   } catch (e) {
     console.warn('Session restore failed:', e.message);
   }
-  if (!restored) showLock();
+  // Only show lock if auth hasn't succeeded
+  if (_authState !== 'authenticated') showLock();
 })();
 
 // ─────────────────────────────────────────
 // DATA LAYER (Supabase)
 // ─────────────────────────────────────────
-const SUPABASE_URL = 'https://ysdonnjezvoyrrizadik.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlzZG9ubmplenZveXJyaXphZGlrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2ODY4MzYsImV4cCI6MjA5MzI2MjgzNn0.9bJ2FPEqV6NEtrnS567HBbwx0zcyQfshfcqWVRvH7RQ';
-// Auth config per Database Authentication protocol:
-// - persistSession: false  (app manages sessions manually)
-// - autoRefreshToken: false (we schedule refresh 5 min before expiry)
-// - null storage (no cookies / localStorage leaking tokens)
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-  auth: {
-    persistSession:     false,
-    autoRefreshToken:   false,
-    detectSessionInUrl: true,   // needed to capture the magic link token on redirect
-    storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
-  }
-});
 
 const KEYS = { sales:'sales', trials:'trials', website:'website', website_daily:'website_daily', training:'training', content:'content', webinars:'webinars', linkedin_weekly:'linkedin_weekly', edm_2m:'edm_2m', weekly_tracker:'weekly_tracker', activity_giraffe:'activity_giraffe', activity_sdk:'activity_sdk', activity_labs:'activity_labs' };
 
