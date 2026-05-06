@@ -360,10 +360,11 @@ async function initialiseDatabaseAuth(session) {
 
 async function _doInitAuth(session) {
   if (!session?.access_token) throw new Error('No session returned');
-  await sb.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token });
+  // Note: do NOT call sb.auth.setSession() here — the client already has the
+  // session set (by signInWithPassword, magic link URL parsing, or the IIFE).
+  // Calling setSession again fires a spurious SIGNED_OUT event which hides the app.
   _authSession = session;
   _authState   = 'authenticated';
-  // Persist in sessionStorage so reload within same tab skips re-auth
   try { localStorage.setItem('liq_session', JSON.stringify(session)); } catch {}
   scheduleTokenRefresh(session.expires_at);
   showApp();
