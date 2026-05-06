@@ -201,13 +201,17 @@ tr:hover td{background:#fafcfe}
     <div class="lock-logo">Land <span>iQ</span> Performance</div>
     <div class="lock-sub">Internal · Restricted Access</div>
 
-    <!-- Step 1: Email input -->
+    <!-- Step 1: Email + Password input -->
     <div id="lock-step-email">
       <input class="lock-input" type="email" id="lock-email" placeholder="Enter your email" autocomplete="email">
-      <button class="lock-btn" id="lock-send-btn" onclick="sendMagicLink()">Send sign-in link</button>
+      <input class="lock-input" type="password" id="lock-password" placeholder="Password" autocomplete="current-password" style="margin-top:8px">
+      <button class="lock-btn" id="lock-send-btn" onclick="signInWithPassword()">Sign in</button>
+      <div style="text-align:center;margin-top:10px">
+        <button onclick="sendMagicLink()" style="background:none;border:none;color:#7a9cbf;font-size:12px;cursor:pointer">Send magic link instead</button>
+      </div>
     </div>
 
-    <!-- Step 2: Waiting for click -->
+    <!-- Step 2: Waiting for magic link click -->
     <div id="lock-step-sent" style="display:none;text-align:center">
       <div style="font-size:32px;margin-bottom:12px">📬</div>
       <div style="font-size:14px;font-weight:600;margin-bottom:6px">Check your inbox</div>
@@ -286,6 +290,23 @@ function backToEmail() {
   document.getElementById('lock-step-sent').style.display  = 'none';
   document.getElementById('lock-step-email').style.display = 'block';
   showLockErr('');
+}
+
+async function signInWithPassword() {
+  const email = document.getElementById('lock-email').value.trim().toLowerCase();
+  const password = document.getElementById('lock-password').value;
+  if (!email || !password) { showLockErr('Enter your email and password.'); return; }
+  const btn = document.getElementById('lock-send-btn');
+  btn.disabled = true; btn.textContent = 'Signing in…'; showLockErr('');
+  try {
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    await initialiseDatabaseAuth(data.session);
+  } catch (e) {
+    showLockErr(e.message || 'Sign in failed. Check your email and password.');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Sign in';
+  }
 }
 
 async function sendMagicLink() {
@@ -402,7 +423,8 @@ function showLock() {
 }
 
 // Keyboard shortcut
-document.getElementById('lock-email').addEventListener('keydown', e => { if (e.key === 'Enter') sendMagicLink(); });
+document.getElementById('lock-email').addEventListener('keydown', e => { if (e.key === 'Enter') signInWithPassword(); });
+document.getElementById('lock-password').addEventListener('keydown', e => { if (e.key === 'Enter') signInWithPassword(); });
 
 // ── On page load: restore session or show lock ───────────────────
 // onAuthStateChange handles magic link redirects (fires SIGNED_IN before
