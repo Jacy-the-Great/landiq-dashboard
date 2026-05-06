@@ -201,21 +201,21 @@ tr:hover td{background:#fafcfe}
     <div class="lock-logo">Land <span>iQ</span> Performance</div>
     <div class="lock-sub">Internal · Restricted Access</div>
 
-    <!-- Step 1: Email -->
+    <!-- Step 1: Email input -->
     <div id="lock-step-email">
       <input class="lock-input" type="email" id="lock-email" placeholder="Enter your email" autocomplete="email">
-      <button class="lock-btn" id="lock-send-btn" onclick="sendOtp()">Send code</button>
+      <button class="lock-btn" id="lock-send-btn" onclick="sendMagicLink()">Send sign-in link</button>
     </div>
 
-    <!-- Step 2: OTP code -->
-    <div id="lock-step-otp" style="display:none">
-      <div style="font-size:13px;color:#666;margin-bottom:12px;text-align:center">Check your email for a 6-digit code</div>
-      <input class="lock-input" type="text" id="lock-otp" placeholder="6-digit code" autocomplete="one-time-code" maxlength="6" inputmode="numeric">
-      <button class="lock-btn" id="lock-verify-btn" onclick="verifyOtpCode()">Verify</button>
-      <button onclick="backToEmail()" style="background:none;border:none;color:#999;font-size:12px;cursor:pointer;margin-top:8px;display:block;width:100%;text-align:center">← Use a different email</button>
+    <!-- Step 2: Waiting for click -->
+    <div id="lock-step-sent" style="display:none;text-align:center">
+      <div style="font-size:32px;margin-bottom:12px">📬</div>
+      <div style="font-size:14px;font-weight:600;margin-bottom:6px">Check your inbox</div>
+      <div style="font-size:12px;color:#888;margin-bottom:16px">Click the sign-in link we sent to <span id="lock-sent-email" style="font-weight:500;color:#555"></span></div>
+      <button onclick="backToEmail()" style="background:none;border:none;color:#999;font-size:12px;cursor:pointer">← Use a different email</button>
     </div>
 
-    <!-- Session check loader -->
+    <!-- Session restore loader -->
     <div id="lock-step-loading" style="display:none;text-align:center;color:#999;font-size:13px;padding:16px 0">Checking session…</div>
 
     <div class="lock-err" id="lock-err"></div>
@@ -265,44 +265,47 @@ let _initInFlight = null; // deduplication: prevents concurrent initialiseDataba
 function showLockErr(msg) { document.getElementById('lock-err').textContent = msg || ''; }
 
 function backToEmail() {
-  document.getElementById('lock-step-otp').style.display   = 'none';
+  document.getElementById('lock-step-sent').style.display  = 'none';
   document.getElementById('lock-step-email').style.display = 'block';
   showLockErr('');
 }
 
-async function sendOtp() {
+async function sendMagicLink() {
   const email = document.getElementById('lock-email').value.trim().toLowerCase();
   if (!email || !email.includes('@')) { showLockErr('Enter a valid email address.'); return; }
   const btn = document.getElementById('lock-send-btn');
   btn.disabled = true; btn.textContent = 'Sending…'; showLockErr('');
   try {
-    const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false } });
+    const { error } = await sb.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser:  false,
+        emailRedirectTo:   window.location.href.split('#')[0], // redirect back to this page
+      }
+    });
     if (error) throw error;
     _authEmail = email;
     document.getElementById('lock-step-email').style.display = 'none';
-    document.getElementById('lock-step-otp').style.display   = 'block';
-    document.getElementById('lock-otp').focus();
+    document.getElementById('lock-step-sent').style.display  = 'block';
+    document.getElementById('lock-sent-email').textContent   = email;
   } catch (e) {
-    showLockErr(e.message || 'Failed to send code. Try again.');
+    showLockErr(e.message?.includes('not found') || e.message?.includes('Invalid')
+      ? 'This email isn\'t authorised. Ask your admin to add you.'
+      : (e.message || 'Failed to send link. Try again.'));
   } finally {
-    btn.disabled = false; btn.textContent = 'Send code';
+    btn.disabled = false; btn.textContent = 'Send sign-in link';
   }
 }
 
-async function verifyOtpCode() {
-  const token = document.getElementById('lock-otp').value.trim();
-  if (!token || token.length < 6) { showLockErr('Enter the 6-digit code from your email.'); return; }
-  const btn = document.getElementById('lock-verify-btn');
-  btn.disabled = true; btn.textContent = 'Verifying…'; showLockErr('');
-  try {
-    const { data, error } = await sb.auth.verifyOtp({ email: _authEmail, token, type: 'email' });
-    if (error) throw error;
-    await initialiseDatabaseAuth(data.session);
-  } catch (e) {
-    showLockErr(e.message || 'Invalid or expired code. Try again.');
-    btn.disabled = false; btn.textContent = 'Verify';
+// Listen for Supabase auth events — fires when magic link is clicked and user lands back
+sb.auth.onAuthStateChange(async (event, session) => {
+  if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session) {
+    await initialiseDatabaseAuth(session);
   }
-}
+  if (event === 'SIGNED_OUT') {
+    showLock();
+  }
+});
 
 async function initialiseDatabaseAuth(session) {
   // Deduplication: if already in-flight, return same promise
@@ -374,16 +377,14 @@ function showLock() {
   document.getElementById('lock').style.display = 'flex';
   document.getElementById('lock-step-loading').style.display = 'none';
   document.getElementById('lock-step-email').style.display   = 'block';
-  document.getElementById('lock-step-otp').style.display     = 'none';
+  document.getElementById('lock-step-sent').style.display    = 'none';
   const e = document.getElementById('lock-email');
-  const o = document.getElementById('lock-otp');
-  if (e) e.value = ''; if (o) o.value = '';
+  if (e) e.value = '';
   showLockErr('');
 }
 
-// Keyboard shortcuts for OTP forms
-document.getElementById('lock-email').addEventListener('keydown', e => { if (e.key === 'Enter') sendOtp(); });
-document.getElementById('lock-otp').addEventListener('keydown',   e => { if (e.key === 'Enter') verifyOtpCode(); });
+// Keyboard shortcut
+document.getElementById('lock-email').addEventListener('keydown', e => { if (e.key === 'Enter') sendMagicLink(); });
 
 // ── On page load: try to restore session from sessionStorage ─────
 (async () => {
@@ -423,7 +424,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: {
     persistSession:     false,
     autoRefreshToken:   false,
-    detectSessionInUrl: false,
+    detectSessionInUrl: true,   // needed to capture the magic link token on redirect
     storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
   }
 });
