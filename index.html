@@ -196,12 +196,28 @@ tr:hover td{background:#fafcfe}
 <body>
 
 <!-- LOCK SCREEN -->
-<div id="lock">
+<div id="lock" style="display:none">
   <div class="lock-card">
     <div class="lock-logo">Land <span>iQ</span> Performance</div>
     <div class="lock-sub">Internal · Restricted Access</div>
-    <input class="lock-input" type="password" id="lock-pass" placeholder="Enter password" autocomplete="off">
-    <button class="lock-btn" onclick="tryLogin()">Enter dashboard</button>
+
+    <!-- Step 1: Email -->
+    <div id="lock-step-email">
+      <input class="lock-input" type="email" id="lock-email" placeholder="Enter your email" autocomplete="email">
+      <button class="lock-btn" id="lock-send-btn" onclick="sendOtp()">Send code</button>
+    </div>
+
+    <!-- Step 2: OTP code -->
+    <div id="lock-step-otp" style="display:none">
+      <div style="font-size:13px;color:#666;margin-bottom:12px;text-align:center">Check your email for a 6-digit code</div>
+      <input class="lock-input" type="text" id="lock-otp" placeholder="6-digit code" autocomplete="one-time-code" maxlength="6" inputmode="numeric">
+      <button class="lock-btn" id="lock-verify-btn" onclick="verifyOtpCode()">Verify</button>
+      <button onclick="backToEmail()" style="background:none;border:none;color:#999;font-size:12px;cursor:pointer;margin-top:8px;display:block;width:100%;text-align:center">← Use a different email</button>
+    </div>
+
+    <!-- Session check loader -->
+    <div id="lock-step-loading" style="display:none;text-align:center;color:#999;font-size:13px;padding:16px 0">Checking session…</div>
+
     <div class="lock-err" id="lock-err"></div>
   </div>
 </div>
@@ -217,10 +233,12 @@ tr:hover td{background:#fafcfe}
       <span id="db-status-text">Connecting…</span>
     </div>
     <div class="h-actions">
+      <span id="header-user" style="font-size:11px;color:var(--tl);margin-right:4px"></span>
       <button class="h-link" onclick="exportData()">⬇ Export</button>
       <button class="h-link" onclick="document.getElementById('import-file').click()">⬆ Import</button>
       <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(this)">
       <button class="h-link" onclick="confirmClear()">Clear all</button>
+      <button class="h-link" onclick="signOut()" style="color:#e05252">Sign out</button>
     </div>
   </header>
 
@@ -232,38 +250,183 @@ tr:hover td{background:#fafcfe}
 
 <script>
 // ─────────────────────────────────────────
-// AUTH
+// AUTH — Email OTP via Supabase Auth
+// State machine: initialising → authenticated ↔ refreshing → unauthenticated
 // ─────────────────────────────────────────
-const PASS = 'LiQ#Perf@2026';
 const TARGET_USERS = 600;
 const TARGET_ARR = 2400000;
 
-function tryLogin() {
-  const v = document.getElementById('lock-pass').value;
-  if (v === PASS) {
-    sessionStorage.setItem('liq_auth', '1');
-    document.getElementById('lock').style.display = 'none';
-    document.getElementById('app').style.display = 'flex';
-    init();
-  } else {
-    document.getElementById('lock-err').textContent = 'Incorrect password.';
-    document.getElementById('lock-pass').value = '';
+let _authState   = 'initialising'; // 'initialising'|'authenticated'|'unauthenticated'|'refreshing'
+let _authSession = null;
+let _authEmail   = null;
+let _refreshTimer = null;
+let _initInFlight = null; // deduplication: prevents concurrent initialiseDatabaseAuth calls
+
+function showLockErr(msg) { document.getElementById('lock-err').textContent = msg || ''; }
+
+function backToEmail() {
+  document.getElementById('lock-step-otp').style.display   = 'none';
+  document.getElementById('lock-step-email').style.display = 'block';
+  showLockErr('');
+}
+
+async function sendOtp() {
+  const email = document.getElementById('lock-email').value.trim().toLowerCase();
+  if (!email || !email.includes('@')) { showLockErr('Enter a valid email address.'); return; }
+  const btn = document.getElementById('lock-send-btn');
+  btn.disabled = true; btn.textContent = 'Sending…'; showLockErr('');
+  try {
+    const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+    if (error) throw error;
+    _authEmail = email;
+    document.getElementById('lock-step-email').style.display = 'none';
+    document.getElementById('lock-step-otp').style.display   = 'block';
+    document.getElementById('lock-otp').focus();
+  } catch (e) {
+    showLockErr(e.message || 'Failed to send code. Try again.');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Send code';
   }
 }
 
-document.getElementById('lock-pass').addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
-
-if (sessionStorage.getItem('liq_auth') === '1') {
-  document.getElementById('lock').style.display = 'none';
-  document.getElementById('app').style.display = 'flex';
+async function verifyOtpCode() {
+  const token = document.getElementById('lock-otp').value.trim();
+  if (!token || token.length < 6) { showLockErr('Enter the 6-digit code from your email.'); return; }
+  const btn = document.getElementById('lock-verify-btn');
+  btn.disabled = true; btn.textContent = 'Verifying…'; showLockErr('');
+  try {
+    const { data, error } = await sb.auth.verifyOtp({ email: _authEmail, token, type: 'email' });
+    if (error) throw error;
+    await initialiseDatabaseAuth(data.session);
+  } catch (e) {
+    showLockErr(e.message || 'Invalid or expired code. Try again.');
+    btn.disabled = false; btn.textContent = 'Verify';
+  }
 }
+
+async function initialiseDatabaseAuth(session) {
+  // Deduplication: if already in-flight, return same promise
+  if (_initInFlight) return _initInFlight;
+  _initInFlight = _doInitAuth(session);
+  try { await _initInFlight; } finally { _initInFlight = null; }
+}
+
+async function _doInitAuth(session) {
+  if (!session?.access_token) throw new Error('No session returned');
+  await sb.auth.setSession({ access_token: session.access_token, refresh_token: session.refresh_token });
+  _authSession = session;
+  _authState   = 'authenticated';
+  // Persist in sessionStorage so reload within same tab skips re-auth
+  try { sessionStorage.setItem('liq_session', JSON.stringify(session)); } catch {}
+  scheduleTokenRefresh(session.expires_at);
+  showApp();
+}
+
+function scheduleTokenRefresh(expiresAt) {
+  if (_refreshTimer) clearTimeout(_refreshTimer);
+  // Refresh 5 minutes before token expiry (per protocol spec)
+  const msUntilRefresh = (expiresAt * 1000) - Date.now() - (5 * 60 * 1000);
+  _refreshTimer = setTimeout(doTokenRefresh, Math.max(0, msUntilRefresh));
+}
+
+async function doTokenRefresh() {
+  _authState = 'refreshing';
+  try {
+    const { data, error } = await sb.auth.refreshSession();
+    if (error) throw error;
+    _authSession = data.session;
+    _authState   = 'authenticated';
+    try { sessionStorage.setItem('liq_session', JSON.stringify(data.session)); } catch {}
+    scheduleTokenRefresh(data.session.expires_at);
+  } catch (e) {
+    console.warn('Token refresh failed:', e.message);
+    _authState = 'unauthenticated';
+    _authSession = null;
+    sessionStorage.removeItem('liq_session');
+    toast('Session expired — please sign in again.');
+    showLock();
+  }
+}
+
+function signOut() {
+  if (_refreshTimer) clearTimeout(_refreshTimer);
+  _authSession = null;
+  _authState   = 'unauthenticated';
+  sessionStorage.removeItem('liq_session');
+  sb.auth.signOut().catch(() => {});
+  showLock();
+}
+
+function showApp() {
+  document.getElementById('lock').style.display = 'none';
+  document.getElementById('app').style.display  = 'flex';
+  const userEl = document.getElementById('header-user');
+  if (userEl) userEl.textContent = _authSession?.user?.email || '';
+  // Only initialise app once per session
+  if (!window._appInitialised) {
+    window._appInitialised = true;
+    init();
+  }
+}
+
+function showLock() {
+  document.getElementById('app').style.display  = 'none';
+  document.getElementById('lock').style.display = 'flex';
+  document.getElementById('lock-step-loading').style.display = 'none';
+  document.getElementById('lock-step-email').style.display   = 'block';
+  document.getElementById('lock-step-otp').style.display     = 'none';
+  const e = document.getElementById('lock-email');
+  const o = document.getElementById('lock-otp');
+  if (e) e.value = ''; if (o) o.value = '';
+  showLockErr('');
+}
+
+// Keyboard shortcuts for OTP forms
+document.getElementById('lock-email').addEventListener('keydown', e => { if (e.key === 'Enter') sendOtp(); });
+document.getElementById('lock-otp').addEventListener('keydown',   e => { if (e.key === 'Enter') verifyOtpCode(); });
+
+// ── On page load: try to restore session from sessionStorage ─────
+(async () => {
+  // Show loading state briefly
+  document.getElementById('lock').style.display = 'flex';
+  document.getElementById('lock-step-email').style.display   = 'none';
+  document.getElementById('lock-step-loading').style.display = 'block';
+  let restored = false;
+  try {
+    const stored = JSON.parse(sessionStorage.getItem('liq_session') || 'null');
+    if (stored?.access_token && stored?.refresh_token) {
+      const { data, error } = await sb.auth.setSession({
+        access_token:  stored.access_token,
+        refresh_token: stored.refresh_token
+      });
+      if (!error && data?.session) {
+        await initialiseDatabaseAuth(data.session);
+        restored = true;
+      }
+    }
+  } catch (e) {
+    console.warn('Session restore failed:', e.message);
+  }
+  if (!restored) showLock();
+})();
 
 // ─────────────────────────────────────────
 // DATA LAYER (Supabase)
 // ─────────────────────────────────────────
 const SUPABASE_URL = 'https://ysdonnjezvoyrrizadik.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlzZG9ubmplenZveXJyaXphZGlrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc2ODY4MzYsImV4cCI6MjA5MzI2MjgzNn0.9bJ2FPEqV6NEtrnS567HBbwx0zcyQfshfcqWVRvH7RQ';
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+// Auth config per Database Authentication protocol:
+// - persistSession: false  (app manages sessions manually)
+// - autoRefreshToken: false (we schedule refresh 5 min before expiry)
+// - null storage (no cookies / localStorage leaking tokens)
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: {
+    persistSession:     false,
+    autoRefreshToken:   false,
+    detectSessionInUrl: false,
+    storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+  }
+});
 
 const KEYS = { sales:'sales', trials:'trials', website:'website', website_daily:'website_daily', training:'training', content:'content', webinars:'webinars', linkedin_weekly:'linkedin_weekly', edm_2m:'edm_2m', weekly_tracker:'weekly_tracker', activity_giraffe:'activity_giraffe', activity_sdk:'activity_sdk', activity_labs:'activity_labs' };
 
@@ -4934,9 +5097,7 @@ async function init() {
   });
 }
 
-if (sessionStorage.getItem('liq_auth') === '1') {
-  window.addEventListener('DOMContentLoaded', init);
-}
+// init() is called by initialiseDatabaseAuth() → showApp() after successful auth
 </script>
 </body>
 </html>
