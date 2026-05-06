@@ -301,10 +301,15 @@ async function signInWithPassword() {
   try {
     const { data, error } = await sb.auth.signInWithPassword({ email, password });
     if (error) throw error;
-    await initialiseDatabaseAuth(data.session);
+    // Let onAuthStateChange handle the SIGNED_IN event and show the app
+    // Just wait briefly in case it needs a tick
+    await new Promise(r => setTimeout(r, 300));
+    if (_authState !== 'authenticated') {
+      showLockErr('Sign in failed — please try again.');
+      btn.disabled = false; btn.textContent = 'Sign in';
+    }
   } catch (e) {
     showLockErr(e.message || 'Sign in failed. Check your email and password.');
-  } finally {
     btn.disabled = false; btn.textContent = 'Sign in';
   }
 }
