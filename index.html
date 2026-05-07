@@ -558,7 +558,7 @@ async function loadAll() {
       lsWrite(row.key, row.value || []); // keep localStorage in sync
     });
     _pd_deals  = dealsRows.map(r => r.raw);
-    _pd_people = peopleRows.map(r => r.raw);
+    _pd_people = pdNormalisePeople(peopleRows.map(r => r.raw));
     if (dealsRows.length)  _pd_deals_imported_at  = dealsRows[0].imported_at;
     if (peopleRows.length) _pd_people_imported_at = peopleRows[0].imported_at;
 
@@ -3837,6 +3837,35 @@ const pd12Months = () => {
   return months;
 };
 
+// ── PEOPLE FIELD NORMALISER ──────────────────────────────────────────────────
+// Pipedrive sometimes exports People CSVs without the "Person - " prefix on
+// column headers (or with slight label variations). This function detects the
+// actual column names and maps them to the canonical keys the dashboard uses.
+function pdNormalisePeople(rows) {
+  if (!rows.length) return rows;
+  const p0 = rows[0];
+  if ('Person - Customer Type' in p0) return rows; // already canonical, nothing to do
+  const keys = Object.keys(p0);
+  const find = (...needles) => keys.find(k => needles.some(n => k.toLowerCase() === n.toLowerCase()))
+    || keys.find(k => needles.some(n => k.toLowerCase().includes(n.toLowerCase())));
+  const map = {
+    'Person - Customer Type':          find('Person - Customer Type', 'Customer Type', 'Customer type', 'customer_type'),
+    'Person - Previous Customer Type': find('Person - Previous Customer Type', 'Previous Customer Type', 'previous customer type', 'Previous Customer'),
+    'Person - Date Access Granted':    find('Person - Date Access Granted', 'Date Access Granted', 'date access granted', 'Access Granted'),
+    'Person - Date Access Removed':    find('Person - Date Access Removed', 'Date Access Removed', 'date access removed', 'Access Removed'),
+    'Person - Organisation':           find('Person - Organisation', 'Organisation', 'Organization', 'Company', 'Org'),
+  };
+  const hasAny = Object.values(map).some(Boolean);
+  if (!hasAny) return rows; // nothing mappable found — return as-is
+  return rows.map(p => {
+    const n = {...p};
+    for (const [canonical, src] of Object.entries(map)) {
+      if (src && !(canonical in p)) n[canonical] = p[src] ?? '';
+    }
+    return n;
+  });
+}
+
 // ── DATE RANGE HELPERS ───────────────────
 function pdGetRange() {
   const r = activeSub.pd_range || 'all';
@@ -4040,7 +4069,7 @@ async function handlePeopleImport(input) {
         const { error } = await sb.from('liq_pipedrive_people').insert(rows.slice(i, i + batchSize).map(r => ({ raw: r })));
         if (error) { toast('Upload error: ' + error.message); return; }
       }
-      _pd_people = rows;
+      _pd_people = pdNormalisePeople(rows);
       _pd_people_imported_at = new Date().toISOString();
       toast('✓ Imported ' + rows.length + ' people');
       renderPipedrive();
@@ -4552,13 +4581,14 @@ function renderPdUsers(sc) {
   });
   const revokedMonths = rangeMonths.filter(m => revokedByMonth[m] != null);
 
-  // Diagnostic: detect likely field name mismatch (people loaded but no paid subscribers found)
-  const _knownField = _pd_people.length ? Object.keys(_pd_people[0] || {}).find(k => k.toLowerCase().includes('customer')) : null;
-  const _fieldMismatch = _pd_people.length > 0 && paidPeople.length === 0 && activePaid.length === 0;
+  // After remap attempt, check if we still have a mismatch
+  const _hasCustType = _pd_people.length > 0 && 'Person - Customer Type' in (_pd_people[0] || {});
+  const _fieldMismatch = _pd_people.length > 0 && !_hasCustType;
+  const _sampleKeys = _pd_people.length ? Object.keys(_pd_people[0] || {}).slice(0, 30).join(' · ') : '';
 
   sc.innerHTML = `
     ${!_pd_people.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive people CSV first.</div></div>' : ''}
-    ${_fieldMismatch ? `<div class="callout warn" style="margin-bottom:12px"><div class="callout-label">Field name mismatch detected</div><div class="callout-text">${_pd_people.length.toLocaleString()} people are loaded but no "Paid Subscription" records were found. This usually means the CSV column names differ from what the dashboard expects.<br><br>Expected: <code>Person - Customer Type</code><br>Found: <code>${_knownField || 'no customer type column detected'}</code><br><br>Re-export your People CSV from Pipedrive using the default column headers and re-import via the <b>Import Data</b> tab.</div></div>` : ''}
+    ${_fieldMismatch ? `<div class="callout warn" style="margin-bottom:12px"><div class="callout-label">Column name mismatch — cannot auto-detect fields</div><div class="callout-text">${_pd_people.length.toLocaleString()} people loaded but the customer type column could not be identified automatically.<br><br><b>Columns in your CSV (first 30):</b><br><code style="font-size:10px;line-height:1.6;word-break:break-all">${_sampleKeys}</code><br><br>Re-export the People CSV from Pipedrive with default column headers and re-import.</div></div>` : ''}
     <div class="cards" style="margin-bottom:18px">
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Active paid subscribers${infoBtn('Active paid subscribers','<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND (Date Access Removed is blank OR is a future date). Current snapshot.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>')}</div><div class="card-value">${activePaid.length}</div><div class="card-sub">Target: 600</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">All paid (incl. past)${infoBtn('All paid (incl. past)','<span class="src-tag">Pipedrive · People</span><br>All people with <b>Customer Type = "Paid Subscription"</b> regardless of whether their access has been removed. Includes former subscribers.<br><div class="calc-row">Customer Type = "Paid Subscription" (no date filter)</div>')}</div><div class="card-value">${paidPeople.length}</div><div class="card-sub">Customer Type = Paid Subscription</div></div>
