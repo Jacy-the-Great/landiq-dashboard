@@ -2665,19 +2665,93 @@ function renderTraining(el) {
   });
   const barData = Object.entries(months).sort().slice(-12);
 
+  // Pipedrive onboarding pipeline
+  const onboarding = _pd_deals.filter(d => d['Deal - Pipeline'] === 'General Onboarding Pipeline');
+  const stageCount = (s) => onboarding.filter(d => d['Deal - Stage'] === s).length;
+  const awaiting   = stageCount('Awaiting Onboarding');
+  const inOnboard  = stageCount('In Onboarding');
+  const growth2m   = stageCount('2 Month Growth Period');
+  const complete   = stageCount('Onboarding Complete');
+  const maintenance = stageCount('Maintenance') + stageCount('Month 11!');
+
+  // Pipedrive trial pipeline
+  const trials = _pd_deals.filter(d => d['Deal - Pipeline'] === 'Trial Pipeline');
+  const trialActive   = trials.filter(d => d['Deal - Stage'] === 'Trial in Progress').length;
+  const trialMid      = trials.filter(d => d['Deal - Stage'] === 'Trial Mid Point').length;
+  const trialComplete = trials.filter(d => d['Deal - Stage'] === 'Trial Complete').length;
+  const trialFollowUp = trials.filter(d => d['Deal - Stage'] === 'Follow Up').length;
+  const trialLost     = trials.filter(d => d['Deal - Stage'] === 'Closed Lost').length;
+  const trialConvRate = trials.length ? pct(trialComplete, trials.length - trialLost) : 0;
+
+  // Onboarding funnel stages ordered
+  const funnelStages = [
+    { label: 'Awaiting Onboarding', count: awaiting,  color: '#90c4e0' },
+    { label: 'In Onboarding',       count: inOnboard, color: '#2e8bc0' },
+    { label: '2-Month Growth',      count: growth2m,  color: '#1a3c5e' },
+    { label: 'Onboarding Complete', count: complete,  color: '#2a7a4b' },
+    { label: 'Maintenance',         count: maintenance, color: '#7b9e7b' },
+  ];
+  const funnelMax = Math.max(...funnelStages.map(s => s.count), 1);
+
   el.innerHTML = `
     <div class="section-header">
       <div>
         <div class="section-title">Training</div>
-        <div class="section-sub">Session tracking and webinar analytics</div>
+        <div class="section-sub">Session tracking · Onboarding pipeline · Trial status</div>
       </div>
       <a class="src-link" href="https://app.pipedrive.com" target="_blank">↗ Pipedrive</a>
     </div>
 
     ${cardsHTML([
-      ['Trained this month', trainedThisMonth || null],
-      ['Trained (total)',    cumulative || null],
+      ['Trained this month',    trainedThisMonth || null],
+      ['Trained (total)',       cumulative || null],
+      ['Currently onboarding',  inOnboard + awaiting || null, null, null, 'Pipedrive: Onboarding Pipeline'],
+      ['In 2-month growth',     growth2m || null, null, null, 'Pipedrive: Onboarding Pipeline'],
+      ['Active trials',         trialActive + trialMid || null, null, null, 'Pipedrive: Trial Pipeline'],
     ])}
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+      <div class="box">
+        <div class="box-title">Onboarding pipeline <span style="font-size:11px;color:var(--tl);font-weight:400;margin-left:4px">General Onboarding · ${onboarding.length} total</span></div>
+        ${onboarding.length ? `
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+            ${funnelStages.map(s => `
+              <div style="display:flex;align-items:center;gap:10px">
+                <div style="font-size:12px;color:var(--tx);min-width:160px;white-space:nowrap">${s.label}</div>
+                <div style="flex:1;background:var(--bd);border-radius:4px;height:20px;position:relative;overflow:hidden">
+                  <div style="position:absolute;left:0;top:0;bottom:0;width:${Math.round(s.count/funnelMax*100)}%;background:${s.color};border-radius:4px;transition:.4s"></div>
+                </div>
+                <div style="font-size:13px;font-weight:700;color:var(--navy);min-width:28px;text-align:right">${s.count}</div>
+              </div>
+            `).join('')}
+          </div>
+        ` : '<div class="no-data">No Pipedrive data loaded.</div>'}
+      </div>
+
+      <div class="box">
+        <div class="box-title">Trial pipeline <span style="font-size:11px;color:var(--tl);font-weight:400;margin-left:4px">Trial Pipeline · ${trials.length} total</span></div>
+        ${trials.length ? `
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+            ${[
+              { label: 'Trial in Progress', count: trialActive,   color: '#2e8bc0' },
+              { label: 'Trial Mid Point',   count: trialMid,      color: '#1a3c5e' },
+              { label: 'Trial Complete',    count: trialComplete, color: '#2a7a4b' },
+              { label: 'Follow Up',         count: trialFollowUp, color: '#f0a500' },
+              { label: 'Closed Lost',       count: trialLost,     color: '#e05252' },
+            ].map(s => `
+              <div style="display:flex;align-items:center;gap:10px">
+                <div style="font-size:12px;color:var(--tx);min-width:160px;white-space:nowrap">${s.label}</div>
+                <div style="flex:1;background:var(--bd);border-radius:4px;height:20px;position:relative;overflow:hidden">
+                  <div style="position:absolute;left:0;top:0;bottom:0;width:${Math.round(s.count/Math.max(trialLost,1)*100)}%;background:${s.color};border-radius:4px;transition:.4s"></div>
+                </div>
+                <div style="font-size:13px;font-weight:700;color:var(--navy);min-width:28px;text-align:right">${s.count}</div>
+              </div>
+            `).join('')}
+          </div>
+          <div style="margin-top:12px;font-size:12px;color:var(--tl)">Trial completion rate (excl. lost): <strong style="color:var(--navy)">${fmtPct(trialConvRate)}</strong></div>
+        ` : '<div class="no-data">No Pipedrive data loaded.</div>'}
+      </div>
+    </div>
 
     <div id="training-sub-content"></div>
   `;
@@ -2787,9 +2861,9 @@ function renderWeeklyTracker(el) {
 
   const TRACKER_SECTIONS = [
     { label: 'LinkedIn', key: 'linkedin', rows: [
-      { key: 'jsImp',         label: 'JS Post Impressions',   fmt: 'num' },
-      { key: 'jmImp',         label: 'JM Post Impressions',   fmt: 'num' },
-      { key: 'lbImp',         label: 'LB Post Impressions',   fmt: 'num' },
+      { key: 'jsImp',         label: 'JS (James) Post Impressions',  fmt: 'num' },
+      { key: 'jmImp',         label: 'JM (Jacy) Post Impressions',   fmt: 'num' },
+      { key: 'lbImp',         label: 'LB (Lucy) Post Impressions',   fmt: 'num' },
     ]},
     { label: 'EDM', key: 'edm', rows: [
       { key: 'edmOpen',        label: 'Email Open Rate',       fmt: 'pct' },
@@ -2881,8 +2955,8 @@ function renderWeeklyTracker(el) {
       <div id="tracker-form" style="display:none"><div class="form-box">
         <div class="form-grid">
           <div class="form-group"><label>Week ending</label><input type="date" id="tr2-week"></div>
-          <div class="form-group"><label>JS (Jacy) post impressions</label><input type="number" id="tr2-jsImp"></div>
-          <div class="form-group"><label>JM (James) post impressions</label><input type="number" id="tr2-jmImp"></div>
+          <div class="form-group"><label>JS (James) post impressions</label><input type="number" id="tr2-jsImp"></div>
+          <div class="form-group"><label>JM (Jacy) post impressions</label><input type="number" id="tr2-jmImp"></div>
           <div class="form-group"><label>LB (Lucy) post impressions</label><input type="number" id="tr2-lbImp"></div>
           <div class="form-group"><label>EDM open rate (%)</label><input type="number" id="tr2-edmOpen" step=".1"></div>
           <div class="form-group"><label>EDM click-through rate (%)</label><input type="number" id="tr2-edmCtr" step=".1"></div>
@@ -3250,8 +3324,8 @@ function renderMarketing(el) {
       data: {
         labels: liLabels,
         datasets: [
-          { label: 'JS (Jacy)',  data: trackerRecent.map(r => r.jsImp||0),  backgroundColor: '#1a3c5e', borderRadius: 3, stack: 'a' },
-          { label: 'JM (James)', data: trackerRecent.map(r => r.jmImp||0), backgroundColor: '#2e8bc0', borderRadius: 3, stack: 'a' },
+          { label: 'JS (James)', data: trackerRecent.map(r => r.jsImp||0),  backgroundColor: '#1a3c5e', borderRadius: 3, stack: 'a' },
+          { label: 'JM (Jacy)',  data: trackerRecent.map(r => r.jmImp||0), backgroundColor: '#2e8bc0', borderRadius: 3, stack: 'a' },
           { label: 'LB (Lucy)',  data: trackerRecent.map(r => r.lbImp||0),  backgroundColor: '#90c4e0', borderRadius: 3, stack: 'a' },
           { label: 'Total', data: liTotals, type: 'line', borderColor: '#c0392b', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 3, tension: .3, fill: false, order: 0 },
         ]
