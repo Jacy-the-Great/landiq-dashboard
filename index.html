@@ -191,6 +191,20 @@ tr:hover td{background:#fafcfe}
 .section-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
 .section-title{font-size:18px;font-weight:700;color:var(--navy);letter-spacing:-.02em}
 .section-sub{font-size:12px;color:var(--tl);margin-top:2px}
+
+/* INFO BUTTON + MODAL */
+.info-btn{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;background:none;border:1px solid var(--tl);color:var(--tl);font-size:9px;font-weight:700;cursor:pointer;margin-left:4px;padding:0;vertical-align:middle;line-height:1;flex-shrink:0}
+.info-btn:hover{background:var(--acc2);border-color:var(--acc);color:var(--acc)}
+#info-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;align-items:center;justify-content:center}
+#info-overlay.open{display:flex}
+#info-box{background:var(--wh);border-radius:12px;padding:24px 28px;max-width:440px;width:90%;box-shadow:0 12px 40px rgba(0,0,0,.18);position:relative}
+#info-box-title{font-size:14px;font-weight:700;color:var(--navy);margin-bottom:10px;padding-right:24px}
+#info-box-body{font-size:13px;color:var(--tx);line-height:1.6}
+#info-box-body b{color:var(--navy)}
+#info-box-body .src-tag{display:inline-block;background:var(--acc2);color:var(--acc);border-radius:4px;padding:1px 6px;font-size:11px;font-weight:600;margin-bottom:8px}
+#info-box-body .calc-row{margin-top:8px;padding:8px 10px;background:#f4f6f8;border-radius:6px;font-size:12px;color:var(--tm);font-family:monospace}
+#info-close{position:absolute;top:14px;right:16px;background:none;border:none;font-size:18px;color:var(--tl);cursor:pointer;line-height:1;padding:2px 4px}
+#info-close:hover{color:var(--navy)}
 </style>
 </head>
 <body>
@@ -829,7 +843,7 @@ function destroyAllCharts() {
 // ─────────────────────────────────────────
 // SUMMARY CARD BUILDER
 // ─────────────────────────────────────────
-function cardHTML(label, value, prev, type, sub) {
+function cardHTML(label, value, prev, type, sub, info) {
   let disp = value == null ? null : type === '$' ? fmtDollar(value) : type === '%' ? fmtPct(value) : fmtNum(value);
   let changeHTML = '';
   if (value != null && prev != null && prev !== 0) {
@@ -838,7 +852,7 @@ function cardHTML(label, value, prev, type, sub) {
     changeHTML = `<div class="card-change ${up ? 'up' : 'dn'}">${up ? '▲' : '▼'} ${d}%</div>`;
   }
   return `<div class="card">
-    <div class="card-label">${label}</div>
+    <div class="card-label" style="display:flex;align-items:center;gap:0;flex-wrap:wrap">${label}${info ? infoBtn(label, info) : ''}</div>
     ${disp ? `<div class="card-value">${disp}</div>` : '<div class="card-nodata">no data</div>'}
     ${changeHTML}
     ${sub ? `<div class="card-sub">${sub}</div>` : ''}
@@ -885,7 +899,8 @@ function renderHome(el) {
 
   const ul = trials.length ? trials[trials.length - 1] : null;
   const wl = website.length ? website[website.length - 1] : null;
-  const trainedTotal = training.reduce((s, r) => s + (r.attendees || 0), 0);
+  const _pdTrainedTotal = _pd_people.filter(p => pdValidDate(pdParseDate(p['Person - Date Access Granted']))).length;
+  const trainedTotal = _pdTrainedTotal || training.reduce((s, r) => s + (r.attendees || 0), 0);
   const contentThisMonth = thisMonth(content, 'date').length;
 
   const sdkPct = pct(ul?.sdkActive, ul?.trialsGranted);
@@ -918,12 +933,18 @@ function renderHome(el) {
 
   el.innerHTML = `
     ${cardsHTML([
-      ['Won deals (this month)', pdWonThisMonth.length || null, null, null, '2026 Sales pipeline'],
-      ['Revenue (this month)', pdRevThisMonth || null, null, '$', '2026 Sales pipeline'],
-      ['Win rate (2026 Sales)', pdWinRate, null, '%', 'Won ÷ (Won + Lost) all time'],
-      ['Active paid subscribers', pdActivePaid || null, null, null, 'Target: 600'],
-      ['Website users', wl?.users, null, null],
-      ['People trained', trainedTotal, null, null],
+      ['Won deals (this month)', pdWonThisMonth.length || null, null, null, '2026 Sales pipeline',
+        '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with <b>Status = Won</b> and <b>Won time</b> in the current calendar month.<br><div class="calc-row">Filter: Pipeline = "2026 Sales" AND Status = "Won" AND Won time in current month</div>'],
+      ['Revenue (this month)', pdRevThisMonth || null, null, '$', '2026 Sales pipeline',
+        '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Sum of <b>Deal Value</b> for all Won deals with Won time in the current calendar month.<br><div class="calc-row">SUM(Deal Value) where Status = "Won" AND Won time in current month</div>'],
+      ['Win rate (2026 Sales)', pdWinRate, null, '%', 'Won ÷ (Won + Lost) all time',
+        '<span class="src-tag">Pipedrive · 2026 Sales</span><br><b>Won ÷ (Won + Lost)</b> across all time in the 2026 Sales pipeline. Open deals are excluded from the calculation.<br><div class="calc-row">Won.count / (Won.count + Lost.count) × 100</div>'],
+      ['Active paid subscribers', pdActivePaid || null, null, null, 'Target: 600',
+        '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND either no Date Access Removed, or Date Access Removed is in the future.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
+      ['Website users', wl?.users, null, null, null,
+        '<span class="src-tag">Manual · Looker Studio</span><br>The <b>Users</b> field from the most recently entered weekly website record. Not real-time — requires manual import from Looker Studio / Google Analytics.'],
+      ['People trained', trainedTotal, null, null, null,
+        '<span class="src-tag">Pipedrive · People</span><br>Count of all Pipedrive people with a <b>Date Access Granted</b> date set. Includes all licence types (Paid, Trial, Centrally Funded).<br><div class="calc-row">COUNT where Date Access Granted is not null</div>Falls back to sum of manually entered training session attendees if Pipedrive is not loaded.'],
     ])}
 
     <div class="box">
@@ -948,10 +969,14 @@ function renderHome(el) {
             const d = pdParseDate(rem); return pdValidDate(d) && d > new Date();
           });
           return [
-            ['Won deals (last 30d)', wonLast30.length || null, null, null, 'from 2026 Sales'],
-            ['Open deals (pipeline)', openDeals.length || null, null, null, '2026 Sales · current'],
-            ['Active 2-week trials', trialPeople.length || null, null, null, 'current snapshot'],
-            ['Active paid subscribers', pdActivePaid || null, null, null, 'Target: 600'],
+            ['Won deals (last 30d)', wonLast30.length || null, null, null, 'from 2026 Sales',
+              '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with Status = Won and <b>Won time within 30 days of today</b>. Rolling 30-day window, not calendar month.<br><div class="calc-row">Status = "Won" AND Won time ≥ (today − 30 days)</div>'],
+            ['Open deals (pipeline)', openDeals.length || null, null, null, '2026 Sales · current',
+              '<span class="src-tag">Pipedrive · 2026 Sales</span><br>All deals with <b>Status = Open</b> in the 2026 Sales pipeline. Current snapshot — no date filter applied. Includes deals at any stage.'],
+            ['Active 2-week trials', trialPeople.length || null, null, null, 'current snapshot',
+              '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "2 Week Trial Licence"</b> AND either no Date Access Removed, or Date Access Removed is in the future.<br><div class="calc-row">Customer Type = "2 Week Trial Licence" AND (Access Removed is null OR Access Removed > today)</div>'],
+            ['Active paid subscribers', pdActivePaid || null, null, null, 'Target: 600',
+              '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND either no Date Access Removed, or Date Access Removed is in the future.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
           ].map(args => cardHTML(...args)).join('');
         })()}
       </div>
@@ -968,9 +993,12 @@ function renderHome(el) {
           const content = load('content');
           const postsThisMonth = thisMonth(content, 'date').length;
           return [
-            ['Website sessions', wl?.sessions || wl?.users || null, null, null, 'latest week'],
-            ['Webinars (2026)', wbThisYear.length || null, null, null, 'from records'],
-            ['Content posts this month', postsThisMonth || null],
+            ['Website sessions', wl?.sessions || wl?.users || null, null, null, 'latest week',
+              '<span class="src-tag">Manual · Looker Studio</span><br><b>Sessions</b> field from the most recently entered weekly website record (falls back to Users if Sessions is blank). Manually imported from Looker Studio / Google Analytics — not real-time.'],
+            ['Webinars (2026)', wbThisYear.length || null, null, null, 'from records',
+              '<span class="src-tag">Manual · Webinar log</span><br>Count of webinar records with <b>date starting "2026"</b>. Manually entered in the Marketing tab.'],
+            ['Content posts this month', postsThisMonth || null, null, null, null,
+              '<span class="src-tag">Manual · Content log</span><br>Count of content log entries with <b>date in the current calendar month</b>. All content types included (LinkedIn, YouTube, EDM, etc.). Entered in the Marketing tab.'],
           ].map(args => cardHTML(...args)).join('');
         })()}
       </div>
@@ -1423,12 +1451,18 @@ function renderTrials(el) {
     </div>
 
     ${cardsHTML([
-      ['Leads this week',   tl?.lead,          tp?.lead],
-      ['Trial EOIs',        tl?.trialEoi,      tp?.trialEoi],
-      ['Trials granted',    tl?.trialsGranted, tp?.trialsGranted],
-      ['Demo attended',     tl?.demoAttended,  tp?.demoAttended],
-      ['SDK active (5+ ev)',tl?.sdkActive,     tp?.sdkActive],
-      ['Signed',            tl?.signed,        tp?.signed],
+      ['Leads this week', tl?.lead, tp?.lead, null, null,
+        '<span class="src-tag">Manual · Trials tracker</span><br>Manually entered count of new leads for the latest recorded week. Compared to the previous week\'s entry.'],
+      ['Trial EOIs', tl?.trialEoi, tp?.trialEoi, null, null,
+        '<span class="src-tag">Manual · Trials tracker</span><br>Expressions of interest for a trial licence submitted in the latest recorded week.'],
+      ['Trials granted', tl?.trialsGranted, tp?.trialsGranted, null, null,
+        '<span class="src-tag">Manual · Trials tracker</span><br>New trial licences granted in the latest recorded week. Manually entered — verify against Pipedrive Trial Pipeline for cross-check.'],
+      ['Demo attended', tl?.demoAttended, tp?.demoAttended, null, null,
+        '<span class="src-tag">Manual · Trials tracker</span><br>Number of prospects who attended a demo or training session in the latest recorded week.'],
+      ['SDK active (5+ ev)', tl?.sdkActive, tp?.sdkActive, null, null,
+        '<span class="src-tag">Manual · Trials tracker</span><br>Trial users who triggered 5 or more events in Land iQ (Giraffe SDK) in the latest recorded week. Indicates meaningful product engagement.'],
+      ['Signed', tl?.signed, tp?.signed, null, null,
+        '<span class="src-tag">Manual · Trials tracker</span><br>Signed order forms received in the latest recorded week. Cross-check against Pipedrive 2026 Sales "Signed Order Form" stage.'],
     ])}
 
     <div class="box">
@@ -1566,10 +1600,14 @@ function renderWebsite(el) {
         <a class="src-link" href="https://lookerstudio.google.com" target="_blank">↗ Looker Studio</a>
       </div>
       ${cardsHTML([
-        ['Users this month (daily)', tmDaily.reduce((s,r)=>s+(r.users||0),0)||null],
-        ['Sessions this month', tmDaily.reduce((s,r)=>s+(r.sessions||0),0)||null],
-        ['CTA clicks (month)', tmDaily.reduce((s,r)=>s+(r.cta||0),0)||null],
-        ['Days logged', dailyData.length||null, null, null, 'total entries'],
+        ['Users this month (daily)', tmDaily.reduce((s,r)=>s+(r.users||0),0)||null, null, null, null,
+          '<span class="src-tag">Manual · Looker Studio daily</span><br>Sum of the <b>Users</b> field across all daily website records in the current calendar month. Manually imported from Looker Studio / Google Analytics.'],
+        ['Sessions this month', tmDaily.reduce((s,r)=>s+(r.sessions||0),0)||null, null, null, null,
+          '<span class="src-tag">Manual · Looker Studio daily</span><br>Sum of the <b>Sessions</b> field across all daily website records in the current calendar month.'],
+        ['CTA clicks (month)', tmDaily.reduce((s,r)=>s+(r.cta||0),0)||null, null, null, null,
+          '<span class="src-tag">Manual · Looker Studio daily</span><br>Sum of <b>CTA button clicks</b> across all daily records in the current month. Tracks clicks on the primary call-to-action on the Land iQ website.'],
+        ['Days logged', dailyData.length||null, null, null, 'total entries',
+          '<span class="src-tag">Manual · Daily log</span><br>Total number of individual daily records imported. Each row = one calendar day of website data.'],
       ])}
       <div class="box">
         <div class="box-title">
@@ -1676,10 +1714,14 @@ function renderWebsite(el) {
     </div>
 
     ${cardsHTML([
-      ['Total users (month)', totalUsers || null],
-      ['Sessions (month)', totalSessions || null],
-      ['CTA clicks (month)', totalCta || null],
-      ['CTA click rate', ctaRate, null, '%'],
+      ['Total users (month)', totalUsers || null, null, null, null,
+        '<span class="src-tag">Manual · Looker Studio weekly</span><br>Sum of the <b>Users</b> field across all weekly website records in the current calendar month. Manually imported from Looker Studio.'],
+      ['Sessions (month)', totalSessions || null, null, null, null,
+        '<span class="src-tag">Manual · Looker Studio weekly</span><br>Sum of the <b>Sessions</b> field across all weekly website records in the current calendar month.'],
+      ['CTA clicks (month)', totalCta || null, null, null, null,
+        '<span class="src-tag">Manual · Looker Studio weekly</span><br>Sum of <b>CTA clicks</b> across all weekly records in the current month.'],
+      ['CTA click rate', ctaRate, null, '%', null,
+        '<span class="src-tag">Manual · Looker Studio weekly</span><br>CTA clicks ÷ total Users for the current month, expressed as a percentage.<br><div class="calc-row">CTA clicks / Users × 100</div>'],
     ])}
 
     ${bestWeek ? `<div class="callout info"><div class="callout-label">Best week this month</div><div class="callout-text">${fmtDate(bestWeek.week)}: ${fmtNum(bestWeek.users)} users</div></div>` : ''}
@@ -1956,10 +1998,18 @@ function renderActivity(el) {
     ${statusHTML}
 
     ${cardsHTML([
-      ['Weekly active users',    wauVal,      null, null, phLive ? 'live · PostHog' : (gLast ? 'week of '+fmtDate(gLast.week) : 'no data yet')],
-      ['Total users (all time)', totalUsers,  null, null, phLive ? 'all time · PostHog' : 'run SQL migration to enable'],
-      ['Active users',           phLive ? activeCount : null, null, null, 'seen in last 14 days'],
-      ['At-risk users',          phLive ? atRiskCount : null, null, null, 'active but gone quiet 14d+'],
+      ['Weekly active users', wauVal, null, null, phLive ? 'live · PostHog' : (gLast ? 'week of '+fmtDate(gLast.week) : 'no data yet'),
+        phLive
+          ? '<span class="src-tag">Live · PostHog</span><br>Users who triggered at least one event in Land iQ (Giraffe) in the most recent 7-day window. Pulled from the <b>ph_weekly_stats()</b> materialized view, refreshed nightly at 3am.<br><div class="calc-row">ph_weekly_stats() → active_users, latest week</div>'
+          : '<span class="src-tag">Manual · Activity log</span><br>Manually entered <b>active users</b> from the most recent Giraffe weekly record. Run the SQL migration to enable live PostHog data.'],
+      ['Total users (all time)', totalUsers, null, null, phLive ? 'all time · PostHog' : 'run SQL migration to enable',
+        phLive
+          ? '<span class="src-tag">Live · PostHog</span><br>Distinct users who have ever triggered an event in Land iQ, from the <b>ph_summary()</b> materialized view.<br><div class="calc-row">ph_summary() → total_users</div>'
+          : '<span class="src-tag">Not available</span><br>Requires the PostHog SQL migration to be run in Supabase. Once enabled, pulls from the ph_summary() materialized view.'],
+      ['Active users', phLive ? activeCount : null, null, null, 'seen in last 14 days',
+        '<span class="src-tag">Live · PostHog</span><br>Users in the <b>"Active"</b> segment — seen at least once in the last 14 days. From <b>ph_user_segments()</b>.<br><div class="calc-row">ph_user_segments() → segment = "Active"</div>'],
+      ['At-risk users', phLive ? atRiskCount : null, null, null, 'active but gone quiet 14d+',
+        '<span class="src-tag">Live · PostHog</span><br>Users in the <b>"At-risk"</b> segment — previously active but not seen in the last 14+ days. From <b>ph_user_segments()</b>. These users have met the minimum activity threshold (3+ active days) but have gone quiet.<br><div class="calc-row">ph_user_segments() → segment = "At-risk"</div>'],
     ])}
 
     <div class="sub-tabs">
@@ -2720,11 +2770,16 @@ function renderTraining(el) {
     </div>
 
     ${cardsHTML([
-      ['Trained this month',    trainedThisMonth || null],
-      ['Trained (total)',       cumulative || null],
-      ['Currently onboarding',  inOnboard + awaiting || null, null, null, 'Pipedrive: Onboarding Pipeline'],
-      ['In 2-month growth',     growth2m || null, null, null, 'Pipedrive: Onboarding Pipeline'],
-      ['Active trials',         trialActive + trialMid || null, null, null, 'Pipedrive: Trial Pipeline'],
+      ['Trained this month', trainedThisMonth || null, null, null, null,
+        '<span class="src-tag">Pipedrive · People</span><br>Count of people with <b>Date Access Granted</b> in the current calendar month. All licence types included (Paid, Trial, Centrally Funded).<br><div class="calc-row">COUNT where Date Access Granted month = current month</div>Falls back to manually entered training session attendees if Pipedrive is not loaded.'],
+      ['Trained (total)', cumulative || null, null, null, null,
+        '<span class="src-tag">Pipedrive · People</span><br>Total count of all Pipedrive people with any <b>Date Access Granted</b> date set — across all time and all licence types.<br><div class="calc-row">COUNT where Date Access Granted is not null</div>Falls back to sum of manually entered attendee counts if Pipedrive is not loaded.'],
+      ['Currently onboarding', inOnboard + awaiting || null, null, null, 'Pipedrive: Onboarding Pipeline',
+        '<span class="src-tag">Pipedrive · General Onboarding Pipeline</span><br>Deals currently at <b>In Onboarding</b> (' + inOnboard + ') or <b>Awaiting Onboarding</b> (' + awaiting + ') stages. Current open deal snapshot — not date-filtered.<br><div class="calc-row">Stage = "In Onboarding" OR "Awaiting Onboarding"</div>'],
+      ['In 2-month growth', growth2m || null, null, null, 'Pipedrive: Onboarding Pipeline',
+        '<span class="src-tag">Pipedrive · General Onboarding Pipeline</span><br>Deals at the <b>2 Month Growth Period</b> stage. These customers have completed initial training and are in the post-training follow-up phase.<br><div class="calc-row">Stage = "2 Month Growth Period"</div>'],
+      ['Active trials', trialActive + trialMid || null, null, null, 'Pipedrive: Trial Pipeline',
+        '<span class="src-tag">Pipedrive · Trial Pipeline</span><br>Deals at <b>Trial in Progress</b> (' + trialActive + ') plus <b>Trial Mid Point</b> (' + trialMid + ') stages. Both stages represent active, ongoing trials.<br><div class="calc-row">Stage = "Trial in Progress" OR "Trial Mid Point"</div>'],
     ])}
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
@@ -3129,10 +3184,14 @@ function renderMarketing(el) {
     </div>
 
     ${cardsHTML([
-      ['LinkedIn impressions (latest week)', liImpLatest || null, null, null, latestW ? fmtDate(latestW.week) : null],
-      ['EDM open rate', latestW?.edmOpen ?? null, null, '%', latestW ? fmtDate(latestW.week) : null],
-      ['Webinar registrations', latestW?.wbReg ?? null, null, null, latestW ? fmtDate(latestW.week) : null],
-      ['Website visits', latestW?.websiteVisits ?? null, null, null, latestW ? fmtDate(latestW.week) : null],
+      ['LinkedIn impressions (latest week)', liImpLatest || null, null, null, latestW ? fmtDate(latestW.week) : null,
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Sum of <b>JS + JM + LB post impressions</b> from the most recently entered Weekly Tracker row.<br><div class="calc-row">jsImp + jmImp + lbImp (latest week)</div>JS = James Strutt, JM = Jacy Macnee, LB = Lucy Brown.'],
+      ['EDM open rate', latestW?.edmOpen ?? null, null, '%', latestW ? fmtDate(latestW.week) : null,
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Email open rate from the <b>edmOpen</b> field of the latest Weekly Tracker row. Manually entered from the email platform (e.g. Mailchimp / HubSpot).'],
+      ['Webinar registrations', latestW?.wbReg ?? null, null, null, latestW ? fmtDate(latestW.week) : null,
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Number of webinar registrations from the <b>wbReg</b> field of the latest Weekly Tracker row. Covers the most recently run webinar promotion period.'],
+      ['Website visits', latestW?.websiteVisits ?? null, null, null, latestW ? fmtDate(latestW.week) : null,
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total website users (visits) from the <b>websiteVisits</b> field of the latest Weekly Tracker row. Manually entered from Google Analytics / Looker Studio.'],
     ])}
 
     <!-- ── LINKEDIN ── -->
@@ -3853,11 +3912,16 @@ function renderPipedrive(el) {
       ${pdRangeToggleHTML()}
     </div>
     ${cardsHTML([
-      ['Won deals (2026 Sales)', wonDeals.length || null, null, null, range.label],
-      ['Lost deals (2026 Sales)', lostDeals.length || null, null, null, range.label],
-      ['Win rate (2026 Sales)', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%', 'Won ÷ (Won + Lost) · ' + range.label],
-      ['Active paid subscribers', activePaidSubs.length || null, null, null, 'Target: 600 · as of today'],
-      ['People (total)', _pd_people.length || null],
+      ['Won deals (2026 Sales)', wonDeals.length || null, null, null, range.label,
+        '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with <b>Status = Won</b> and <b>Won time</b> within the selected date range.<br><div class="calc-row">Pipeline = "2026 Sales" AND Status = "Won" AND Won time in range</div>Currently showing: <b>' + range.label + '</b>'],
+      ['Lost deals (2026 Sales)', lostDeals.length || null, null, null, range.label,
+        '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with <b>Status = Lost</b> and <b>Lost time</b> within the selected date range.<br><div class="calc-row">Pipeline = "2026 Sales" AND Status = "Lost" AND Lost time in range</div>Currently showing: <b>' + range.label + '</b>'],
+      ['Win rate (2026 Sales)', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%', 'Won ÷ (Won + Lost) · ' + range.label,
+        '<span class="src-tag">Pipedrive · 2026 Sales</span><br><b>Won ÷ (Won + Lost)</b> for deals closed within the selected date range. Open deals are excluded.<br><div class="calc-row">Won.count / (Won.count + Lost.count) × 100</div>Currently showing: <b>' + range.label + '</b>'],
+      ['Active paid subscribers', activePaidSubs.length || null, null, null, 'Target: 600 · as of today',
+        '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND (Date Access Removed is blank OR is a future date). Always shows current snapshot — not affected by the date range filter.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
+      ['People (total)', _pd_people.length || null, null, null, null,
+        '<span class="src-tag">Pipedrive · People CSV</span><br>Total row count of the imported People CSV. All contacts regardless of type, licence status, or date. This is the raw import size.<br>Last imported: <b>' + (_pd_people_imported_at ? fmtDate(_pd_people_imported_at) : 'unknown') + '</b>'],
     ])}
     <div class="sub-tabs">
       ${['import','sales','users','trials','optimax'].map(s =>
@@ -4465,10 +4529,10 @@ function renderPdUsers(sc) {
   sc.innerHTML = `
     ${!_pd_people.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive people CSV first.</div></div>' : ''}
     <div class="cards" style="margin-bottom:18px">
-      <div class="card"><div class="card-label">Active paid subscribers</div><div class="card-value">${activePaid.length}</div><div class="card-sub">Target: 600</div></div>
-      <div class="card"><div class="card-label">All paid (incl. past)</div><div class="card-value">${paidPeople.length}</div><div class="card-sub">Customer Type = Paid Subscription</div></div>
-      <div class="card"><div class="card-label">Active 2-week trials</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='2 Week Trial Licence'&&isActive(p)).length}</div><div class="card-sub">current snapshot</div></div>
-      <div class="card"><div class="card-label">Centrally funded</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='Centrally Funded Licence').length}</div></div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Active paid subscribers${infoBtn('Active paid subscribers','<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND (Date Access Removed is blank OR is a future date). Current snapshot.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>')}</div><div class="card-value">${activePaid.length}</div><div class="card-sub">Target: 600</div></div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">All paid (incl. past)${infoBtn('All paid (incl. past)','<span class="src-tag">Pipedrive · People</span><br>All people with <b>Customer Type = "Paid Subscription"</b> regardless of whether their access has been removed. Includes former subscribers.<br><div class="calc-row">Customer Type = "Paid Subscription" (no date filter)</div>')}</div><div class="card-value">${paidPeople.length}</div><div class="card-sub">Customer Type = Paid Subscription</div></div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Active 2-week trials${infoBtn('Active 2-week trials','<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "2 Week Trial Licence"</b> AND (Date Access Removed is blank OR is a future date). Current snapshot.<br><div class="calc-row">Customer Type = "2 Week Trial Licence" AND (Access Removed is null OR Access Removed > today)</div>')}</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='2 Week Trial Licence'&&isActive(p)).length}</div><div class="card-sub">current snapshot</div></div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Centrally funded${infoBtn('Centrally funded','<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Centrally Funded Licence"</b>. No date filter — includes all records regardless of access status.')}</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='Centrally Funded Licence').length}</div></div>
     </div>
 
     <div class="box"><div class="box-title">Active paid subscribers over time (all time)</div>
@@ -5241,6 +5305,36 @@ async function init() {
 }
 
 // init() is called by initialiseDatabaseAuth() → showApp() after successful auth
+
+// ─────────────────────────────────────────
+// INFO POPUP SYSTEM
+// ─────────────────────────────────────────
+const _INFO = {};
+function infoBtn(title, body) {
+  const id = 'inf_' + Math.random().toString(36).slice(2, 9);
+  _INFO[id] = { title, body };
+  return `<button class="info-btn" onclick="event.stopPropagation();showInfoById('${id}')" title="Data source">i</button>`;
+}
+function showInfoById(id) {
+  const d = _INFO[id];
+  if (d) showInfo(d.title, d.body);
+}
+function showInfo(title, body) {
+  document.getElementById('info-box-title').textContent = title;
+  document.getElementById('info-box-body').innerHTML = body;
+  document.getElementById('info-overlay').classList.add('open');
+}
+function closeInfo() {
+  document.getElementById('info-overlay').classList.remove('open');
+}
 </script>
+
+<div id="info-overlay" onclick="closeInfo()">
+  <div id="info-box" onclick="event.stopPropagation()">
+    <button id="info-close" onclick="closeInfo()">✕</button>
+    <div id="info-box-title"></div>
+    <div id="info-box-body"></div>
+  </div>
+</div>
 </body>
 </html>
