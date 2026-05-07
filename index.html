@@ -494,6 +494,7 @@ let _pd_deals = [];
 let _pd_people = [];
 let _pd_deals_imported_at = null;
 let _pd_people_imported_at = null;
+let _pdSalesPipeline = '2026 Sales'; // toggle: '2026 Sales' | null (all pipelines)
 
 // PostHog live data cache (populated by loadPostHogLive)
 let _ph = {
@@ -4037,7 +4038,10 @@ async function handlePeopleImport(input) {
 function renderPdSales(sc) {
   const range = pdGetRange();
   const rangeMonths = pdRangeMonths(range);
-  const salesDeals = _pd_deals.filter(d => d['Deal - Pipeline'] === '2026 Sales');
+  const pipelineLabel = _pdSalesPipeline || 'All pipelines';
+  const salesDeals = _pdSalesPipeline
+    ? _pd_deals.filter(d => d['Deal - Pipeline'] === _pdSalesPipeline)
+    : _pd_deals;
   const wonDeals   = salesDeals.filter(d => d['Deal - Status'] === 'Won'  && pdInRange(d['Deal - Won time'],  range));
   const lostDeals  = salesDeals.filter(d => d['Deal - Status'] === 'Lost' && pdInRange(d['Deal - Lost time'], range));
   const months12   = rangeMonths;
@@ -4198,32 +4202,46 @@ function renderPdSales(sc) {
 
   sc.innerHTML = `
     ${!wonDeals.length && !_pd_deals.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive deals CSV first.</div></div>' : ''}
+
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+      <span style="font-size:12px;font-weight:500;color:var(--tm)">Pipeline:</span>
+      <button onclick="_pdSalesPipeline='2026 Sales';renderPdSales(document.getElementById('pd-sub-content'))"
+        style="padding:4px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1.5px solid ${_pdSalesPipeline==='2026 Sales'?'var(--acc)':'var(--bor)'};background:${_pdSalesPipeline==='2026 Sales'?'var(--acc)':'transparent'};color:${_pdSalesPipeline==='2026 Sales'?'#fff':'var(--tm)'}">
+        2026 Sales
+      </button>
+      <button onclick="_pdSalesPipeline=null;renderPdSales(document.getElementById('pd-sub-content'))"
+        style="padding:4px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1.5px solid ${_pdSalesPipeline===null?'var(--acc)':'var(--bor)'};background:${_pdSalesPipeline===null?'var(--acc)':'transparent'};color:${_pdSalesPipeline===null?'#fff':'var(--tm)'}">
+        All pipelines
+      </button>
+      <span style="font-size:11px;color:var(--tl);margin-left:4px">Currently showing: <strong>${pipelineLabel}</strong></span>
+    </div>
+
     <div class="cards" style="margin-bottom:18px">
-      <div class="card"><div class="card-label">Won deals (total)</div><div class="card-value">${wonDeals.length || 0}</div></div>
-      <div class="card"><div class="card-label">Closed same month</div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Won deals (${range.label})${infoBtn('Won deals (total)','<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Count of deals with <b>Status = Won</b> and Won time within the selected date range.<br><div class="calc-row">Status = "Won" AND Won time in '+range.label+'</div>')}</div><div class="card-value">${wonDeals.length || 0}</div><div class="card-sub">${pipelineLabel}</div></div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Closed same month${infoBtn('Closed same month','<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Won deals where the <b>Deal created</b> month equals the <b>Won time</b> month — i.e. opened and closed in the same calendar month.<br><div class="calc-row">monthKey(Deal created) === monthKey(Won time)</div>')}</div>
         ${sameMonth.length ? `<div class="card-value">${sameMonth.length}</div><div class="card-sub">${fmtPct(pct(sameMonth.length, wonDeals.length))} of won deals</div>` : '<div class="card-nodata">no data</div>'}
       </div>
-      <div class="card"><div class="card-label">Avg win rate (12m)</div>
-        ${avgWinRate12 != null ? `<div class="card-value">${fmtPct(avgWinRate12)}</div>` : '<div class="card-nodata">no data</div>'}
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Avg win rate${infoBtn('Avg win rate (period)','<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Average of monthly win rates across the selected range. Each month: <b>Won ÷ (Won + Lost)</b>. Months with zero closed deals are excluded.<br><div class="calc-row">avg(Won / (Won + Lost)) per month in range</div>')}</div>
+        ${avgWinRate12 != null ? `<div class="card-value">${fmtPct(avgWinRate12)}</div><div class="card-sub">avg monthly rate · ${range.label}</div>` : '<div class="card-nodata">no data</div>'}
       </div>
-      <div class="card"><div class="card-label">Avg sales cycle</div>
-        ${avgCycleDays != null ? `<div class="card-value">${avgCycleDays}d</div><div class="card-sub">created → won</div>` : '<div class="card-nodata">no data</div>'}
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Avg sales cycle${infoBtn('Avg sales cycle','<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Average number of days from <b>Deal created</b> to <b>Won time</b> across all won deals in the selected range.<br><div class="calc-row">avg(Won time − Deal created) in days</div>')}</div>
+        ${avgCycleDays != null ? `<div class="card-value">${avgCycleDays}d</div><div class="card-sub">created → won · ${range.label}</div>` : '<div class="card-nodata">no data</div>'}
       </div>
     </div>
 
-    <div class="box"><div class="box-title">Won deals &amp; revenue by month — ${range.label}</div>
+    <div class="box"><div class="box-title">Won deals &amp; revenue by month — ${range.label} · ${pipelineLabel}</div>
       <div class="chart-wrap" style="height:260px"><canvas id="pd-won-month"></canvas></div></div>
 
-    <div class="box"><div class="box-title">Win rate by month — ${range.label}</div>
+    <div class="box"><div class="box-title">Win rate by month — ${range.label} · ${pipelineLabel}</div>
       <div class="chart-wrap" style="height:210px"><canvas id="pd-winrate"></canvas></div></div>
 
-    <div class="box"><div class="box-title">Won vs Lost by month — ${range.label}</div>
+    <div class="box"><div class="box-title">Won vs Lost by month — ${range.label} · ${pipelineLabel}</div>
       <div class="chart-wrap" style="height:210px"><canvas id="pd-wl-month"></canvas></div></div>
 
-    <div class="box"><div class="box-title">Average sales cycle — days from created to won — ${range.label}</div>
+    <div class="box"><div class="box-title">Average sales cycle — days from created to won — ${range.label} · ${pipelineLabel}</div>
       <div class="chart-wrap" style="height:200px"><canvas id="pd-cycle"></canvas></div></div>
 
-    <div class="box"><div class="box-title">Deal source performance (won vs lost)</div>
+    <div class="box"><div class="box-title">Deal source performance (won vs lost) · ${pipelineLabel}</div>
       ${Object.keys(srcPerf).length ? `<div class="chart-wrap" style="height:${Math.max(200, Object.keys(srcPerf).length * 42)}px"><canvas id="pd-sources"></canvas></div>` : '<div class="no-data">No source data.</div>'}</div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
@@ -4233,7 +4251,7 @@ function renderPdSales(sc) {
         <div class="chart-wrap" style="height:240px"><canvas id="pd-owner"></canvas></div></div>
     </div>
 
-    <div class="box"><div class="box-title">Pipeline stage snapshot — 2026 Sales (Open · Won · Lost)</div>
+    <div class="box"><div class="box-title">Pipeline stage snapshot — ${pipelineLabel} (Open · Won · Lost)</div>
       <div class="chart-wrap" style="height:${SALES_STAGES.length * 38 + 60}px"><canvas id="pd-stage-snap"></canvas></div></div>
 
     <div class="box" style="margin-top:14px">
