@@ -2756,10 +2756,34 @@ function renderTraining(el) {
     <div id="training-sub-content"></div>
   `;
 
-  setTrainingSub('sessions', false, barData, data, webinars);
+  // Trial-to-paid conversions by month
+  const trialConvByMonth = {};
+  _pd_people.filter(p =>
+    p['Person - Customer Type'] === 'Paid Subscription' &&
+    p['Person - Previous Customer Type'] &&
+    p['Person - Previous Customer Type'].toLowerCase().includes('trial')
+  ).forEach(p => {
+    const k = monthKey(p['Person - Date Access Granted']);
+    if (k) trialConvByMonth[k] = (trialConvByMonth[k] || 0) + 1;
+  });
+  const convMonthData = Object.entries(trialConvByMonth).sort().slice(-18);
+  let _running = 0;
+  const convRunning = convMonthData.map(([, v]) => { _running += v; return _running; });
+
+  // Pipedrive onboarding starts by month (deals past Awaiting stage)
+  const pdOnboardByMonth = {};
+  onboarding.filter(d => d['Deal - Stage'] !== 'Awaiting Onboarding').forEach(d => {
+    const dt = pdParseDate(d['Deal - Deal created']);
+    if (!pdValidDate(dt)) return;
+    const k = monthKey(dt.toISOString());
+    pdOnboardByMonth[k] = (pdOnboardByMonth[k] || 0) + 1;
+  });
+  const pdOnboardData = Object.entries(pdOnboardByMonth).sort().slice(-18);
+
+  setTrainingSub('sessions', false, barData, data, webinars, convMonthData, convRunning, pdOnboardData);
 }
 
-function setTrainingSub(sub, rerender = true, barData, data, webinars) {
+function setTrainingSub(sub, rerender = true, barData, data, webinars, convMonthData, convRunning, pdOnboardData) {
   activeSub.training_sub = sub;
   if (rerender) { renderTraining(); return; }
 
@@ -2771,6 +2795,19 @@ function setTrainingSub(sub, rerender = true, barData, data, webinars) {
       <div class="box">
         <div class="box-title">People trained per month (12 months, includes historical data)</div>
         <div class="chart-wrap" style="height:240px"><canvas id="training-bar"></canvas></div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+        <div class="box">
+          <div class="box-title">Trial → paid conversions by month</div>
+          <div style="font-size:11px;color:var(--tl);margin-bottom:6px">People whose previous type was any Trial licence — date = access granted</div>
+          ${convMonthData.length ? `<div class="chart-wrap" style="height:220px"><canvas id="training-conv-chart"></canvas></div>` : '<div class="no-data">No Pipedrive people data loaded.</div>'}
+        </div>
+        <div class="box">
+          <div class="box-title">Pipedrive onboarding starts by month</div>
+          <div style="font-size:11px;color:var(--tl);margin-bottom:6px">General Onboarding Pipeline deals past Awaiting — date = deal created</div>
+          ${pdOnboardData.length ? `<div class="chart-wrap" style="height:220px"><canvas id="training-onboard-chart"></canvas></div>` : '<div class="no-data">No Pipedrive deals data loaded.</div>'}
+        </div>
       </div>
 
       <div class="form-section">
@@ -2816,6 +2853,41 @@ function setTrainingSub(sub, rerender = true, barData, data, webinars) {
         scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: axStyle } }
       }
     });
+
+    if (convMonthData.length) {
+      makeChart('training-conv-chart', {
+        type: 'bar',
+        data: {
+          labels: convMonthData.map(([k]) => monthLabel(k)),
+          datasets: [
+            { label: 'Conversions', data: convMonthData.map(([,v]) => v), backgroundColor: '#2e8bc0', borderRadius: 4, yAxisID: 'y' },
+            { label: 'Running total', data: convRunning, type: 'line', borderColor: '#1a3c5e', backgroundColor: 'transparent', pointRadius: 3, tension: 0.3, yAxisID: 'y2' },
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { labels: { font: { size: 11 }, boxWidth: 12 } } },
+          scales: {
+            x: { grid: { display: false }, ticks: axStyle },
+            y: { grid: gridStyle, ticks: axStyle, title: { display: true, text: 'Monthly', font: { size: 10 }, color: '#999' } },
+            y2: { position: 'right', grid: { display: false }, ticks: axStyle, title: { display: true, text: 'Cumulative', font: { size: 10 }, color: '#999' } }
+          }
+        }
+      });
+    }
+
+    if (pdOnboardData.length) {
+      makeChart('training-onboard-chart', {
+        type: 'bar',
+        data: {
+          labels: pdOnboardData.map(([k]) => monthLabel(k)),
+          datasets: [{ label: 'Onboarding starts', data: pdOnboardData.map(([,v]) => v), backgroundColor: '#1a3c5e', borderRadius: 4 }]
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: axStyle } }
+        }
+      });
+    }
 
   }
 }
