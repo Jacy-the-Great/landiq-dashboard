@@ -2653,17 +2653,34 @@ function renderTraining(el) {
   const data = load('training');
   const webinars = load('webinars');
   const sub = activeSub.training_sub || 'sessions';
-  const tm = thisMonth(data, 'date');
-  const trainedThisMonth = tm.reduce((s, r) => s + (r.attendees || 0), 0);
-  const cumulative = data.reduce((s, r) => s + (r.attendees || 0), 0);
+  const _now = new Date();
 
-  const hist = { '2025-11':19,'2025-12':25,'2026-01':12,'2026-02':32,'2026-03':20,'2026-04':71,'2026-05':14,'2026-06':8 };
-  const months = { ...hist };
+  const tm = thisMonth(data, 'date');
+
+  // Pipedrive people with access granted = people who were trained/onboarded
+  const pdTrained = _pd_people.filter(p => {
+    const dt = pdParseDate(p['Person - Date Access Granted']);
+    return pdValidDate(dt);
+  });
+  const trainedThisMonth = pdTrained.length
+    ? pdTrained.filter(p => {
+        const dt = pdParseDate(p['Person - Date Access Granted']);
+        return dt.getFullYear() === _now.getFullYear() && dt.getMonth() === _now.getMonth();
+      }).length
+    : tm.reduce((s, r) => s + (r.attendees || 0), 0);
+  const cumulative = pdTrained.length || data.reduce((s, r) => s + (r.attendees || 0), 0);
+
+  // Build monthly chart: Pipedrive access-granted dates (full history) + manual sessions
+  const months = {};
+  pdTrained.forEach(p => {
+    const k = monthKey(p['Person - Date Access Granted']);
+    if (k) months[k] = (months[k] || 0) + 1;
+  });
   data.forEach(r => {
     const k = monthKey(r.date);
-    months[k] = (months[k] || 0) + (r.attendees || 0);
+    if (k) months[k] = (months[k] || 0) + (r.attendees || 0);
   });
-  const barData = Object.entries(months).sort().slice(-12);
+  const barData = Object.entries(months).sort().slice(-36);
 
   // Pipedrive onboarding pipeline
   const onboarding = _pd_deals.filter(d => d['Deal - Pipeline'] === 'General Onboarding Pipeline');
@@ -2793,7 +2810,7 @@ function setTrainingSub(sub, rerender = true, barData, data, webinars, convMonth
   if (sub === 'sessions') {
     sc.innerHTML = `
       <div class="box">
-        <div class="box-title">People trained per month (12 months, includes historical data)</div>
+        <div class="box-title">People trained per month — Pipedrive access granted date · up to 3 years</div>
         <div class="chart-wrap" style="height:240px"><canvas id="training-bar"></canvas></div>
       </div>
 
