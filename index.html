@@ -899,7 +899,11 @@ function renderHome(el) {
 
   const ul = trials.length ? trials[trials.length - 1] : null;
   const wl = website.length ? website[website.length - 1] : null;
-  const _pdTrainedTotal = _pd_people.filter(p => pdValidDate(pdParseDate(p['Person - Date Access Granted']))).length;
+  const _PD_UNTRAINED_TYPES = ['Contact Register', 'Expression of Interest'];
+  const _pdTrainedTotal = _pd_people.filter(p =>
+    pdValidDate(pdParseDate(p['Person - Date Access Granted'])) &&
+    !_PD_UNTRAINED_TYPES.includes(p['Person - Customer Type'])
+  ).length;
   const trainedTotal = _pdTrainedTotal || training.reduce((s, r) => s + (r.attendees || 0), 0);
   const contentThisMonth = thisMonth(content, 'date').length;
 
@@ -963,7 +967,7 @@ function renderHome(el) {
           });
           const openDeals = _pd_deals.filter(d => d['Deal - Status'] === 'Open' && d['Deal - Pipeline'] === '2026 Sales');
           const trialPeople = _pd_people.filter(p => {
-            if (p['Person - Customer Type'] !== '2 Week Trial Licence') return false;
+            if (!isTrialType(p['Person - Customer Type'])) return false;
             const rem = p['Person - Date Access Removed'];
             if (!rem) return true;
             const d = pdParseDate(rem); return pdValidDate(d) && d > new Date();
@@ -973,8 +977,8 @@ function renderHome(el) {
               '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with Status = Won and <b>Won time within 30 days of today</b>. Rolling 30-day window, not calendar month.<br><div class="calc-row">Status = "Won" AND Won time ≥ (today − 30 days)</div>'],
             ['Open deals (pipeline)', openDeals.length || null, null, null, '2026 Sales · current',
               '<span class="src-tag">Pipedrive · 2026 Sales</span><br>All deals with <b>Status = Open</b> in the 2026 Sales pipeline. Current snapshot — no date filter applied. Includes deals at any stage.'],
-            ['Active 2-week trials', trialPeople.length || null, null, null, 'current snapshot',
-              '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "2 Week Trial Licence"</b> AND either no Date Access Removed, or Date Access Removed is in the future.<br><div class="calc-row">Customer Type = "2 Week Trial Licence" AND (Access Removed is null OR Access Removed > today)</div>'],
+            ['Active trials (all types)', trialPeople.length || null, null, null, 'current snapshot',
+              '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type containing "trial"</b> (2 Week Trial Licence, Extended Trial Licence, etc.) AND either no Date Access Removed, or Date Access Removed is in the future.<br><div class="calc-row">isTrialType(Customer Type) AND (Access Removed is null OR Access Removed > today)</div>'],
             ['Active paid subscribers', pdActivePaid || null, null, null, 'Target: 600',
               '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND either no Date Access Removed, or Date Access Removed is in the future.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
           ].map(args => cardHTML(...args)).join('');
@@ -2708,9 +2712,11 @@ function renderTraining(el) {
   const tm = thisMonth(data, 'date');
 
   // Pipedrive people with access granted = people who were trained/onboarded
+  // Exclude contact-only types that have a date set but were never actually trained
+  const _PD_UNTRAINED_TYPES = ['Contact Register', 'Expression of Interest'];
   const pdTrained = _pd_people.filter(p => {
     const dt = pdParseDate(p['Person - Date Access Granted']);
-    return pdValidDate(dt);
+    return pdValidDate(dt) && !_PD_UNTRAINED_TYPES.includes(p['Person - Customer Type']);
   });
   const trainedThisMonth = pdTrained.length
     ? pdTrained.filter(p => {
@@ -3819,6 +3825,7 @@ function saveContent() {
 // ─────────────────────────────────────────
 const pdParseDate = s => (s && s.trim()) ? new Date(s) : null;
 const pdValidDate = d => d && !isNaN(d.getTime());
+const isTrialType = s => !!(s && s.toLowerCase().includes('trial'));
 const pd12Months = () => {
   const months = [];
   const now = new Date();
@@ -4531,7 +4538,7 @@ function renderPdUsers(sc) {
     <div class="cards" style="margin-bottom:18px">
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Active paid subscribers${infoBtn('Active paid subscribers','<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND (Date Access Removed is blank OR is a future date). Current snapshot.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>')}</div><div class="card-value">${activePaid.length}</div><div class="card-sub">Target: 600</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">All paid (incl. past)${infoBtn('All paid (incl. past)','<span class="src-tag">Pipedrive · People</span><br>All people with <b>Customer Type = "Paid Subscription"</b> regardless of whether their access has been removed. Includes former subscribers.<br><div class="calc-row">Customer Type = "Paid Subscription" (no date filter)</div>')}</div><div class="card-value">${paidPeople.length}</div><div class="card-sub">Customer Type = Paid Subscription</div></div>
-      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Active 2-week trials${infoBtn('Active 2-week trials','<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "2 Week Trial Licence"</b> AND (Date Access Removed is blank OR is a future date). Current snapshot.<br><div class="calc-row">Customer Type = "2 Week Trial Licence" AND (Access Removed is null OR Access Removed > today)</div>')}</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='2 Week Trial Licence'&&isActive(p)).length}</div><div class="card-sub">current snapshot</div></div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Active trials (all types)${infoBtn('Active trials (all types)','<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type containing "trial"</b> (2 Week Trial Licence, Extended Trial Licence, etc.) AND (Date Access Removed is blank OR is a future date). Current snapshot.<br><div class="calc-row">Customer Type includes "trial" AND (Access Removed is null OR Access Removed > today)</div>')}</div><div class="card-value">${_pd_people.filter(p=>isTrialType(p['Person - Customer Type'])&&isActive(p)).length}</div><div class="card-sub">current snapshot</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Centrally funded${infoBtn('Centrally funded','<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Centrally Funded Licence"</b>. No date filter — includes all records regardless of access status.')}</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='Centrally Funded Licence').length}</div></div>
     </div>
 
@@ -4609,21 +4616,21 @@ function renderPdTrials(sc) {
     if (!rem) return true;
     const d = pdParseDate(rem); return pdValidDate(d) && d > today;
   }
-  const activeTrial   = _pd_people.filter(p => p['Person - Customer Type'] === '2 Week Trial Licence' && isActive(p));
+  const activeTrial   = _pd_people.filter(p => isTrialType(p['Person - Customer Type']) && isActive(p));
   const everTrialled  = _pd_people.filter(p =>
-    p['Person - Customer Type'] === '2 Week Trial Licence' ||
-    p['Person - Previous Customer Type'] === '2 Week Trial Licence'
+    isTrialType(p['Person - Customer Type']) ||
+    isTrialType(p['Person - Previous Customer Type'])
   );
   const convertedFromTrial = _pd_people.filter(p =>
     p['Person - Customer Type'] === 'Paid Subscription' &&
-    p['Person - Previous Customer Type'] === '2 Week Trial Licence'
+    isTrialType(p['Person - Previous Customer Type'])
   );
   const trialConvRate = everTrialled.length ? pct(convertedFromTrial.length, everTrialled.length) : null;
 
   // New trials by month (range-filtered)
   const rangeMonths = pdRangeMonths(range);
   const newTrialsByMonth = {};
-  _pd_people.filter(p => p['Person - Customer Type'] === '2 Week Trial Licence').forEach(p => {
+  _pd_people.filter(p => isTrialType(p['Person - Customer Type'])).forEach(p => {
     if (!pdInRange(p['Person - Date Access Granted'], range)) return;
     const k = monthKey(p['Person - Date Access Granted']);
     if (k) newTrialsByMonth[k] = (newTrialsByMonth[k] || 0) + 1;
@@ -4678,9 +4685,9 @@ function renderPdTrials(sc) {
     ${!allTrialDeals.length && !_pd_people.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive deals and people CSVs first.</div></div>' : ''}
 
     <div class="cards" style="margin-bottom:18px">
-      <div class="card"><div class="card-label">Active 2-week trials</div><div class="card-value">${activeTrial.length}</div><div class="card-sub">current snapshot</div></div>
-      <div class="card"><div class="card-label">Ever trialled</div><div class="card-value">${everTrialled.length}</div><div class="card-sub">Paid Subscription or prior type</div></div>
-      <div class="card"><div class="card-label">Converted to paid</div><div class="card-value">${convertedFromTrial.length}</div><div class="card-sub">Previous type = 2 Week Trial</div></div>
+      <div class="card"><div class="card-label">Active trials (all types)</div><div class="card-value">${activeTrial.length}</div><div class="card-sub">current snapshot · any trial licence</div></div>
+      <div class="card"><div class="card-label">Ever trialled</div><div class="card-value">${everTrialled.length}</div><div class="card-sub">current or previous type includes "trial"</div></div>
+      <div class="card"><div class="card-label">Converted to paid</div><div class="card-value">${convertedFromTrial.length}</div><div class="card-sub">Previous type includes any trial licence</div></div>
       <div class="card"><div class="card-label">Trial → paid rate</div>${trialConvRate!=null?`<div class="card-value">${fmtPct(trialConvRate)}</div>`:'<div class="card-nodata">no data</div>'}<div class="card-sub">of all who trialled</div></div>
       <div class="card"><div class="card-label">Open trial deals</div><div class="card-value">${openTrials.length}</div><div class="card-sub">current snapshot · Trial Pipeline</div></div>
       <div class="card"><div class="card-label">Closed Lost</div><div class="card-value" style="color:var(--re)">${closedLost}</div><div class="card-sub">${trialDeals.length?fmtPct(pct(closedLost,trialDeals.length))+' of deals · '+range.label:range.label}</div></div>
@@ -4722,7 +4729,7 @@ function renderPdTrials(sc) {
         <div class="chart-wrap" style="height:220px"><canvas id="pd-trial-deals"></canvas></div></div>
     </div>
 
-    ${topTrialOrgs.length ? `<div class="box"><div class="box-title">Active 2-week trials by organisation</div>
+    ${topTrialOrgs.length ? `<div class="box"><div class="box-title">Active trials by organisation (all types)</div>
       <div class="chart-wrap" style="height:${Math.max(200,topTrialOrgs.length*32)}px"><canvas id="pd-trial-orgs"></canvas></div></div>` : ''}
 
     <div class="box"><div class="box-title">Trial lost reasons — ${range.label}</div>
@@ -4731,7 +4738,7 @@ function renderPdTrials(sc) {
   // Charts
   makeChart('pd-trial-new', {
     type:'bar',
-    data:{ labels:rangeMonths.map(m=>monthLabel(m)), datasets:[{label:'New 2-week trials', data:rangeMonths.map(m=>newTrialsByMonth[m]||0), backgroundColor:'#2e8bc0', borderRadius:3}] },
+    data:{ labels:rangeMonths.map(m=>monthLabel(m)), datasets:[{label:'New trials (all types)', data:rangeMonths.map(m=>newTrialsByMonth[m]||0), backgroundColor:'#2e8bc0', borderRadius:3}] },
     options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
       scales:{ x:{grid:{display:false},ticks:{...axStyle,maxTicksLimit:14}}, y:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true} }
     }
