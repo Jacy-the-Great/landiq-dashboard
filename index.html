@@ -794,6 +794,7 @@ const TABS = [
   { id: 'home',      label: 'Home' },
   { id: 'pipedrive', label: 'Pipedrive' },
   { id: 'marketing', label: 'Marketing' },
+  { id: 'tracker',   label: 'Weekly Tracker' },
   { id: 'training',  label: 'Training' },
   { id: 'activity',  label: 'Activity' },
 ];
@@ -817,7 +818,7 @@ function switchTab(id) {
 function renderTab(id) {
   const mc = document.getElementById('main-content');
   destroyAllCharts();
-  const renderers = { home: renderHome, pipedrive: renderPipedrive, training: renderTraining, marketing: renderMarketing, activity: renderActivity };
+  const renderers = { home: renderHome, pipedrive: renderPipedrive, training: renderTraining, marketing: renderMarketing, tracker: renderWeeklyTracker, activity: renderActivity };
   if (renderers[id]) renderers[id](mc);
 }
 
@@ -1774,9 +1775,9 @@ function renderWebsite(el) {
 }
 
 
-function setWebsiteRange(r)  { activeSub.website_range = r; if (activeSub.content_sub === 'website') { renderMarketing(); } else { renderWebsite(); } }
-function setWebsiteGran(g)   { activeSub.website_gran = g; if (activeSub.content_sub === 'website') { renderMarketing(); } else { renderWebsite(); } }
-function setWebsiteDRange(r) { activeSub.website_drange = r; if (activeSub.content_sub === 'website') { renderMarketing(); } else { renderWebsite(); } }
+function setWebsiteRange(r)  { activeSub.website_range = r; if (activeTab === 'marketing') { renderMarketing(); } else { renderWebsite(); } }
+function setWebsiteGran(g)   { activeSub.website_gran = g; if (activeTab === 'marketing') { renderMarketing(); } else { renderWebsite(); } }
+function setWebsiteDRange(r) { activeSub.website_drange = r; if (activeTab === 'marketing') { renderMarketing(); } else { renderWebsite(); } }
 
 function importWebsiteCSV() {
   const raw = document.getElementById('web-csv').value;
@@ -2779,351 +2780,230 @@ function saveWebinar() {
 }
 
 // ─────────────────────────────────────────
-// CONTENT TAB
+// WEEKLY TRACKER TAB
 // ─────────────────────────────────────────
+function renderWeeklyTracker(el) {
+  el = el || document.getElementById('main-content');
+
+  const TRACKER_SECTIONS = [
+    { label: 'LinkedIn', key: 'linkedin', rows: [
+      { key: 'jsImp',         label: 'JS Post Impressions',   fmt: 'num' },
+      { key: 'jmImp',         label: 'JM Post Impressions',   fmt: 'num' },
+      { key: 'lbImp',         label: 'LB Post Impressions',   fmt: 'num' },
+    ]},
+    { label: 'EDM', key: 'edm', rows: [
+      { key: 'edmOpen',        label: 'Email Open Rate',       fmt: 'pct' },
+      { key: 'edmCtr',         label: 'Click through Rate',    fmt: 'pct' },
+    ]},
+    { label: 'Webinar', key: 'webinar', rows: [
+      { key: 'wbEmailSend',   label: 'Email Send',             fmt: 'num' },
+      { key: 'wbEmailOpen',   label: 'Email Open Rate',        fmt: 'pct' },
+      { key: 'wbEmailCtr',    label: 'Click through Rate',     fmt: 'pct' },
+      { key: 'wbRegPage',     label: 'Event Reg. Page',        fmt: 'pct' },
+      { key: 'wbReg',         label: 'Registrations',          fmt: 'num' },
+    ]},
+    { label: 'Website', key: 'website', rows: [
+      { key: 'websiteVisits', label: 'Total Users (visits)',   fmt: 'num' },
+      { key: 'purchaseEnq',   label: 'Purchase Enquiries',     fmt: 'num' },
+      { key: 'eoiTickets',    label: 'EOI Tickets',            fmt: 'num' },
+      { key: 'trialsStarted', label: 'Trials Started',         fmt: 'num' },
+    ]},
+  ];
+
+  const tracker = load('weekly_tracker');
+  const weeks = [...tracker].sort((a,b) => a.week > b.week ? 1 : -1).slice(-10);
+  const colSpan = weeks.length + 1;
+
+  const weekHeaders = weeks.map(r =>
+    `<th style="text-align:center;min-width:76px;white-space:nowrap;font-weight:600">
+      ${fmtDate(r.week)}
+      <div style="margin-top:3px">
+        <button onclick="delTrackerWeek('${r._id}')" style="background:none;border:none;color:#bbb;cursor:pointer;font-size:10px;padding:0 2px;line-height:1" title="Delete this week">✕</button>
+      </div>
+    </th>`
+  ).join('');
+
+  let bodyRows = '';
+  if (weeks.length) {
+    TRACKER_SECTIONS.forEach(sec => {
+      bodyRows += `<tr style="background:var(--acc2)">
+        <td colspan="${colSpan}" style="font-weight:700;font-size:11px;color:var(--acc);padding:6px 10px;letter-spacing:.6px;text-transform:uppercase">${sec.label}</td>
+      </tr>`;
+      sec.rows.forEach(row => {
+        const cells = weeks.map(r => {
+          const val = r[row.key];
+          const disp = (val == null || val === '')
+            ? `<span style="color:#ccc">—</span>`
+            : row.fmt === 'pct' ? fmtPct(val) : fmtNum(val);
+          return `<td style="text-align:center;padding:5px 8px">${disp}</td>`;
+        }).join('');
+        bodyRows += `<tr>
+          <td style="padding:5px 10px 5px 20px;color:var(--tx);white-space:nowrap">${row.label}</td>
+          ${cells}
+        </tr>`;
+      });
+    });
+  } else {
+    bodyRows = `<tr><td colspan="${colSpan}" style="text-align:center;color:var(--tl);padding:32px">No tracker data yet — import Lucy's CSV or add a week manually.</td></tr>`;
+  }
+
+  el.innerHTML = `
+    <div class="section-header">
+      <div>
+        <div class="section-title">Weekly Marketing Tracker</div>
+        <div class="section-sub">Source of truth for weekly marketing metrics</div>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-title">Weekly marketing tracker
+        <span style="font-size:11px;color:var(--tl);font-weight:400;margin-left:6px">last ${weeks.length} weeks · metrics as rows, newest week on right</span>
+      </div>
+      <div class="tbl-scroll">
+        <table style="min-width:500px;border-collapse:collapse">
+          <thead><tr>
+            <th style="min-width:190px;text-align:left">Metric</th>
+            ${weekHeaders}
+          </tr></thead>
+          <tbody>${bodyRows}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="form-section">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+        <button class="add-btn" onclick="toggleForm('tracker-form')">+ Add / edit week</button>
+        <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:500;color:var(--acc);background:var(--acc2);border:1px solid var(--acc);border-radius:6px;padding:6px 12px">
+          ↑ Import CSV (Lucy's format)
+          <input type="file" accept=".csv" style="display:none" onchange="importTrackerCSV(this)">
+        </label>
+        <span style="font-size:11px;color:var(--tl)">Dates as column headers, metric names in first column — matches Lucy's spreadsheet layout</span>
+      </div>
+      <div id="tracker-form" style="display:none"><div class="form-box">
+        <div class="form-grid">
+          <div class="form-group"><label>Week ending</label><input type="date" id="tr2-week"></div>
+          <div class="form-group"><label>JS (Jacy) post impressions</label><input type="number" id="tr2-jsImp"></div>
+          <div class="form-group"><label>JM (James) post impressions</label><input type="number" id="tr2-jmImp"></div>
+          <div class="form-group"><label>LB (Lucy) post impressions</label><input type="number" id="tr2-lbImp"></div>
+          <div class="form-group"><label>EDM open rate (%)</label><input type="number" id="tr2-edmOpen" step=".1"></div>
+          <div class="form-group"><label>EDM click-through rate (%)</label><input type="number" id="tr2-edmCtr" step=".1"></div>
+          <div class="form-group"><label>Webinar email sends</label><input type="number" id="tr2-wbEmailSend"></div>
+          <div class="form-group"><label>Webinar email open rate (%)</label><input type="number" id="tr2-wbEmailOpen" step=".1"></div>
+          <div class="form-group"><label>Webinar email CTR (%)</label><input type="number" id="tr2-wbEmailCtr" step=".1"></div>
+          <div class="form-group"><label>Webinar reg. page visits (%)</label><input type="number" id="tr2-wbRegPage" step=".1"></div>
+          <div class="form-group"><label>Webinar registrations</label><input type="number" id="tr2-wbReg"></div>
+          <div class="form-group"><label>Website visits (total users)</label><input type="number" id="tr2-websiteVisits"></div>
+          <div class="form-group"><label>Purchase enquiries</label><input type="number" id="tr2-purchaseEnq"></div>
+          <div class="form-group"><label>EOI tickets</label><input type="number" id="tr2-eoiTickets"></div>
+          <div class="form-group"><label>Trials started</label><input type="number" id="tr2-trialsStarted"></div>
+        </div>
+        <div class="form-actions">
+          <button class="btn-save" onclick="saveTrackerWeek()">Save</button>
+          <button class="btn-cancel" onclick="toggleForm('tracker-form')">Cancel</button>
+        </div>
+      </div></div>
+    </div>
+  `;
+}
+
 // ─────────────────────────────────────────
-// MARKETING TAB (replaces Content)
+// MARKETING TAB
 // ─────────────────────────────────────────
 function renderMarketing(el) {
   el = el || document.getElementById('main-content');
   const data = load('content');
-  const sub = activeSub.content_sub || 'log';
   const tm = thisMonth(data, 'date');
-
-  const liImp  = tm.filter(r => r.type === 'LinkedIn').reduce((s, r) => s + (r.impressions || 0), 0);
-  const edmRec  = tm.filter(r => r.type === 'EDM').reduce((s, r) => s + (r.recipients || 0), 0);
-  const ytViews = tm.filter(r => r.type === 'YouTube').reduce((s, r) => s + (r.ytviews || 0), 0);
 
   const types = ['LinkedIn','YouTube','EDM','Viva Engage','Webinar','Blog','Speaking'];
   const typeColors = { LinkedIn:'#0a66c2', YouTube:'#c0392b', EDM:'#2a7a4b', 'Viva Engage':'#c25a00', Webinar:'#3949ab', Blog:'#7b1fa2', Speaking:'#00796b' };
-  const months = {};
-  data.forEach(r => {
-    const k = monthKey(r.date);
-    if (!months[k]) months[k] = {};
-    months[k][r.type] = (months[k][r.type] || 0) + 1;
-  });
-  const volData = Object.entries(months).sort().slice(-6);
 
-  const outcomes = data.filter(c => c.outcome && c.outcome.trim());
+  // Summary cards from latest tracker week
+  const tracker = load('weekly_tracker').sort((a,b) => a.week > b.week ? 1 : -1);
+  const latestW = tracker.length ? tracker[tracker.length - 1] : null;
+  const liImpLatest = latestW ? ((latestW.jsImp||0) + (latestW.jmImp||0) + (latestW.lbImp||0)) : null;
+
+  // Last 12 tracker weeks for charts
+  const trackerRecent = tracker.slice(-12);
+
+  // Webinars data
+  const webinars = load('webinars');
+
+  // EDM data
+  const edms = data.filter(r => r.type === 'EDM').reverse();
+  const growth2m = load('edm_2m');
+
+  // Correlation data
+  const websiteData = load('website');
+  const typeColors2 = { LinkedIn:'#0a66c2', YouTube:'#c0392b', EDM:'#2a7a4b', 'Viva Engage':'#c25a00', Webinar:'#3949ab', Blog:'#7b1fa2', Speaking:'#00796b' };
+  const today90 = new Date(); today90.setHours(0,0,0,0);
+  const days90 = Array.from({length:90},(_,i)=>{ const d=new Date(today90); d.setDate(d.getDate()-89+i); return d.toISOString().split('T')[0]; });
+  const weekMap90 = {};
+  websiteData.forEach(w => { weekMap90[w.week] = w; });
+  function getWeekSun(dateStr) {
+    const d = new Date(dateStr); while(d.getDay()!==0) d.setDate(d.getDate()+1);
+    return d.toISOString().split('T')[0];
+  }
+  const dailyUsers90 = days90.map(d => { const w = weekMap90[getWeekSun(d)]; return w ? (w.users||0)||null : null; });
+  const eventsByDay90 = {};
+  data.forEach(c => { if(!c.date) return; if(!eventsByDay90[c.date]) eventsByDay90[c.date]=[]; eventsByDay90[c.date].push(c); });
+  const corrTypes = ['LinkedIn','YouTube','EDM','Viva Engage','Webinar','Blog','Speaking'];
+  const eventDatasets90 = corrTypes.map(type => ({
+    label: type,
+    data: days90.map(d => (eventsByDay90[d]||[]).filter(c=>c.type===type).length || null),
+    backgroundColor: typeColors2[type] || '#888',
+    borderColor: typeColors2[type] || '#888',
+    type: 'bar', stack: 'events',
+    yAxisID: 'y2', barThickness: 8,
+  })).filter(ds => ds.data.some(v=>v));
+  const corrLegend = corrTypes.filter(t=>eventDatasets90.some(d=>d.label===t)).map(t=>`<span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:${typeColors2[t]};display:inline-block"></span>${t}</span>`).join('');
+  const dayLabels90 = days90.map((d,i) => { const date=new Date(d); return (i%14===0||date.getDate()===1) ? fmtDate(d).slice(0,6) : ''; });
 
   el.innerHTML = `
     <div class="section-header">
       <div>
         <div class="section-title">Marketing</div>
-        <div class="section-sub">LinkedIn · EDM · Webinars · YouTube · Viva Engage · Speaking</div>
+        <div class="section-sub">LinkedIn · EDM · Webinars · Website · Content</div>
       </div>
     </div>
 
     ${cardsHTML([
-      ['Content items (month)', tm.length || null],
-      ['LinkedIn impressions',  liImp || null],
-      ['EDM recipients (month)',edmRec || null],
-      ['YouTube views (month)', ytViews || null],
+      ['LinkedIn impressions (latest week)', liImpLatest || null, null, null, latestW ? fmtDate(latestW.week) : null],
+      ['EDM open rate', latestW?.edmOpen ?? null, null, '%', latestW ? fmtDate(latestW.week) : null],
+      ['Webinar registrations', latestW?.wbReg ?? null, null, null, latestW ? fmtDate(latestW.week) : null],
+      ['Website visits', latestW?.websiteVisits ?? null, null, null, latestW ? fmtDate(latestW.week) : null],
     ])}
 
-    <div class="sub-tabs">
-      ${['linkedin','webinars','edm','log','website','correlation','tracker'].map(s =>
-        `<button class="sub-tab${sub===s?' active':''}" onclick="setContentSub('${s}')">${
-          {linkedin:'LinkedIn',webinars:'Webinars',edm:'EDM',log:'All Content',website:'Website',correlation:'Correlation',tracker:'Weekly Tracker'}[s]
-        }</button>`
-      ).join('')}
-    </div>
-
+    <!-- ── LINKEDIN ── -->
     <div class="box">
-      <div class="box-title">Content published by type (6 months)</div>
-      ${volData.length ? `<div class="chart-wrap" style="height:220px"><canvas id="content-vol"></canvas></div>` : '<div class="no-data">No data yet.</div>'}
-    </div>
-
-    <div id="content-sub-content"></div>
-
-    <div class="form-section">
-      <button class="add-btn" onclick="toggleForm('content-form')">+ Add content item</button>
-      <div id="content-form" style="display:none">
-        <div class="form-box">
-          <div class="form-grid">
-            <div class="form-group"><label>Publish date</label><input type="date" id="c-date"></div>
-            <div class="form-group"><label>Content type</label>
-              <select id="c-type" onchange="updateContentFields()">
-                <option value="">Select</option>
-                ${types.map(t => `<option value="${t}">${t}</option>`).join('')}
-              </select>
-            </div>
-            <div class="form-group"><label>Title / description</label><input type="text" id="c-title" maxlength="100"></div>
-          </div>
-
-          <div id="c-linkedin-fields" style="display:none">
-            <div class="input-group-label">LinkedIn metrics</div>
-            <div class="form-grid">
-              <div class="form-group"><label>Impressions</label><input type="number" id="c-impressions"></div>
-              <div class="form-group"><label>Reactions</label><input type="number" id="c-reactions"></div>
-              <div class="form-group"><label>Comments</label><input type="number" id="c-comments"></div>
-              <div class="form-group"><label>Shares</label><input type="number" id="c-shares"></div>
-              <div class="form-group"><label>Link clicks</label><input type="number" id="c-clicks"></div>
-            </div>
-          </div>
-
-          <div id="c-youtube-fields" style="display:none">
-            <div class="input-group-label">YouTube metrics</div>
-            <div class="form-grid">
-              <div class="form-group"><label>Views</label><input type="number" id="c-ytviews"></div>
-              <div class="form-group"><label>Watch time (hrs)</label><input type="number" id="c-watchtime" step=".1"></div>
-              <div class="form-group"><label>Subscribers gained</label><input type="number" id="c-subs"></div>
-            </div>
-          </div>
-
-          <div id="c-edm-fields" style="display:none">
-            <div class="input-group-label">EDM metrics</div>
-            <div class="form-grid">
-              <div class="form-group"><label>Recipients</label><input type="number" id="c-recipients"></div>
-              <div class="form-group"><label>Opens</label><input type="number" id="c-opens"></div>
-              <div class="form-group"><label>Clicks</label><input type="number" id="c-edmclicks"></div>
-              <div class="form-group"><label>Unsubscribes</label><input type="number" id="c-unsub"></div>
-            </div>
-          </div>
-
-          <div id="c-viva-fields" style="display:none">
-            <div class="input-group-label">Viva Engage metrics</div>
-            <div class="form-grid">
-              <div class="form-group"><label>Views</label><input type="number" id="c-vivaviews"></div>
-              <div class="form-group"><label>Reactions</label><input type="number" id="c-vivareactions"></div>
-            </div>
-          </div>
-
-          <div id="c-speaking-fields" style="display:none">
-            <div class="input-group-label">Speaking engagement</div>
-            <div class="form-grid">
-              <div class="form-group"><label>Event name</label><input type="text" id="c-event"></div>
-              <div class="form-group"><label>Audience size</label><input type="number" id="c-audience"></div>
-              <div class="form-group"><label>Leads generated</label><input type="number" id="c-leads"></div>
-            </div>
-          </div>
-
-          <div id="c-webinar-fields" style="display:none">
-            <div class="input-group-label">Webinar metrics</div>
-            <div class="form-grid">
-              <div class="form-group"><label>Viewed registration page</label><input type="number" id="c-wbRegPageViews"></div>
-              <div class="form-group"><label>Registered</label><input type="number" id="c-wbRegistered"></div>
-              <div class="form-group"><label>Attended</label><input type="number" id="c-wbAttended"></div>
-              <div class="form-group"><label>Cancelled registrations</label><input type="number" id="c-wbCancelled"></div>
-              <div class="form-group"><label>Average attendance time</label><input type="text" id="c-wbAvgTime" placeholder="e.g. 49m 34s"></div>
-              <div class="form-group"><label>Total reactions</label><input type="number" id="c-wbReactions"></div>
-            </div>
-          </div>
-
-          <div class="input-group-label">Commercial impact</div>
-          <div class="form-grid">
-            <div class="form-group" style="grid-column:1/-1"><label>Linked outcome <span style="font-weight:400;color:var(--tl)">(optional: e.g. "Led to Nathan Laird inbound inquiry")</span></label>
-              <textarea id="c-outcome" maxlength="300" style="min-height:56px"></textarea>
-            </div>
-            <div class="form-group"><label>Tags</label><input type="text" id="c-tags" placeholder="e.g. product launch, council"></div>
-          </div>
-
-          <div class="form-actions">
-            <button class="btn-save" onclick="saveContent()">Save</button>
-            <button class="btn-cancel" onclick="toggleForm('content-form')">Cancel</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    ${tableHTML('content', data, [
-      { key: 'date',    label: 'Date',    render: r => fmtDate(r.date) },
-      { key: 'type',    label: 'Type',    render: r => `<span class="badge badge-${r.type.toLowerCase().replace(' ','-')}">${r.type}</span>` },
-      { key: 'title',   label: 'Title',   render: r => r.title || ':' },
-      { key: 'metric',  label: 'Primary', render: r => {
-        if (r.type==='LinkedIn') return fmtNum(r.impressions) + ' imp';
-        if (r.type==='YouTube') return fmtNum(r.ytviews) + ' views';
-        if (r.type==='EDM') return fmtNum(r.opens) + ' opens';
-        if (r.type==='Viva Engage') return fmtNum(r.vivaviews) + ' views';
-        if (r.type==='Speaking') return fmtNum(r.leads) + ' leads';
-        return ':';
-      }},
-      { key: 'outcome', label: 'Outcome', render: r => r.outcome ? r.outcome.substring(0,40)+'…' : ':' },
-    ], '_id')}
-  `;
-
-  if (volData.length) {
-    makeChart('content-vol', {
-      type: 'bar',
-      data: {
-        labels: volData.map(([k]) => monthLabel(k)),
-        datasets: types.map(t => ({
-          label: t, stack: 'a',
-          data: volData.map(([,v]) => v[t] || 0),
-          backgroundColor: typeColors[t],
-          borderRadius: 2,
-        }))
-      },
-      options: { responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 10, padding: 10 } } },
-        scales: {
-          x: { stacked: true, grid: { display: false }, ticks: axStyle },
-          y: { stacked: true, grid: gridStyle, ticks: axStyle }
-        }
-      }
-    });
-  }
-
-  setContentSub(sub, false, data, outcomes);
-}
-
-function setContentSub(sub, rerender = true, data, outcomes) {
-  activeSub.content_sub = sub;
-  if (rerender) { renderMarketing(); return; }
-
-  const sc = document.getElementById('content-sub-content');
-  if (!sc) return;
-
-  if (sub === 'linkedin') {
-    // LinkedIn by person
-    const liData = load('linkedin_weekly');
-    const recent = liData.slice(-12);
-    sc.innerHTML = `
-      <div class="box">
-        <div class="box-title">LinkedIn impressions by team member: 12 weeks</div>
-        ${recent.length ? `<div class="chart-wrap" style="height:240px"><canvas id="li-chart"></canvas></div>` : '<div class="no-data">No data yet.</div>'}
-      </div>
-      ${recent.length ? `<div class="box">
-        <div class="box-title">Weekly detail</div>
-        <div class="tbl-scroll"><table>
-          <thead><tr><th>Week</th><th>Jacy</th><th>James</th><th>Lucy</th><th>Total</th><th></th></tr></thead>
-          <tbody>${[...liData].reverse().slice(0,8).map(r => `<tr>
+      <div class="box-title">LinkedIn impressions by team member</div>
+      ${trackerRecent.length ? `<div class="chart-wrap" style="height:240px"><canvas id="li-chart"></canvas></div>` : '<div class="no-data">No tracker data yet.</div>'}
+      ${trackerRecent.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--acc);font-weight:500;padding:4px 0">Show data table</summary>
+        <div class="tbl-scroll" style="margin-top:8px"><table>
+          <thead><tr><th>Week</th><th>JS</th><th>JM</th><th>LB</th><th>Total</th></tr></thead>
+          <tbody>${[...trackerRecent].reverse().map(r => `<tr>
             <td>${fmtDate(r.week)}</td>
-            <td>${fmtNum(r.jacy)}</td><td>${fmtNum(r.james)}</td><td>${fmtNum(r.lucy)}</td>
-            <td><strong>${fmtNum((r.jacy||0)+(r.james||0)+(r.lucy||0))}</strong></td>
-            <td><button class="btn-del" onclick="delLinkedIn('${r.week}')">Delete</button></td>
+            <td>${fmtNum(r.jsImp)}</td><td>${fmtNum(r.jmImp)}</td><td>${fmtNum(r.lbImp)}</td>
+            <td><strong>${fmtNum((r.jsImp||0)+(r.jmImp||0)+(r.lbImp||0))}</strong></td>
           </tr>`).join('')}</tbody>
         </table></div>
-      </div>` : ''}
-      <div class="form-section">
-        <button class="add-btn" onclick="toggleForm('li-form')">+ Add LinkedIn week</button>
-        <div id="li-form" style="display:none"><div class="form-box">
-          <div class="form-grid">
-            <div class="form-group"><label>Week ending</label><input type="date" id="li-week"></div>
-            <div class="form-group"><label>Jacy: impressions</label><input type="number" id="li-jacy"><div class="source-note">LinkedIn Analytics</div></div>
-            <div class="form-group"><label>James: impressions</label><input type="number" id="li-james"></div>
-            <div class="form-group"><label>Lucy: impressions</label><input type="number" id="li-lucy"></div>
-            <div class="form-group"><label>Jacy: post title / description</label><input type="text" id="li-jacy-title"></div>
-            <div class="form-group"><label>James: post title / description</label><input type="text" id="li-james-title"></div>
-            <div class="form-group"><label>Lucy: post title / description</label><input type="text" id="li-lucy-title"></div>
-          </div>
-          <div class="form-actions">
-            <button class="btn-save" onclick="saveLinkedIn()">Save</button>
-            <button class="btn-cancel" onclick="toggleForm('li-form')">Cancel</button>
-          </div>
-        </div></div>
-      </div>
-    `;
-    if (recent.length) {
-      makeChart('li-chart', {
-        type: 'bar',
-        data: {
-          labels: recent.map(r => fmtDate(r.week).slice(0,6)),
-          datasets: [
-            { label: 'Jacy',  data: recent.map(r => r.jacy||0),  backgroundColor: '#1a3c5e', borderRadius: 3, stack: 'a' },
-            { label: 'James', data: recent.map(r => r.james||0), backgroundColor: '#2e8bc0', borderRadius: 3, stack: 'a' },
-            { label: 'Lucy',  data: recent.map(r => r.lucy||0),  backgroundColor: '#90c4e0', borderRadius: 3, stack: 'a' },
-          ]
-        },
-        options: { responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
-          scales: {
-            x: { stacked: true, grid: { display: false }, ticks: axStyle },
-            y: { stacked: true, grid: gridStyle, ticks: axStyle }
-          }
-        }
-      });
-    }
+      </details>` : ''}
+    </div>
 
-  } else if (sub === 'webinars') {
-    const webinars = load('webinars');
-    sc.innerHTML = `
-      <div class="box">
-        <div class="box-title">Webinar performance: by event</div>
-        ${webinars.length ? `
-          <div class="tbl-scroll"><table>
-            <thead><tr>
-              <th>Date</th><th>Title</th>
-              <th>Viewed reg. page</th><th>Registered</th><th>Attended</th>
-              <th>Attend rate</th><th>Cancelled</th>
-              <th>Avg attendance time</th><th>Total reactions</th>
-              <th></th>
-            </tr></thead>
-            <tbody>${[...webinars].reverse().map(w => {
-              const ar = pct(w.attended, w.registered);
-              return `<tr>
-                <td>${fmtDate(w.date)}</td>
-                <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${w.title||''}">${w.title || ':'}</td>
-                <td>${fmtNum(w.regPageViews)}</td>
-                <td>${fmtNum(w.registered)}</td>
-                <td>${fmtNum(w.attended)}</td>
-                <td><span class="conv-pct ${ar>70?'good':ar>50?'mid':'bad'}">${fmtPct(ar)}</span></td>
-                <td>${fmtNum(w.cancelled)}</td>
-                <td>${w.avgTime || ':'}</td>
-                <td>${fmtNum(w.reactions)}</td>
-                <td><button class="btn-del" onclick="delRow('webinars','${w._id}','_id')">Delete</button></td>
-              </tr>`;
-            }).join('')}</tbody>
-          </table></div>
-        ` : '<div class="no-data">No webinars logged yet.</div>'}
-      </div>
-      <div class="form-section">
-        <button class="add-btn" onclick="toggleForm('webinar-form')">+ Add webinar</button>
-        <div id="webinar-form" style="display:none"><div class="form-box">
-          <div class="form-grid">
-            <div class="form-group">
-              <label>Webinar date</label>
-              <input type="date" id="wb-date">
-            </div>
-            <div class="form-group">
-              <label>Title</label>
-              <input type="text" id="wb-title">
-            </div>
-            <div class="form-group">
-              <label>Viewed registration page</label>
-              <input type="number" id="wb-regPageViews">
-              <div class="source-note">Teams attendance tab: "Viewed registration page"</div>
-            </div>
-            <div class="form-group">
-              <label>Registered</label>
-              <input type="number" id="wb-registered">
-              <div class="source-note">Teams attendance tab: "Registered"</div>
-            </div>
-            <div class="form-group">
-              <label>Attended</label>
-              <input type="number" id="wb-attended">
-              <div class="source-note">Teams attendance tab: "Attended"</div>
-            </div>
-            <div class="form-group">
-              <label>Cancelled registrations</label>
-              <input type="number" id="wb-cancelled">
-              <div class="source-note">Teams attendance tab: "Cancelled registrations"</div>
-            </div>
-            <div class="form-group">
-              <label>Average attendance time</label>
-              <input type="text" id="wb-avgTime" placeholder="e.g. 49m 34s">
-              <div class="source-note">Teams attendance tab: "Average attendance time"</div>
-            </div>
-            <div class="form-group">
-              <label>Total reactions</label>
-              <input type="number" id="wb-reactions">
-              <div class="source-note">Teams engagement tab: "Total reactions"</div>
-            </div>
-          </div>
-          <div class="form-actions">
-            <button class="btn-save" onclick="saveWebinar()">Save</button>
-            <button class="btn-cancel" onclick="toggleForm('webinar-form')">Cancel</button>
-          </div>
-        </div></div>
-      </div>
-    `;
-
-  } else if (sub === 'edm') {
-    const edms = (data || load('content')).filter(r => r.type === 'EDM').reverse();
-    const growth2m = load('edm_2m');
-    sc.innerHTML = `
-      <div class="box">
-        <div class="box-title">Campaign sends</div>
+    <!-- ── EDM ── -->
+    <div class="box">
+      <div class="box-title">EDM performance</div>
+      ${trackerRecent.length ? `<div class="chart-wrap" style="height:220px"><canvas id="edm-chart"></canvas></div>` : '<div class="no-data">No tracker data yet.</div>'}
+      ${trackerRecent.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--acc);font-weight:500;padding:4px 0">Show data table</summary>
+        <div class="tbl-scroll" style="margin-top:8px"><table>
+          <thead><tr><th>Week</th><th>Open Rate</th><th>CTR</th></tr></thead>
+          <tbody>${[...trackerRecent].reverse().map(r => `<tr>
+            <td>${fmtDate(r.week)}</td>
+            <td>${r.edmOpen != null ? fmtPct(r.edmOpen) : ':'}</td>
+            <td>${r.edmCtr != null ? fmtPct(r.edmCtr) : ':'}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </details>` : ''}
+      <div style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px">
+        <div class="box-title" style="margin-bottom:10px">Campaign sends</div>
         ${edms.length ? `<table class="conv-table">
           <thead><tr><th>Date</th><th>Campaign</th><th>Recipients</th><th>Opens</th><th>Open rate</th><th>Clicks</th><th>Click rate</th><th>Unsubs</th></tr></thead>
           <tbody>${edms.map(e => {
@@ -3136,8 +3016,8 @@ function setContentSub(sub, rerender = true, data, outcomes) {
           }).join('')}</tbody>
         </table>` : '<div class="no-data">No EDM campaigns logged yet. Add via the content form below and select "EDM" as type.</div>'}
       </div>
-      <div class="box">
-        <div class="box-title">2-Month Growth Email: automated onboarding sequence
+      <div style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px">
+        <div class="box-title" style="margin-bottom:10px">2-Month Growth Email: automated onboarding sequence
           <span style="font-size:11px;color:var(--tl);font-weight:400;margin-left:4px">Sent to new users at 2-month mark</span>
         </div>
         ${growth2m.length ? `<table class="conv-table">
@@ -3170,225 +3050,281 @@ function setContentSub(sub, rerender = true, data, outcomes) {
           </div></div>
         </div>
       </div>
-    `;
+    </div>
 
-  } else if (sub === 'log') {
-    sc.innerHTML = '';
+    <!-- ── WEBINARS ── -->
+    <div class="box">
+      <div class="box-title">Webinar performance</div>
+      ${trackerRecent.length ? `<div class="chart-wrap" style="height:220px"><canvas id="wb-chart"></canvas></div>` : '<div class="no-data">No tracker data yet.</div>'}
+      ${trackerRecent.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--acc);font-weight:500;padding:4px 0">Show data table</summary>
+        <div class="tbl-scroll" style="margin-top:8px"><table>
+          <thead><tr><th>Week</th><th>Email Send</th><th>Open Rate</th><th>CTR</th><th>Reg Page</th><th>Registrations</th></tr></thead>
+          <tbody>${[...trackerRecent].reverse().map(r => `<tr>
+            <td>${fmtDate(r.week)}</td>
+            <td>${fmtNum(r.wbEmailSend)}</td>
+            <td>${r.wbEmailOpen != null ? fmtPct(r.wbEmailOpen) : ':'}</td>
+            <td>${r.wbEmailCtr != null ? fmtPct(r.wbEmailCtr) : ':'}</td>
+            <td>${r.wbRegPage != null ? fmtPct(r.wbRegPage) : ':'}</td>
+            <td>${fmtNum(r.wbReg)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </details>` : ''}
+      <div style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px">
+        <div class="box-title" style="margin-bottom:10px">Webinar performance: by event</div>
+        ${webinars.length ? `
+          <div class="tbl-scroll"><table>
+            <thead><tr>
+              <th>Date</th><th>Title</th>
+              <th>Viewed reg. page</th><th>Registered</th><th>Attended</th>
+              <th>Attend rate</th><th>Cancelled</th>
+              <th>Avg attendance time</th><th>Total reactions</th>
+              <th></th>
+            </tr></thead>
+            <tbody>${[...webinars].reverse().map(w => {
+              const ar = pct(w.attended, w.registered);
+              return `<tr>
+                <td>${fmtDate(w.date)}</td>
+                <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${w.title||''}">${w.title || ':'}</td>
+                <td>${fmtNum(w.regPageViews)}</td>
+                <td>${fmtNum(w.registered)}</td>
+                <td>${fmtNum(w.attended)}</td>
+                <td><span class="conv-pct ${ar>70?'good':ar>50?'mid':'bad'}">${fmtPct(ar)}</span></td>
+                <td>${fmtNum(w.cancelled)}</td>
+                <td>${w.avgTime || ':'}</td>
+                <td>${fmtNum(w.reactions)}</td>
+                <td><button class="btn-del" onclick="delRow('webinars','${w._id}','_id')">Delete</button></td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table></div>
+        ` : '<div class="no-data">No webinars logged yet.</div>'}
+        <div class="form-section" style="margin-top:12px">
+          <button class="add-btn" onclick="toggleForm('webinar-form')">+ Add webinar</button>
+          <div id="webinar-form" style="display:none"><div class="form-box">
+            <div class="form-grid">
+              <div class="form-group"><label>Webinar date</label><input type="date" id="wb-date"></div>
+              <div class="form-group"><label>Title</label><input type="text" id="wb-title"></div>
+              <div class="form-group"><label>Viewed registration page</label><input type="number" id="wb-regPageViews"><div class="source-note">Teams attendance tab</div></div>
+              <div class="form-group"><label>Registered</label><input type="number" id="wb-registered"><div class="source-note">Teams attendance tab</div></div>
+              <div class="form-group"><label>Attended</label><input type="number" id="wb-attended"><div class="source-note">Teams attendance tab</div></div>
+              <div class="form-group"><label>Cancelled registrations</label><input type="number" id="wb-cancelled"><div class="source-note">Teams attendance tab</div></div>
+              <div class="form-group"><label>Average attendance time</label><input type="text" id="wb-avgTime" placeholder="e.g. 49m 34s"><div class="source-note">Teams attendance tab</div></div>
+              <div class="form-group"><label>Total reactions</label><input type="number" id="wb-reactions"><div class="source-note">Teams engagement tab</div></div>
+            </div>
+            <div class="form-actions">
+              <button class="btn-save" onclick="saveWebinar()">Save</button>
+              <button class="btn-cancel" onclick="toggleForm('webinar-form')">Cancel</button>
+            </div>
+          </div></div>
+        </div>
+      </div>
+    </div>
 
-  } else if (sub === 'website') {
-    renderWebsite(sc);
+    <!-- ── WEBSITE ── -->
+    <div class="box">
+      <div class="box-title">Website</div>
+      <div id="website-inline"></div>
+    </div>
 
-  } else if (sub === 'correlation') {
-    const allContent = data || load('content');
-    const websiteData = load('website');
-    const typeColors2 = { LinkedIn:'#0a66c2', YouTube:'#c0392b', EDM:'#2a7a4b', 'Viva Engage':'#c25a00', Webinar:'#3949ab', Blog:'#7b1fa2', Speaking:'#00796b' };
-    // Build last 90 days daily x-axis
-    const today90 = new Date(); today90.setHours(0,0,0,0);
-    const days90 = Array.from({length:90},(_,i)=>{ const d=new Date(today90); d.setDate(d.getDate()-89+i); return d.toISOString().split('T')[0]; });
-    // Map website weekly data: for each day find its week Sunday endpoint
-    const weekMap90 = {};
-    websiteData.forEach(w => { weekMap90[w.week] = w; });
-    function getWeekSun(dateStr) {
-      const d = new Date(dateStr); while(d.getDay()!==0) d.setDate(d.getDate()+1);
-      return d.toISOString().split('T')[0];
-    }
-    const dailyUsers90 = days90.map(d => { const w = weekMap90[getWeekSun(d)]; return w ? (w.users||0)||null : null; });
-    // Group content events by date
-    const eventsByDay90 = {};
-    allContent.forEach(c => { if(!c.date) return; if(!eventsByDay90[c.date]) eventsByDay90[c.date]=[]; eventsByDay90[c.date].push(c); });
-    // Build stacked bar datasets per type
-    const corrTypes = ['LinkedIn','YouTube','EDM','Viva Engage','Webinar','Blog','Speaking'];
-    const eventDatasets90 = corrTypes.map(type => ({
-      label: type,
-      data: days90.map(d => (eventsByDay90[d]||[]).filter(c=>c.type===type).length || null),
-      backgroundColor: typeColors2[type] || '#888',
-      borderColor: typeColors2[type] || '#888',
-      type: 'bar', stack: 'events',
-      yAxisID: 'y2', barThickness: 8,
-    })).filter(ds => ds.data.some(v=>v));
-    const corrLegend = corrTypes.filter(t=>eventDatasets90.some(d=>d.label===t)).map(t=>`<span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:${typeColors2[t]};display:inline-block"></span>${t}</span>`).join('');
-    const dayLabels90 = days90.map((d,i) => { const date=new Date(d); return (i%14===0||date.getDate()===1) ? fmtDate(d).slice(0,6) : ''; });
-    sc.innerHTML = `<div class="box">
+    <!-- ── CONTENT LOG ── -->
+    <div class="box">
+      <div class="box-title">All content</div>
+      <div class="form-section">
+        <button class="add-btn" onclick="toggleForm('content-form')">+ Add content item</button>
+        <div id="content-form" style="display:none">
+          <div class="form-box">
+            <div class="form-grid">
+              <div class="form-group"><label>Publish date</label><input type="date" id="c-date"></div>
+              <div class="form-group"><label>Content type</label>
+                <select id="c-type" onchange="updateContentFields()">
+                  <option value="">Select</option>
+                  ${types.map(t => `<option value="${t}">${t}</option>`).join('')}
+                </select>
+              </div>
+              <div class="form-group"><label>Title / description</label><input type="text" id="c-title" maxlength="100"></div>
+            </div>
+            <div id="c-linkedin-fields" style="display:none">
+              <div class="input-group-label">LinkedIn metrics</div>
+              <div class="form-grid">
+                <div class="form-group"><label>Impressions</label><input type="number" id="c-impressions"></div>
+                <div class="form-group"><label>Reactions</label><input type="number" id="c-reactions"></div>
+                <div class="form-group"><label>Comments</label><input type="number" id="c-comments"></div>
+                <div class="form-group"><label>Shares</label><input type="number" id="c-shares"></div>
+                <div class="form-group"><label>Link clicks</label><input type="number" id="c-clicks"></div>
+              </div>
+            </div>
+            <div id="c-youtube-fields" style="display:none">
+              <div class="input-group-label">YouTube metrics</div>
+              <div class="form-grid">
+                <div class="form-group"><label>Views</label><input type="number" id="c-ytviews"></div>
+                <div class="form-group"><label>Watch time (hrs)</label><input type="number" id="c-watchtime" step=".1"></div>
+                <div class="form-group"><label>Subscribers gained</label><input type="number" id="c-subs"></div>
+              </div>
+            </div>
+            <div id="c-edm-fields" style="display:none">
+              <div class="input-group-label">EDM metrics</div>
+              <div class="form-grid">
+                <div class="form-group"><label>Recipients</label><input type="number" id="c-recipients"></div>
+                <div class="form-group"><label>Opens</label><input type="number" id="c-opens"></div>
+                <div class="form-group"><label>Clicks</label><input type="number" id="c-edmclicks"></div>
+                <div class="form-group"><label>Unsubscribes</label><input type="number" id="c-unsub"></div>
+              </div>
+            </div>
+            <div id="c-viva-fields" style="display:none">
+              <div class="input-group-label">Viva Engage metrics</div>
+              <div class="form-grid">
+                <div class="form-group"><label>Views</label><input type="number" id="c-vivaviews"></div>
+                <div class="form-group"><label>Reactions</label><input type="number" id="c-vivareactions"></div>
+              </div>
+            </div>
+            <div id="c-speaking-fields" style="display:none">
+              <div class="input-group-label">Speaking engagement</div>
+              <div class="form-grid">
+                <div class="form-group"><label>Event name</label><input type="text" id="c-event"></div>
+                <div class="form-group"><label>Audience size</label><input type="number" id="c-audience"></div>
+                <div class="form-group"><label>Leads generated</label><input type="number" id="c-leads"></div>
+              </div>
+            </div>
+            <div id="c-webinar-fields" style="display:none">
+              <div class="input-group-label">Webinar metrics</div>
+              <div class="form-grid">
+                <div class="form-group"><label>Viewed registration page</label><input type="number" id="c-wbRegPageViews"></div>
+                <div class="form-group"><label>Registered</label><input type="number" id="c-wbRegistered"></div>
+                <div class="form-group"><label>Attended</label><input type="number" id="c-wbAttended"></div>
+                <div class="form-group"><label>Cancelled registrations</label><input type="number" id="c-wbCancelled"></div>
+                <div class="form-group"><label>Average attendance time</label><input type="text" id="c-wbAvgTime" placeholder="e.g. 49m 34s"></div>
+                <div class="form-group"><label>Total reactions</label><input type="number" id="c-wbReactions"></div>
+              </div>
+            </div>
+            <div class="input-group-label">Commercial impact</div>
+            <div class="form-grid">
+              <div class="form-group" style="grid-column:1/-1"><label>Linked outcome <span style="font-weight:400;color:var(--tl)">(optional: e.g. "Led to Nathan Laird inbound inquiry")</span></label>
+                <textarea id="c-outcome" maxlength="300" style="min-height:56px"></textarea>
+              </div>
+              <div class="form-group"><label>Tags</label><input type="text" id="c-tags" placeholder="e.g. product launch, council"></div>
+            </div>
+            <div class="form-actions">
+              <button class="btn-save" onclick="saveContent()">Save</button>
+              <button class="btn-cancel" onclick="toggleForm('content-form')">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      ${tableHTML('content', data, [
+        { key: 'date',    label: 'Date',    render: r => fmtDate(r.date) },
+        { key: 'type',    label: 'Type',    render: r => `<span class="badge badge-${r.type.toLowerCase().replace(' ','-')}">${r.type}</span>` },
+        { key: 'title',   label: 'Title',   render: r => r.title || ':' },
+        { key: 'metric',  label: 'Primary', render: r => {
+          if (r.type==='LinkedIn') return fmtNum(r.impressions) + ' imp';
+          if (r.type==='YouTube') return fmtNum(r.ytviews) + ' views';
+          if (r.type==='EDM') return fmtNum(r.opens) + ' opens';
+          if (r.type==='Viva Engage') return fmtNum(r.vivaviews) + ' views';
+          if (r.type==='Speaking') return fmtNum(r.leads) + ' leads';
+          return ':';
+        }},
+        { key: 'outcome', label: 'Outcome', render: r => r.outcome ? r.outcome.substring(0,40)+'…' : ':' },
+      ], '_id')}
+    </div>
+
+    <!-- ── CORRELATION ── -->
+    <div class="box">
       <div class="box-title">Content events vs website traffic — daily (last 90 days)</div>
       <div style="font-size:12px;color:var(--tl);padding:6px 0 14px;display:flex;flex-wrap:wrap;gap:10px">
         ${corrLegend}
         <span style="display:flex;align-items:center;gap:4px"><span style="width:22px;height:3px;background:#2e8bc0;display:inline-block;border-radius:2px"></span>Website users (weekly pts)</span>
       </div>
-      <div id="corr-chart-wrap" class="chart-wrap" style="height:300px"></div>
-    </div>`;
-    if (websiteData.length || allContent.length) {
-      document.getElementById('corr-chart-wrap').innerHTML = '<canvas id="corr-chart"></canvas>';
-      makeChart('corr-chart', {
-        type: 'line',
-        data: {
-          labels: dayLabels90,
-          datasets: [
-            { label:'Website users', data:dailyUsers90, borderColor:'#2e8bc0', backgroundColor:'rgba(46,139,192,.08)', borderWidth:2, fill:true, tension:.3, pointRadius:0, spanGaps:true, yAxisID:'y1', order:10 },
-            ...eventDatasets90
-          ]
-        },
-        options: { responsive:true, maintainAspectRatio:false,
-          interaction:{ mode:'index', intersect:false },
-          plugins:{ legend:{display:false},
-            tooltip:{ callbacks:{
-              title: ctx=>{ const d=days90[ctx[0].dataIndex]; return fmtDate(d); },
-              afterBody: ctx=>{ const d=days90[ctx[0].dataIndex]; const evs=(eventsByDay90[d]||[]); return evs.length ? ['','Content:'].concat(evs.map(c=>'• '+c.type+(c.title?' — '+c.title.slice(0,40):''))) : []; }
-            }}
-          },
-          scales:{
-            x:{ grid:{display:false}, ticks:{...axStyle, callback:(v,i)=>dayLabels90[i]||null, maxRotation:0} },
-            y1:{ position:'left', grid:gridStyle, ticks:axStyle, beginAtZero:true, title:{display:true,text:'Users',...axStyle} },
-            y2:{ position:'right', grid:{drawOnChartArea:false}, ticks:{...axStyle,stepSize:1}, beginAtZero:true, title:{display:true,text:'Events',...axStyle}, suggestedMax:4 }
-          }
+      <div id="corr-chart-wrap" class="chart-wrap" style="height:300px">
+        ${(websiteData.length || data.length) ? '<canvas id="corr-chart"></canvas>' : '<div class="no-data">Add website data and content items to see the chart.</div>'}
+      </div>
+    </div>
+  `;
+
+  // Populate website inline section
+  renderWebsite(document.getElementById('website-inline'));
+
+  // LinkedIn stacked bar + total line
+  if (trackerRecent.length) {
+    const liLabels = trackerRecent.map(r => fmtDate(r.week).slice(0,6));
+    const liTotals = trackerRecent.map(r => (r.jsImp||0)+(r.jmImp||0)+(r.lbImp||0));
+    makeChart('li-chart', {
+      type: 'bar',
+      data: {
+        labels: liLabels,
+        datasets: [
+          { label: 'JS (Jacy)',  data: trackerRecent.map(r => r.jsImp||0),  backgroundColor: '#1a3c5e', borderRadius: 3, stack: 'a' },
+          { label: 'JM (James)', data: trackerRecent.map(r => r.jmImp||0), backgroundColor: '#2e8bc0', borderRadius: 3, stack: 'a' },
+          { label: 'LB (Lucy)',  data: trackerRecent.map(r => r.lbImp||0),  backgroundColor: '#90c4e0', borderRadius: 3, stack: 'a' },
+          { label: 'Total', data: liTotals, type: 'line', borderColor: '#c0392b', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 3, tension: .3, fill: false, order: 0 },
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+        scales: {
+          x: { stacked: true, grid: { display: false }, ticks: axStyle },
+          y: { stacked: true, grid: gridStyle, ticks: axStyle }
         }
-      });
-    } else {
-      document.getElementById('corr-chart-wrap').innerHTML = '<div class="no-data">Add website data and content items to see the chart.</div>';
-    }
+      }
+    });
 
-  } else if (sub === 'tracker') {
-    // Lucy's weekly tracker — metrics as rows, weeks as columns
-    const TRACKER_SECTIONS = [
-      { label: 'LinkedIn', key: 'linkedin', rows: [
-        { key: 'jsImp',         label: 'JS Post Impressions',   fmt: 'num' },
-        { key: 'jmImp',         label: 'JM Post Impressions',   fmt: 'num' },
-        { key: 'lbImp',         label: 'LB Post Impressions',   fmt: 'num' },
-      ]},
-      { label: 'EDM', key: 'edm', rows: [
-        { key: 'edmOpen',        label: 'Email Open Rate',       fmt: 'pct' },
-        { key: 'edmCtr',         label: 'Click through Rate',    fmt: 'pct' },
-      ]},
-      { label: 'Webinar', key: 'webinar', rows: [
-        { key: 'wbEmailSend',   label: 'Email Send',             fmt: 'num' },
-        { key: 'wbEmailOpen',   label: 'Email Open Rate',        fmt: 'pct' },
-        { key: 'wbEmailCtr',    label: 'Click through Rate',     fmt: 'pct' },
-        { key: 'wbRegPage',     label: 'Event Reg. Page',        fmt: 'pct' },
-        { key: 'wbReg',         label: 'Registrations',          fmt: 'num' },
-      ]},
-      { label: 'Website', key: 'website', rows: [
-        { key: 'websiteVisits', label: 'Total Users (visits)',   fmt: 'num' },
-        { key: 'purchaseEnq',   label: 'Purchase Enquiries',     fmt: 'num' },
-        { key: 'eoiTickets',    label: 'EOI Tickets',            fmt: 'num' },
-        { key: 'trialsStarted', label: 'Trials Started',         fmt: 'num' },
-      ]},
-    ];
+    // EDM line chart
+    makeChart('edm-chart', {
+      type: 'line',
+      data: {
+        labels: trackerRecent.map(r => fmtDate(r.week).slice(0,6)),
+        datasets: [
+          { label: 'Email Open Rate (%)', data: trackerRecent.map(r => r.edmOpen ?? null), borderColor: '#2a7a4b', backgroundColor: 'rgba(42,122,75,.08)', borderWidth: 2, pointRadius: 3, tension: .3, fill: true, spanGaps: true },
+          { label: 'Click Through Rate (%)', data: trackerRecent.map(r => r.edmCtr ?? null), borderColor: '#2e8bc0', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 3, tension: .3, fill: false, spanGaps: true },
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+        scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: axStyle, beginAtZero: true } }
+      }
+    });
 
-    const tracker = load('weekly_tracker');
-    // Sort ascending, take last 10 weeks
-    const weeks = [...tracker].sort((a,b) => a.week > b.week ? 1 : -1).slice(-10);
-    const colSpan = weeks.length + 1;
-
-    const weekHeaders = weeks.map(r =>
-      `<th style="text-align:center;min-width:76px;white-space:nowrap;font-weight:600">
-        ${fmtDate(r.week)}
-        <div style="margin-top:3px">
-          <button onclick="delTrackerWeek('${r._id}')" style="background:none;border:none;color:#bbb;cursor:pointer;font-size:10px;padding:0 2px;line-height:1" title="Delete this week">✕</button>
-        </div>
-      </th>`
-    ).join('');
-
-    let bodyRows = '';
-    if (weeks.length) {
-      TRACKER_SECTIONS.forEach(sec => {
-        bodyRows += `<tr style="background:var(--acc2)">
-          <td colspan="${colSpan}" style="font-weight:700;font-size:11px;color:var(--acc);padding:6px 10px;letter-spacing:.6px;text-transform:uppercase">${sec.label}</td>
-        </tr>`;
-        sec.rows.forEach(row => {
-          const cells = weeks.map(r => {
-            const val = r[row.key];
-            const disp = (val == null || val === '')
-              ? `<span style="color:#ccc">—</span>`
-              : row.fmt === 'pct' ? fmtPct(val) : fmtNum(val);
-            return `<td style="text-align:center;padding:5px 8px">${disp}</td>`;
-          }).join('');
-          bodyRows += `<tr>
-            <td style="padding:5px 10px 5px 20px;color:var(--tx);white-space:nowrap">${row.label}</td>
-            ${cells}
-          </tr>`;
-        });
-      });
-    } else {
-      bodyRows = `<tr><td colspan="${colSpan}" style="text-align:center;color:var(--tl);padding:32px">No tracker data yet — import Lucy's CSV or add a week manually.</td></tr>`;
-    }
-
-    sc.innerHTML = `
-      <div class="box">
-        <div class="box-title">Weekly marketing tracker
-          <span style="font-size:11px;color:var(--tl);font-weight:400;margin-left:6px">last ${weeks.length} weeks · metrics as rows, newest week on right</span>
-        </div>
-        <div class="tbl-scroll">
-          <table style="min-width:500px;border-collapse:collapse">
-            <thead><tr>
-              <th style="min-width:190px;text-align:left">Metric</th>
-              ${weekHeaders}
-            </tr></thead>
-            <tbody>${bodyRows}</tbody>
-          </table>
-        </div>
-      </div>
-      <div class="form-section">
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
-          <button class="add-btn" onclick="toggleForm('tracker-form')">+ Add / edit week</button>
-          <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:500;color:var(--acc);background:var(--acc2);border:1px solid var(--acc);border-radius:6px;padding:6px 12px">
-            ↑ Import CSV (Lucy's format)
-            <input type="file" accept=".csv" style="display:none" onchange="importTrackerCSV(this)">
-          </label>
-          <span style="font-size:11px;color:var(--tl)">Dates as column headers, metric names in first column — matches Lucy's spreadsheet layout</span>
-        </div>
-        <div id="tracker-form" style="display:none"><div class="form-box">
-          <div class="form-grid">
-            <div class="form-group"><label>Week ending</label><input type="date" id="tr2-week"></div>
-            <div class="form-group"><label>JS (Jacy) post impressions</label><input type="number" id="tr2-jsImp"></div>
-            <div class="form-group"><label>JM (James) post impressions</label><input type="number" id="tr2-jmImp"></div>
-            <div class="form-group"><label>LB (Lucy) post impressions</label><input type="number" id="tr2-lbImp"></div>
-            <div class="form-group"><label>EDM open rate (%)</label><input type="number" id="tr2-edmOpen" step=".1"></div>
-            <div class="form-group"><label>EDM click-through rate (%)</label><input type="number" id="tr2-edmCtr" step=".1"></div>
-            <div class="form-group"><label>Webinar email sends</label><input type="number" id="tr2-wbEmailSend"></div>
-            <div class="form-group"><label>Webinar email open rate (%)</label><input type="number" id="tr2-wbEmailOpen" step=".1"></div>
-            <div class="form-group"><label>Webinar email CTR (%)</label><input type="number" id="tr2-wbEmailCtr" step=".1"></div>
-            <div class="form-group"><label>Webinar reg. page visits (%)</label><input type="number" id="tr2-wbRegPage" step=".1"></div>
-            <div class="form-group"><label>Webinar registrations</label><input type="number" id="tr2-wbReg"></div>
-            <div class="form-group"><label>Website visits (total users)</label><input type="number" id="tr2-websiteVisits"></div>
-            <div class="form-group"><label>Purchase enquiries</label><input type="number" id="tr2-purchaseEnq"></div>
-            <div class="form-group"><label>EOI tickets</label><input type="number" id="tr2-eoiTickets"></div>
-            <div class="form-group"><label>Trials started</label><input type="number" id="tr2-trialsStarted"></div>
-          </div>
-          <div class="form-actions">
-            <button class="btn-save" onclick="saveTrackerWeek()">Save</button>
-            <button class="btn-cancel" onclick="toggleForm('tracker-form')">Cancel</button>
-          </div>
-        </div></div>
-      </div>
-    `;
+    // Webinar bar chart
+    makeChart('wb-chart', {
+      type: 'bar',
+      data: {
+        labels: trackerRecent.map(r => fmtDate(r.week).slice(0,6)),
+        datasets: [
+          { label: 'Registrations', data: trackerRecent.map(r => r.wbReg ?? null), backgroundColor: '#3949ab', borderRadius: 3 },
+          { label: 'Email sends', data: trackerRecent.map(r => r.wbEmailSend ?? null), backgroundColor: '#90c4e0', borderRadius: 3 },
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+        scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: axStyle, beginAtZero: true } }
+      }
+    });
   }
-}
 
-function saveLinkedIn() {
-  const week = document.getElementById('li-week').value;
-  if (!week) { toast('Select a week.'); return; }
-  const entry = {
-    week,
-    jacy:  Number(document.getElementById('li-jacy').value)  || null,
-    james: Number(document.getElementById('li-james').value) || null,
-    lucy:  Number(document.getElementById('li-lucy').value)  || null,
-    jacyTitle:  document.getElementById('li-jacy-title').value  || null,
-    jamesTitle: document.getElementById('li-james-title').value || null,
-    lucyTitle:  document.getElementById('li-lucy-title').value  || null,
-  };
-  const arr = load('linkedin_weekly').filter(r => r.week !== week);
-  arr.push(entry);
-  arr.sort((a, b) => a.week > b.week ? 1 : -1);
-  save('linkedin_weekly', arr);
-  toggleForm('li-form');
-  toast('LinkedIn week saved.');
-  renderMarketing();
-}
-
-function delLinkedIn(week) {
-  if (!confirm('Delete LinkedIn entry for ' + fmtDate(week) + '?')) return;
-  save('linkedin_weekly', load('linkedin_weekly').filter(r => r.week !== week));
-  toast('Deleted.');
-  renderMarketing();
+  // Correlation chart
+  if (websiteData.length || data.length) {
+    makeChart('corr-chart', {
+      type: 'line',
+      data: {
+        labels: dayLabels90,
+        datasets: [
+          { label:'Website users', data:dailyUsers90, borderColor:'#2e8bc0', backgroundColor:'rgba(46,139,192,.08)', borderWidth:2, fill:true, tension:.3, pointRadius:0, spanGaps:true, yAxisID:'y1', order:10 },
+          ...eventDatasets90
+        ]
+      },
+      options: { responsive:true, maintainAspectRatio:false,
+        interaction:{ mode:'index', intersect:false },
+        plugins:{ legend:{display:false},
+          tooltip:{ callbacks:{
+            title: ctx=>{ const d=days90[ctx[0].dataIndex]; return fmtDate(d); },
+            afterBody: ctx=>{ const d=days90[ctx[0].dataIndex]; const evs=(eventsByDay90[d]||[]); return evs.length ? ['','Content:'].concat(evs.map(c=>'• '+c.type+(c.title?' — '+c.title.slice(0,40):''))) : []; }
+          }}
+        },
+        scales:{
+          x:{ grid:{display:false}, ticks:{...axStyle, callback:(v,i)=>dayLabels90[i]||null, maxRotation:0} },
+          y1:{ position:'left', grid:gridStyle, ticks:axStyle, beginAtZero:true, title:{display:true,text:'Users',...axStyle} },
+          y2:{ position:'right', grid:{drawOnChartArea:false}, ticks:{...axStyle,stepSize:1}, beginAtZero:true, title:{display:true,text:'Events',...axStyle}, suggestedMax:4 }
+        }
+      }
+    });
+  }
 }
 
 function save2MGrowth() {
@@ -3424,17 +3360,17 @@ function saveTrackerWeek() {
   save('weekly_tracker', arr);
   toggleForm('tracker-form');
   toast('Tracker week saved.');
-  renderMarketing();
+  renderTab(activeTab);
 }
 
 function startTrackerEdit(id) {
   activeSub.editing_tracker = id;
-  renderMarketing();
+  renderTab(activeTab);
 }
 
 function cancelTrackerEdit() {
   activeSub.editing_tracker = null;
-  renderMarketing();
+  renderTab(activeTab);
 }
 
 function saveTrackerEdit(id) {
@@ -3452,7 +3388,7 @@ function saveTrackerEdit(id) {
   save('weekly_tracker', arr);
   activeSub.editing_tracker = null;
   toast('Row updated.');
-  renderMarketing();
+  renderTab(activeTab);
 }
 
 // Parse a date string from Lucy's CSV header (e.g. "6-Nov", "26-Mar", "1-Apr-25", ISO dates)
@@ -3486,7 +3422,7 @@ function delTrackerWeek(id) {
   if (!confirm('Delete tracker data for this week?')) return;
   save('weekly_tracker', load('weekly_tracker').filter(r => r._id !== id));
   toast('Week deleted.');
-  renderMarketing();
+  renderTab(activeTab);
 }
 
 function importTrackerCSV(input) {
@@ -3614,7 +3550,7 @@ function importTrackerCSV(input) {
       input.value = '';
       const weekCount = Object.values(dataMap).filter(f => Object.keys(f).length > 0).length;
       toast(`Imported ${weekCount} weeks from CSV.`);
-      renderMarketing();
+      renderTab(activeTab);
     },
     error: err => toast('CSV parse error: ' + err.message)
   });
