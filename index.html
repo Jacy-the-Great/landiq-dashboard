@@ -807,7 +807,7 @@ function delRow(key, id, dateKey = 'week') {
 // ─────────────────────────────────────────
 const TABS = [
   { id: 'home',      label: 'Home' },
-  { id: 'pipedrive', label: 'Pipedrive' },
+  { id: 'pipedrive', label: 'Sales' },
   { id: 'marketing', label: 'Marketing' },
   { id: 'tracker',   label: 'Weekly Tracker' },
   { id: 'training',  label: 'Training' },
@@ -3897,13 +3897,17 @@ function renderPipedrive(el) {
   const sub = activeSub.pd_sub || 'import';
   const range = pdGetRange();
 
-  // Summary cards: filter won/lost by date within selected range
-  const salesDealsAll = _pd_deals.filter(d => d['Deal - Pipeline'] === '2026 Sales');
+  // Pipeline toggle state
+  const plLabel = _pdSalesPipeline || 'All pipelines';
+
+  // Summary cards: filter won/lost by date + pipeline toggle
+  const salesDealsAll = _pdSalesPipeline
+    ? _pd_deals.filter(d => d['Deal - Pipeline'] === _pdSalesPipeline)
+    : _pd_deals;
   const wonDeals  = salesDealsAll.filter(d => d['Deal - Status'] === 'Won'  && pdInRange(d['Deal - Won time'],  range));
   const lostDeals = salesDealsAll.filter(d => d['Deal - Status'] === 'Lost' && pdInRange(d['Deal - Lost time'], range));
-  const openDeals = salesDealsAll.filter(d => d['Deal - Status'] === 'Open');
 
-  // Active paid subscribers always shows current state
+  // Active paid subscribers always shows current state (people-based, not pipeline-filtered)
   const _now = new Date();
   const paidSubs  = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
   const activePaidSubs = paidSubs.filter(p => {
@@ -3913,21 +3917,32 @@ function renderPipedrive(el) {
     return pdValidDate(d) && d > _now;
   });
 
+  const plToggle = `<div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+    <span style="font-size:11px;font-weight:500;color:var(--tm)">Pipeline:</span>
+    <button onclick="_pdSalesPipeline='2026 Sales';renderPipedrive()"
+      style="padding:3px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;border:1.5px solid ${_pdSalesPipeline==='2026 Sales'?'var(--acc)':'var(--bor)'};background:${_pdSalesPipeline==='2026 Sales'?'var(--acc)':'transparent'};color:${_pdSalesPipeline==='2026 Sales'?'#fff':'var(--tm)'}">2026 Sales</button>
+    <button onclick="_pdSalesPipeline=null;renderPipedrive()"
+      style="padding:3px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;border:1.5px solid ${_pdSalesPipeline===null?'var(--acc)':'var(--bor)'};background:${_pdSalesPipeline===null?'var(--acc)':'transparent'};color:${_pdSalesPipeline===null?'#fff':'var(--tm)'}">All pipelines</button>
+  </div>`;
+
   el.innerHTML = `
     <div class="section-header">
-      <div><div class="section-title">Pipedrive Analytics</div>
-      <div class="section-sub">Deals · People · Trial pipeline — powered by Pipedrive CSV import</div></div>
+      <div>
+        <div class="section-title">Sales</div>
+        <div class="section-sub">Powered by Pipedrive CSV import — Deals · People · Trial pipeline</div>
+        ${plToggle}
+      </div>
       ${pdRangeToggleHTML()}
     </div>
     ${cardsHTML([
-      ['Won deals (2026 Sales)', wonDeals.length || null, null, null, range.label,
-        '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with <b>Status = Won</b> and <b>Won time</b> within the selected date range.<br><div class="calc-row">Pipeline = "2026 Sales" AND Status = "Won" AND Won time in range</div>Currently showing: <b>' + range.label + '</b>'],
-      ['Lost deals (2026 Sales)', lostDeals.length || null, null, null, range.label,
-        '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with <b>Status = Lost</b> and <b>Lost time</b> within the selected date range.<br><div class="calc-row">Pipeline = "2026 Sales" AND Status = "Lost" AND Lost time in range</div>Currently showing: <b>' + range.label + '</b>'],
-      ['Win rate (2026 Sales)', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%', 'Won ÷ (Won + Lost) · ' + range.label,
-        '<span class="src-tag">Pipedrive · 2026 Sales</span><br><b>Won ÷ (Won + Lost)</b> for deals closed within the selected date range. Open deals are excluded.<br><div class="calc-row">Won.count / (Won.count + Lost.count) × 100</div>Currently showing: <b>' + range.label + '</b>'],
+      ['Won deals (' + plLabel + ')', wonDeals.length || null, null, null, range.label,
+        '<span class="src-tag">Pipedrive · ' + plLabel + '</span><br>Deals with <b>Status = Won</b> and <b>Won time</b> within the selected date range.<br><div class="calc-row">Pipeline = "' + plLabel + '" AND Status = "Won" AND Won time in range</div>Currently showing: <b>' + range.label + '</b>'],
+      ['Lost deals (' + plLabel + ')', lostDeals.length || null, null, null, range.label,
+        '<span class="src-tag">Pipedrive · ' + plLabel + '</span><br>Deals with <b>Status = Lost</b> and <b>Lost time</b> within the selected date range.<br><div class="calc-row">Pipeline = "' + plLabel + '" AND Status = "Lost" AND Lost time in range</div>Currently showing: <b>' + range.label + '</b>'],
+      ['Win rate (' + plLabel + ')', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%', 'Won ÷ (Won + Lost) · ' + range.label,
+        '<span class="src-tag">Pipedrive · ' + plLabel + '</span><br><b>Won ÷ (Won + Lost)</b> for deals closed within the selected date range. Open deals are excluded.<br><div class="calc-row">Won.count / (Won.count + Lost.count) × 100</div>Currently showing: <b>' + range.label + '</b>'],
       ['Active paid subscribers', activePaidSubs.length || null, null, null, 'Target: 600 · as of today',
-        '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND (Date Access Removed is blank OR is a future date). Always shows current snapshot — not affected by the date range filter.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
+        '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND (Date Access Removed is blank OR is a future date). Always shows current snapshot — not affected by the date range or pipeline filter.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
       ['People (total)', _pd_people.length || null, null, null, null,
         '<span class="src-tag">Pipedrive · People CSV</span><br>Total row count of the imported People CSV. All contacts regardless of type, licence status, or date. This is the raw import size.<br>Last imported: <b>' + (_pd_people_imported_at ? fmtDate(_pd_people_imported_at) : 'unknown') + '</b>'],
     ])}
@@ -4202,20 +4217,6 @@ function renderPdSales(sc) {
 
   sc.innerHTML = `
     ${!wonDeals.length && !_pd_deals.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive deals CSV first.</div></div>' : ''}
-
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
-      <span style="font-size:12px;font-weight:500;color:var(--tm)">Pipeline:</span>
-      <button onclick="_pdSalesPipeline='2026 Sales';renderPdSales(document.getElementById('pd-sub-content'))"
-        style="padding:4px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1.5px solid ${_pdSalesPipeline==='2026 Sales'?'var(--acc)':'var(--bor)'};background:${_pdSalesPipeline==='2026 Sales'?'var(--acc)':'transparent'};color:${_pdSalesPipeline==='2026 Sales'?'#fff':'var(--tm)'}">
-        2026 Sales
-      </button>
-      <button onclick="_pdSalesPipeline=null;renderPdSales(document.getElementById('pd-sub-content'))"
-        style="padding:4px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1.5px solid ${_pdSalesPipeline===null?'var(--acc)':'var(--bor)'};background:${_pdSalesPipeline===null?'var(--acc)':'transparent'};color:${_pdSalesPipeline===null?'#fff':'var(--tm)'}">
-        All pipelines
-      </button>
-      <span style="font-size:11px;color:var(--tl);margin-left:4px">Currently showing: <strong>${pipelineLabel}</strong></span>
-    </div>
-
     <div class="cards" style="margin-bottom:18px">
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Won deals (${range.label})${infoBtn('Won deals (total)','<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Count of deals with <b>Status = Won</b> and Won time within the selected date range.<br><div class="calc-row">Status = "Won" AND Won time in '+range.label+'</div>')}</div><div class="card-value">${wonDeals.length || 0}</div><div class="card-sub">${pipelineLabel}</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Closed same month${infoBtn('Closed same month','<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Won deals where the <b>Deal created</b> month equals the <b>Won time</b> month — i.e. opened and closed in the same calendar month.<br><div class="calc-row">monthKey(Deal created) === monthKey(Won time)</div>')}</div>
@@ -4551,8 +4552,13 @@ function renderPdUsers(sc) {
   });
   const revokedMonths = rangeMonths.filter(m => revokedByMonth[m] != null);
 
+  // Diagnostic: detect likely field name mismatch (people loaded but no paid subscribers found)
+  const _knownField = _pd_people.length ? Object.keys(_pd_people[0] || {}).find(k => k.toLowerCase().includes('customer')) : null;
+  const _fieldMismatch = _pd_people.length > 0 && paidPeople.length === 0 && activePaid.length === 0;
+
   sc.innerHTML = `
     ${!_pd_people.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive people CSV first.</div></div>' : ''}
+    ${_fieldMismatch ? `<div class="callout warn" style="margin-bottom:12px"><div class="callout-label">Field name mismatch detected</div><div class="callout-text">${_pd_people.length.toLocaleString()} people are loaded but no "Paid Subscription" records were found. This usually means the CSV column names differ from what the dashboard expects.<br><br>Expected: <code>Person - Customer Type</code><br>Found: <code>${_knownField || 'no customer type column detected'}</code><br><br>Re-export your People CSV from Pipedrive using the default column headers and re-import via the <b>Import Data</b> tab.</div></div>` : ''}
     <div class="cards" style="margin-bottom:18px">
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Active paid subscribers${infoBtn('Active paid subscribers','<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND (Date Access Removed is blank OR is a future date). Current snapshot.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>')}</div><div class="card-value">${activePaid.length}</div><div class="card-sub">Target: 600</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">All paid (incl. past)${infoBtn('All paid (incl. past)','<span class="src-tag">Pipedrive · People</span><br>All people with <b>Customer Type = "Paid Subscription"</b> regardless of whether their access has been removed. Includes former subscribers.<br><div class="calc-row">Customer Type = "Paid Subscription" (no date filter)</div>')}</div><div class="card-value">${paidPeople.length}</div><div class="card-sub">Customer Type = Paid Subscription</div></div>
