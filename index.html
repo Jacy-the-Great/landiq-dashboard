@@ -2400,41 +2400,129 @@ function setActivitySub(sub, rerender = true, data) {
   } else if (sub === 'retention') {
     const hasRet  = phLive && _ph.retention.length > 0;
     const hasNew  = phLive && _ph.newUsers.length > 0;
+    const segMap  = Object.fromEntries((_ph.segments||[]).map(s => [s.segment, Number(s.user_count)]));
+    const segTotal = Object.values(segMap).reduce((a,b)=>a+b,0);
 
-    let retTableHTML = '';
-    if (hasRet) {
-      const rows = _ph.retention.slice(-12).reverse().map(r => {
-        const pct = v => r.cohort_size > 0 ? Math.round(v / r.cohort_size * 100) + '%' : '—';
-        return '<tr>' +
-          '<td>' + (r.cohort_week||'').slice(0,10) + '</td>' +
-          '<td style="text-align:right;font-weight:600">' + fmtNum(r.cohort_size) + '</td>' +
-          '<td style="text-align:right">' + pct(r.retained_w1) + '</td>' +
-          '<td style="text-align:right">' + pct(r.retained_w2) + '</td>' +
-          '<td style="text-align:right">' + pct(r.retained_w4) + '</td>' +
-          '<td style="text-align:right">' + pct(r.retained_w8) + '</td>' +
-          '</tr>';
-      }).join('');
-      retTableHTML = '<div class="tbl-scroll"><table>' +
-        '<thead><tr><th>Cohort week</th><th style="text-align:right">Cohort size</th><th style="text-align:right">W1 retained</th><th style="text-align:right">W2 retained</th><th style="text-align:right">W4 retained</th><th style="text-align:right">W8 retained</th></tr></thead>' +
-        '<tbody>' + rows + '</tbody></table></div>';
+    // ── Summary stats across all cohorts ──────────────────────────────────
+    function avgRetention(field) {
+      const valid = _ph.retention.filter(r => r.cohort_size > 0 && r[field] != null);
+      if (!valid.length) return null;
+      return Math.round(valid.reduce((s,r) => s + r[field]/r.cohort_size*100, 0) / valid.length);
     }
+    const avgW1 = hasRet ? avgRetention('retained_w1') : null;
+    const avgW2 = hasRet ? avgRetention('retained_w2') : null;
+    const avgW4 = hasRet ? avgRetention('retained_w4') : null;
+    const avgW8 = hasRet ? avgRetention('retained_w8') : null;
+    const totalCohorted = hasRet ? _ph.retention.reduce((s,r) => s+(r.cohort_size||0), 0) : null;
+
+    // ── Heatmap cell colour: green (high) → red (low) ─────────────────────
+    function heatColour(p) {
+      if (p == null) return '#f4f6f8';
+      if (p >= 80) return '#c8ecd4';
+      if (p >= 60) return '#d4edda';
+      if (p >= 40) return '#fff3cd';
+      if (p >= 20) return '#fde8d8';
+      return '#fcd9d9';
+    }
+    function heatText(p) {
+      if (p == null) return '#aaa';
+      if (p >= 60) return '#1a4d2e';
+      if (p >= 40) return '#7a4f00';
+      return '#7a1a1a';
+    }
+
+    // ── Heatmap table ─────────────────────────────────────────────────────
+    const heatRows = hasRet ? _ph.retention.slice(-16).reverse().map(r => {
+      const p = field => r.cohort_size > 0 && r[field] != null ? Math.round(r[field]/r.cohort_size*100) : null;
+      const cell = (v, bold) => {
+        const bg = heatColour(v); const col = heatText(v);
+        return `<td style="text-align:center;background:${bg};color:${col};font-weight:${bold?700:500};border-radius:4px;padding:5px 8px;font-size:12px">${v!=null?v+'%':'—'}</td>`;
+      };
+      return `<tr>
+        <td style="font-size:11px;color:var(--tm);padding:4px 8px;white-space:nowrap">${(r.cohort_week||'').slice(0,10)}</td>
+        <td style="text-align:center;font-weight:700;font-size:12px;padding:4px 8px">${fmtNum(r.cohort_size)}</td>
+        ${cell(100, true)}
+        ${cell(p('retained_w1'), false)}
+        ${cell(p('retained_w2'), false)}
+        ${cell(p('retained_w4'), false)}
+        ${cell(p('retained_w8'), false)}
+      </tr>`;
+    }).join('') : '';
+
+    // ── At-risk user list ─────────────────────────────────────────────────
+    const atRiskRows = (_ph.atRisk||[]).slice(0,15).map(u =>
+      `<tr>
+        <td style="font-size:11px;font-family:monospace;max-width:180px;overflow:hidden;text-overflow:ellipsis">${u.distinct_id||'—'}</td>
+        <td style="text-align:right;font-size:11px">${u.active_days||0}d</td>
+        <td style="text-align:right;font-size:11px">${(u.last_seen||'').slice(0,10)}</td>
+        <td style="text-align:right;font-size:11px;color:${(() => { const days=(new Date()-new Date(u.last_seen))/86400000; return days>30?'var(--re)':days>14?'#c25a00':'var(--gr)'; })()}">${(() => { const days=Math.round((new Date()-new Date(u.last_seen))/86400000); return days+'d ago'; })()}</td>
+      </tr>`
+    ).join('');
 
     sc.innerHTML = `
       ${!phLive ? '<div class="callout warn" style="margin-bottom:16px"><div class="callout-text">Retention data requires the PostHog SQL migration. Run <strong>posthog_migrations.sql</strong> in the <a href="https://supabase.com/dashboard/project/ysdonnjezvoyrrizadik/editor" target="_blank" style="color:var(--acc)">Supabase SQL Editor</a> first.</div></div>' : ''}
 
+      <div class="cards" style="margin-bottom:18px">
+        ${cardsHTML([
+          ['Avg W1 retention', avgW1, null, '%', 'across all cohorts', '<span class="src-tag">Live · PostHog</span><br>Average % of new users who returned in week 1, across all cohorts tracked.<br><div class="calc-row">avg(retained_w1 / cohort_size) across all cohorts</div>'],
+          ['Avg W2 retention', avgW2, null, '%', 'across all cohorts', '<span class="src-tag">Live · PostHog</span><br>Average % of new users still active in week 2.<br><div class="calc-row">avg(retained_w2 / cohort_size)</div>'],
+          ['Avg W4 retention', avgW4, null, '%', 'across all cohorts', '<span class="src-tag">Live · PostHog</span><br>Average % of new users still active in week 4 (1 month).<br><div class="calc-row">avg(retained_w4 / cohort_size)</div>'],
+          ['Avg W8 retention', avgW8, null, '%', 'across all cohorts', '<span class="src-tag">Live · PostHog</span><br>Average % of new users still active in week 8 (2 months).<br><div class="calc-row">avg(retained_w8 / cohort_size)</div>'],
+          ['Total cohorted users', totalCohorted, null, null, 'all tracked cohorts', '<span class="src-tag">Live · PostHog</span><br>Sum of all cohort sizes tracked — total unique users who entered a cohort.<br><div class="calc-row">SUM(cohort_size)</div>'],
+        ])}
+      </div>
+
       ${hasNew ? `<div class="box">
         <div class="box-title">New users per week — last 16 weeks</div>
-        <div class="chart-wrap" style="height:200px"><canvas id="act-newusers-chart"></canvas></div>
+        <div class="chart-wrap" style="height:180px"><canvas id="act-newusers-chart"></canvas></div>
       </div>` : ''}
 
       <div class="box">
-        <div class="box-title">Cohort retention — % of new users still active after N weeks</div>
-        ${hasRet ? retTableHTML : '<div class="no-data">No retention data. Run SQL migration to enable.</div>'}
+        <div class="box-title">Cohort retention heatmap — % retained after N weeks
+          <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:8px">Green = high retention · Red = low · last 16 cohorts</span>
+        </div>
+        ${hasRet ? `
+        <div class="tbl-scroll">
+          <table style="border-collapse:separate;border-spacing:3px;width:100%">
+            <thead><tr>
+              <th style="text-align:left;font-size:11px;padding:4px 8px">Cohort week</th>
+              <th style="text-align:center;font-size:11px;padding:4px 8px">Size</th>
+              <th style="text-align:center;font-size:11px;padding:4px 8px">W0 (entry)</th>
+              <th style="text-align:center;font-size:11px;padding:4px 8px">W1</th>
+              <th style="text-align:center;font-size:11px;padding:4px 8px">W2</th>
+              <th style="text-align:center;font-size:11px;padding:4px 8px">W4</th>
+              <th style="text-align:center;font-size:11px;padding:4px 8px">W8</th>
+            </tr></thead>
+            <tbody>${heatRows}</tbody>
+            <tfoot><tr>
+              <td style="font-size:11px;font-weight:600;padding:6px 8px">Avg</td>
+              <td></td>
+              <td style="text-align:center;background:${heatColour(100)};color:${heatText(100)};font-weight:700;border-radius:4px;padding:5px 8px;font-size:12px">100%</td>
+              ${[avgW1,avgW2,avgW4,avgW8].map(v => `<td style="text-align:center;background:${heatColour(v)};color:${heatText(v)};font-weight:700;border-radius:4px;padding:5px 8px;font-size:12px">${v!=null?v+'%':'—'}</td>`).join('')}
+            </tr></tfoot>
+          </table>
+        </div>` : '<div class="no-data">No retention data. Run SQL migration to enable.</div>'}
       </div>
 
-      ${hasRet ? `<div class="box">
-        <div class="box-title">Retention curve — latest cohorts</div>
-        <div class="chart-wrap" style="height:240px"><canvas id="act-retention-chart"></canvas></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+        ${hasRet ? `<div class="box" style="margin-bottom:0">
+          <div class="box-title">Retention decay — latest 6 cohorts</div>
+          <div class="chart-wrap" style="height:240px"><canvas id="act-retention-chart"></canvas></div>
+        </div>` : ''}
+        ${segTotal > 0 ? `<div class="box" style="margin-bottom:0">
+          <div class="box-title">User health segments</div>
+          <div class="chart-wrap" style="height:240px"><canvas id="act-seg-donut"></canvas></div>
+        </div>` : ''}
+      </div>
+
+      ${(_ph.atRisk||[]).length > 0 ? `<div class="box">
+        <div class="box-title">At-risk users — active but quiet 14+ days (top 15)
+          <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:8px">3+ lifetime active days · not seen in 14d+</span>
+        </div>
+        <div class="tbl-scroll"><table>
+          <thead><tr><th>User ID</th><th style="text-align:right">Active days</th><th style="text-align:right">Last seen</th><th style="text-align:right">Inactive for</th></tr></thead>
+          <tbody>${atRiskRows}</tbody>
+        </table></div>
       </div>` : ''}
     `;
 
@@ -2454,33 +2542,45 @@ function setActivitySub(sub, rerender = true, data) {
     }
 
     if (hasRet) {
-      // Radar-style cohort retention line chart (latest 6 cohorts)
       const cohorts = _ph.retention.slice(-6);
       const palette = ['#2e8bc0','#2a7a4b','#c25a00','#7b1fa2','#c0392b','#f39c12'];
       const datasets = cohorts.map((r, i) => ({
         label: (r.cohort_week||'').slice(0,10),
-        data: [
-          100,
-          r.cohort_size > 0 ? Math.round(r.retained_w1/r.cohort_size*100) : 0,
-          r.cohort_size > 0 ? Math.round(r.retained_w2/r.cohort_size*100) : 0,
-          r.cohort_size > 0 ? Math.round(r.retained_w4/r.cohort_size*100) : 0,
-          r.cohort_size > 0 ? Math.round(r.retained_w8/r.cohort_size*100) : 0,
+        data: [100,
+          r.cohort_size>0 ? Math.round(r.retained_w1/r.cohort_size*100) : 0,
+          r.cohort_size>0 ? Math.round(r.retained_w2/r.cohort_size*100) : 0,
+          r.cohort_size>0 ? Math.round(r.retained_w4/r.cohort_size*100) : 0,
+          r.cohort_size>0 ? Math.round(r.retained_w8/r.cohort_size*100) : 0,
         ],
-        borderColor: palette[i % palette.length],
-        borderWidth: 2,
-        fill: false,
-        tension: .3,
-        pointRadius: 4,
+        borderColor: palette[i%palette.length], borderWidth:2, fill:false, tension:.3, pointRadius:4,
       }));
       makeChart('act-retention-chart', {
         type:'line',
-        data:{ labels:['Week 0','Week 1','Week 2','Week 4','Week 8'], datasets },
+        data:{ labels:['W0','W1','W2','W4','W8'], datasets },
         options:{ responsive:true, maintainAspectRatio:false,
           plugins:{ legend:{ position:'bottom', labels:{ font:{ family:'DM Sans', size:10 }, boxWidth:10 } } },
-          scales:{
-            x:{ grid:{ display:false }, ticks:axStyle },
-            y:{ grid:gridStyle, ticks:{ ...axStyle, callback: v => v+'%' }, beginAtZero:true, max:100 }
-          }
+          scales:{ x:{ grid:{ display:false }, ticks:axStyle }, y:{ grid:gridStyle, ticks:{ ...axStyle, callback: v=>v+'%' }, beginAtZero:true, max:100 } }
+        }
+      });
+    }
+
+    if (segTotal > 0) {
+      const segColours = { New:'#2e8bc0', Active:'#2a7a4b', 'At-risk':'#c25a00', Dormant:'#8a9fb0' };
+      const segEntries = Object.entries(segMap).filter(([,v])=>v>0);
+      makeChart('act-seg-donut', {
+        type:'doughnut',
+        data:{
+          labels: segEntries.map(([k])=>k),
+          datasets:[{ data: segEntries.map(([,v])=>v), backgroundColor: segEntries.map(([k])=>segColours[k]||'#ccc'), borderWidth:2 }]
+        },
+        options:{ responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ position:'right', labels:{
+            font:{ family:'DM Sans', size:11 }, boxWidth:12,
+            generateLabels: chart => chart.data.labels.map((l,i) => ({
+              text: l+' — '+fmtNum(chart.data.datasets[0].data[i]),
+              fillStyle: chart.data.datasets[0].backgroundColor[i], hidden:false, index:i
+            }))
+          }}}
         }
       });
     }
