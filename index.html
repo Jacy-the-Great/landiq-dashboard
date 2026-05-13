@@ -753,6 +753,7 @@ const fmtDate = d => d ? new Date(d).toLocaleDateString('en-AU', { day:'2-digit'
 const fmtNum  = n => n != null ? Number(n).toLocaleString() : ':';
 const fmtPct  = n => n != null ? Number(n).toFixed(1) + '%' : ':';
 const fmtDollar = n => n != null ? '$' + Number(n).toLocaleString() : ':';
+const fmtCur = n => { if (n == null) return '—'; if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M'; if (n >= 1000) return '$' + (n/1000).toFixed(n >= 10000 ? 0 : 1) + 'k'; return '$' + Math.round(n).toLocaleString(); };
 const pct = (a, b) => (a != null && b && b !== 0) ? (a / b * 100) : null;
 
 function thisMonth(arr, dateKey = 'week') {
@@ -3976,8 +3977,8 @@ function renderPipedrive(el) {
         '<span class="src-tag">Pipedrive · People CSV</span><br>Total row count of the imported People CSV. All contacts regardless of type, licence status, or date. This is the raw import size.<br>Last imported: <b>' + (_pd_people_imported_at ? fmtDate(_pd_people_imported_at) : 'unknown') + '</b>'],
     ])}
     <div class="sub-tabs">
-      ${['import','sales','users','trials','optimax'].map(s =>
-        `<button class="sub-tab${sub===s?' active':''}" onclick="setPdSub('${s}')">${{import:'Import Data',sales:'Sales',users:'Users & Licences',trials:'Trial Pipeline',optimax:'OPTI-MAX'}[s]}</button>`
+      ${['import','revenue','sales','users','trials','optimax'].map(s =>
+        `<button class="sub-tab${sub===s?' active':''}" onclick="setPdSub('${s}')">${{import:'Import Data',revenue:'Revenue & ARR',sales:'Sales',users:'Users & Licences',trials:'Trial Pipeline',optimax:'OPTI-MAX'}[s]}</button>`
       ).join('')}
     </div>
     <div id="pd-sub-content"></div>`;
@@ -3989,10 +3990,11 @@ function setPdSub(sub, rerender = true) {
   if (rerender) { renderPipedrive(); return; }
   const sc = document.getElementById('pd-sub-content');
   if (!sc) return;
-  if (sub === 'import')  renderPdImport(sc);
-  else if (sub === 'sales')  renderPdSales(sc);
-  else if (sub === 'users')  renderPdUsers(sc);
-  else if (sub === 'trials') renderPdTrials(sc);
+  if (sub === 'import')   renderPdImport(sc);
+  else if (sub === 'revenue') renderPdRevenue(sc);
+  else if (sub === 'sales')   renderPdSales(sc);
+  else if (sub === 'users')   renderPdUsers(sc);
+  else if (sub === 'trials')  renderPdTrials(sc);
   else if (sub === 'optimax') renderPdOptimax(sc);
 }
 
@@ -4079,6 +4081,274 @@ async function handlePeopleImport(input) {
 }
 
 // ── PIPEDRIVE: SALES CHARTS ─────────────────────────────────────────────────
+// ── PIPEDRIVE: REVENUE & ARR ─────────────────────────────────────────────────
+function renderPdRevenue(sc) {
+  const range    = pdGetRange();
+  const rangeMonths = pdRangeMonths(range);
+  const today    = new Date();
+  const MRR_TARGET = TARGET_ARR / 12;
+
+  // All won deals — pipeline-toggle aware
+  const wonDeals = (_pdSalesPipeline
+    ? _pd_deals.filter(d => d['Deal - Pipeline'] === _pdSalesPipeline)
+    : _pd_deals
+  ).filter(d => d['Deal - Status'] === 'Won');
+
+  // ── BOOKED ARR ───────────────────────────────────────────────────────────────
+  // Sum of all-time won deal values = total contracted revenue
+  const totalBooked  = wonDeals.reduce((s, d) => s + (parseFloat(d['Deal - Value']) || 0), 0);
+
+  // ── ACTIVE ARR (won deals whose person still has active access) ───────────────
+  // Proxy: deals won AND not yet "lost" status — use total booked as upper bound.
+  // True active ARR = active paid subscribers × avg deal value
+  const activePaid   = _pd_people.filter(p => {
+    if (p['Person - Customer Type'] !== 'Paid Subscription') return false;
+    const rem = p['Person - Date Access Removed'];
+    if (!rem) return true;
+    const d = pdParseDate(rem); return pdValidDate(d) && d > today;
+  });
+  const avgDealVal   = wonDeals.length ? totalBooked / wonDeals.length : 0;
+  const estActiveARR = activePaid.length && avgDealVal ? activePaid.length * avgDealVal : null;
+  const estActiveMRR = estActiveARR ? estActiveARR / 12 : null;
+
+  // ── NEW ARR BY MONTH ──────────────────────────────────────────────────────────
+  const newARRByMonth = {};
+  const newDealsCountByMonth = {};
+  wonDeals.forEach(d => {
+    const dt = pdParseDate(d['Deal - Won time']);
+    if (!pdValidDate(dt)) return;
+    const k = monthKey(dt.toISOString());
+    newARRByMonth[k]        = (newARRByMonth[k] || 0) + (parseFloat(d['Deal - Value']) || 0);
+    newDealsCountByMonth[k] = (newDealsCountByMonth[k] || 0) + 1;
+  });
+
+  // ── CUMULATIVE ARR ────────────────────────────────────────────────────────────
+  // Running sum across all months (sorted), using all-time won deals
+  const allMonthsSorted = Object.keys(newARRByMonth).sort();
+  let cumulative = 0;
+  const cumulARR = {};
+  allMonthsSorted.forEach(m => { cumulative += newARRByMonth[m]; cumulARR[m] = cumulative; });
+
+  // ── MOM GROWTH (range-filtered months) ───────────────────────────────────────
+  const mrrVals  = rangeMonths.map(m => newARRByMonth[m] ? newARRByMonth[m] / 12 : 0);
+  const lastMRR  = mrrVals.filter(v => v > 0).slice(-1)[0] || 0;
+  const prevMRR  = mrrVals.filter(v => v > 0).slice(-2)[0] || 0;
+  const mrrMoM   = prevMRR ? pct(lastMRR - prevMRR, prevMRR) : null;
+
+  // ── ACV & DEAL SIZES ─────────────────────────────────────────────────────────
+  const rangeWon = wonDeals.filter(d => pdInRange(d['Deal - Won time'], range));
+  const rangeARR = rangeWon.reduce((s, d) => s + (parseFloat(d['Deal - Value']) || 0), 0);
+  const rangeACV = rangeWon.length ? rangeARR / rangeWon.length : null;
+
+  // ── ARR BANDS (deal size distribution) ───────────────────────────────────────
+  const BANDS = [
+    { lbl: '<$1k',     lo: 0,    hi: 1000 },
+    { lbl: '$1–5k',    lo: 1000, hi: 5000 },
+    { lbl: '$5–20k',   lo: 5000, hi: 20000 },
+    { lbl: '$20–50k',  lo: 20000,hi: 50000 },
+    { lbl: '$50k+',    lo: 50000,hi: Infinity },
+  ];
+  const bandCounts = BANDS.map(b => rangeWon.filter(d => {
+    const v = parseFloat(d['Deal - Value']) || 0;
+    return v >= b.lo && v < b.hi;
+  }).length);
+  const bandARR = BANDS.map(b => rangeWon.filter(d => {
+    const v = parseFloat(d['Deal - Value']) || 0;
+    return v >= b.lo && v < b.hi;
+  }).reduce((s, d) => s + (parseFloat(d['Deal - Value']) || 0), 0));
+
+  // ── TOP REVENUE ORGS ─────────────────────────────────────────────────────────
+  const orgRevenue = {};
+  rangeWon.forEach(d => {
+    const personName = d['Deal - Person'] || '';
+    const person = _pd_people.find(p => (p['Person - Name'] || p['Name'] || '') === personName);
+    const org = (person && person['Person - Organisation']) || d['Deal - Organisation'] || d['Organisation'] || 'Unknown';
+    orgRevenue[org] = (orgRevenue[org] || 0) + (parseFloat(d['Deal - Value']) || 0);
+  });
+  const topOrgs = Object.entries(orgRevenue).filter(([k]) => k !== 'Unknown').sort((a, b) => b[1] - a[1]).slice(0, 12);
+
+  // ── ARR GAP ───────────────────────────────────────────────────────────────────
+  const arrGap      = TARGET_ARR - totalBooked;
+  const arrGapPct   = pct(totalBooked, TARGET_ARR);
+  const mrrGap      = MRR_TARGET - (newARRByMonth[rangeMonths[rangeMonths.length-1]] || 0) / 12;
+
+  sc.innerHTML = `
+    ${!wonDeals.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive deals CSV first.</div></div>' : ''}
+
+    <div class="cards" style="margin-bottom:18px">
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Booked ARR (all time)${infoBtn('Booked ARR','<span class="src-tag">Pipedrive · Won Deals</span><br>Sum of <b>Deal Value</b> across all Won deals of all time. Represents total contracted revenue ever booked — not adjusted for churn.<br><div class="calc-row">SUM(Deal Value) where Status = "Won"</div>')}</div>
+        <div class="card-value">${fmtCur(totalBooked)}</div>
+        <div class="card-sub">vs $${(TARGET_ARR/1e6).toFixed(1)}M target · ${fmtPct(arrGapPct)} there</div>
+      </div>
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Est. active ARR${infoBtn('Est. active ARR','<span class="src-tag">Pipedrive · People + Deals</span><br>Active paid subscribers × average won deal value. Proxy for current recurring revenue — not a direct Pipedrive field.<br><div class="calc-row">Active paid subscribers × (Total booked ARR ÷ Won deals)</div>')}</div>
+        ${estActiveARR != null
+          ? `<div class="card-value">${fmtCur(estActiveARR)}</div><div class="card-sub">${activePaid.length} subs × ${fmtCur(Math.round(avgDealVal))} avg</div>`
+          : `<div class="card-nodata">import people CSV</div>`}
+      </div>
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Est. MRR${infoBtn('Est. MRR','<span class="src-tag">Pipedrive · People + Deals</span><br>Estimated active ARR ÷ 12. Assumes annual contracts.<br><div class="calc-row">Active ARR / 12</div>')}</div>
+        ${estActiveMRR != null
+          ? `<div class="card-value">${fmtCur(Math.round(estActiveMRR))}</div><div class="card-sub">target ${fmtCur(MRR_TARGET)}/mo</div>`
+          : `<div class="card-nodata">import people CSV</div>`}
+      </div>
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Avg contract value${infoBtn('Average Contract Value','<span class="src-tag">Pipedrive · Won Deals</span><br>Mean Deal Value across won deals in the selected date range.<br><div class="calc-row">SUM(Deal Value) ÷ COUNT(Won deals) in range</div>')}</div>
+        ${rangeACV != null
+          ? `<div class="card-value">${fmtCur(Math.round(rangeACV))}</div><div class="card-sub">${rangeWon.length} deals · ${range.label}</div>`
+          : `<div class="card-nodata">no data</div>`}
+      </div>
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;gap:0">ARR gap to target${infoBtn('ARR gap to target','<span class="src-tag">Calculated</span><br>Difference between $2.4M ARR target and total booked ARR. Indicates how much more revenue needs to be contracted to hit the annual target.<br><div class="calc-row">$2.4M − Booked ARR</div>')}</div>
+        <div class="card-value" style="color:${arrGap > 0 ? 'var(--re)' : 'var(--gr)'}">${arrGap > 0 ? '−' : '+'}${fmtCur(Math.abs(arrGap))}</div>
+        <div class="card-sub">${arrGap > 0 ? 'still needed' : 'target exceeded'}</div>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-title">Cumulative booked ARR — all time</div>
+      ${allMonthsSorted.length ? `<div class="chart-wrap" style="height:260px"><canvas id="pd-arr-cumul"></canvas></div>` : '<div class="no-data">No won deal data.</div>'}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title">New ARR by month — ${range.label}</div>
+        <div class="chart-wrap" style="height:240px"><canvas id="pd-arr-month"></canvas></div>
+      </div>
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title">Est. MRR by month — ${range.label}</div>
+        <div class="chart-wrap" style="height:240px"><canvas id="pd-mrr-month"></canvas></div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title">Deal size distribution — ${range.label}</div>
+        <div class="chart-wrap" style="height:220px"><canvas id="pd-arr-bands"></canvas></div>
+      </div>
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title">ARR by band — revenue concentration</div>
+        <div class="chart-wrap" style="height:220px"><canvas id="pd-arr-band-rev"></canvas></div>
+      </div>
+    </div>
+
+    ${topOrgs.length ? `<div class="box">
+      <div class="box-title">Top orgs by contracted ARR — ${range.label}</div>
+      <div class="chart-wrap" style="height:${Math.max(240, topOrgs.length * 30)}px"><canvas id="pd-arr-orgs"></canvas></div>
+    </div>` : ''}
+
+    <div class="box">
+      <div class="box-title">ARR progress to $2.4M target</div>
+      <div style="margin:16px 0 8px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:12px">
+          <span style="font-weight:600;color:var(--navy)">${fmtCur(totalBooked)}</span>
+          <span style="color:var(--tl)">target: $2.4M</span>
+        </div>
+        <div style="height:16px;border-radius:8px;background:var(--bg2);overflow:hidden">
+          <div style="height:100%;border-radius:8px;background:${arrGapPct>=100?'var(--gr)':arrGapPct>=60?'var(--acc)':'#c25a00'};width:${Math.min(arrGapPct,100)}%;transition:width .4s"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:11px;color:var(--tl)">
+          <span>${fmtPct(arrGapPct)} of target</span>
+          <span>${arrGap > 0 ? fmtCur(arrGap) + ' remaining' : 'Target hit!'}</span>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--tm);margin-top:8px">
+        At current avg deal value of <strong>${fmtCur(Math.round(avgDealVal))}</strong>, you need
+        <strong>${avgDealVal > 0 ? Math.ceil(arrGap / avgDealVal) : '—'}</strong> more won deals to hit $2.4M.
+      </div>
+    </div>`;
+
+  if (!wonDeals.length) return;
+
+  // ── CHARTS ────────────────────────────────────────────────────────────────────
+  // Cumulative ARR
+  if (allMonthsSorted.length) {
+    makeChart('pd-arr-cumul', {
+      type: 'line',
+      data: {
+        labels: allMonthsSorted.map(m => monthLabel(m)),
+        datasets: [
+          { label: 'Cumulative ARR ($)', data: allMonthsSorted.map(m => cumulARR[m]), borderColor: '#2a7a4b', borderWidth: 2.5, backgroundColor: 'rgba(42,122,75,.08)', fill: true, tension: .3, pointRadius: 2 },
+          { label: 'Target $2.4M', data: allMonthsSorted.map(() => TARGET_ARR), type: 'line', borderColor: '#c25a00', borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false },
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+        scales: { x: { grid: { display: false }, ticks: { ...axStyle, maxTicksLimit: 16 } }, y: { grid: gridStyle, ticks: { ...axStyle, callback: v => '$' + (v/1000).toFixed(0) + 'k' }, beginAtZero: true } }
+      }
+    });
+  }
+
+  // New ARR by month
+  makeChart('pd-arr-month', {
+    type: 'bar',
+    data: {
+      labels: rangeMonths.map(m => monthLabel(m)),
+      datasets: [
+        { label: 'New ARR ($)', data: rangeMonths.map(m => newARRByMonth[m] || 0), backgroundColor: '#2a7a4b', borderRadius: 3, yAxisID: 'y' },
+        { label: 'Target ARR/mo', data: rangeMonths.map(() => TARGET_ARR / 12), type: 'line', borderColor: '#c25a00', borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false, yAxisID: 'y' },
+      ]
+    },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+      scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: { ...axStyle, callback: v => '$' + (v/1000).toFixed(0) + 'k' }, beginAtZero: true } }
+    }
+  });
+
+  // Est. MRR by month (new ARR / 12)
+  makeChart('pd-mrr-month', {
+    type: 'bar',
+    data: {
+      labels: rangeMonths.map(m => monthLabel(m)),
+      datasets: [
+        { label: 'Est. new MRR', data: rangeMonths.map(m => newARRByMonth[m] ? Math.round(newARRByMonth[m] / 12) : 0), backgroundColor: '#1a3c5e', borderRadius: 3 },
+        { label: 'MRR target ($200k)', data: rangeMonths.map(() => MRR_TARGET), type: 'line', borderColor: '#c25a00', borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false },
+      ]
+    },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+      scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: { ...axStyle, callback: v => '$' + (v/1000).toFixed(0) + 'k' }, beginAtZero: true } }
+    }
+  });
+
+  // Deal size distribution (count)
+  makeChart('pd-arr-bands', {
+    type: 'bar',
+    data: { labels: BANDS.map(b => b.lbl), datasets: [{ label: 'Deals', data: bandCounts, backgroundColor: '#2e8bc0', borderRadius: 3 }] },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: { ...axStyle, stepSize: 1 }, beginAtZero: true } }
+    }
+  });
+
+  // ARR concentration by band (value)
+  makeChart('pd-arr-band-rev', {
+    type: 'doughnut',
+    data: { labels: BANDS.map(b => b.lbl), datasets: [{ data: bandARR, backgroundColor: ['#d0e8f0','#2e8bc0','#1a3c5e','#2a7a4b','#c25a00'], borderWidth: 2 }] },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'right', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12,
+        generateLabels: chart => chart.data.labels.map((l, i) => ({
+          text: l + ' — ' + fmtCur(chart.data.datasets[0].data[i]),
+          fillStyle: chart.data.datasets[0].backgroundColor[i], hidden: false, index: i
+        }))
+      } } }
+    }
+  });
+
+  // Top orgs by ARR
+  if (topOrgs.length) {
+    makeChart('pd-arr-orgs', {
+      type: 'bar',
+      data: { labels: topOrgs.map(([k]) => k.length > 40 ? k.slice(0,40)+'…' : k), datasets: [{ label: 'ARR ($)', data: topOrgs.map(([,v]) => v), backgroundColor: '#2a7a4b', borderRadius: 3 }] },
+      options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { grid: gridStyle, ticks: { ...axStyle, callback: v => '$'+(v/1000).toFixed(0)+'k' }, beginAtZero: true }, y: { grid: { display: false }, ticks: { ...axStyle, font: { family: 'DM Sans', size: 11 } } } }
+      }
+    });
+  }
+}
+
 function renderPdSales(sc) {
   const range = pdGetRange();
   const rangeMonths = pdRangeMonths(range);
