@@ -3977,8 +3977,8 @@ function renderPipedrive(el) {
         '<span class="src-tag">Pipedrive · People CSV</span><br>Total row count of the imported People CSV. All contacts regardless of type, licence status, or date. This is the raw import size.<br>Last imported: <b>' + (_pd_people_imported_at ? fmtDate(_pd_people_imported_at) : 'unknown') + '</b>'],
     ])}
     <div class="sub-tabs">
-      ${['import','revenue','sales','users','trials','optimax'].map(s =>
-        `<button class="sub-tab${sub===s?' active':''}" onclick="setPdSub('${s}')">${{import:'Import Data',revenue:'Revenue & ARR',sales:'Sales',users:'Users & Licences',trials:'Trial Pipeline',optimax:'OPTI-MAX'}[s]}</button>`
+      ${['import','revenue','sales','users','churn','trials','optimax'].map(s =>
+        `<button class="sub-tab${sub===s?' active':''}" onclick="setPdSub('${s}')">${{import:'Import Data',revenue:'Revenue & ARR',sales:'Sales',users:'Users & Licences',churn:'Churn',trials:'Trial Pipeline',optimax:'OPTI-MAX'}[s]}</button>`
       ).join('')}
     </div>
     <div id="pd-sub-content"></div>`;
@@ -3994,6 +3994,7 @@ function setPdSub(sub, rerender = true) {
   else if (sub === 'revenue') renderPdRevenue(sc);
   else if (sub === 'sales')   renderPdSales(sc);
   else if (sub === 'users')   renderPdUsers(sc);
+  else if (sub === 'churn')   renderPdChurn(sc);
   else if (sub === 'trials')  renderPdTrials(sc);
   else if (sub === 'optimax') renderPdOptimax(sc);
 }
@@ -4771,6 +4772,236 @@ function renderPdSales(sc) {
       }
     });
   }
+}
+
+// ── PIPEDRIVE: CHURN ─────────────────────────────────────────────────────────
+function renderPdChurn(sc) {
+  const range       = pdGetRange();
+  const rangeMonths = pdRangeMonths(range);
+  const today       = new Date();
+
+  // ── SEGMENT PEOPLE ────────────────────────────────────────────────────────────
+  // Revenue churn: were Paid Subscription, now Access Revoked
+  const revChurned = _pd_people.filter(p =>
+    p['Person - Customer Type'] === 'Access Revoked' &&
+    (p['Person - Previous Customer Type'] || '').includes('Paid Subscription')
+  );
+  // Trial churn: were any trial type, now Access Revoked (non-conversion)
+  const trialChurned = _pd_people.filter(p =>
+    p['Person - Customer Type'] === 'Access Revoked' &&
+    isTrialType(p['Person - Previous Customer Type']) &&
+    !(p['Person - Previous Customer Type'] || '').includes('Paid Subscription')
+  );
+  // All churned
+  const allChurned = _pd_people.filter(p => p['Person - Customer Type'] === 'Access Revoked');
+  // Active paid (for churn rate denominator)
+  const everPaid   = _pd_people.filter(p =>
+    p['Person - Customer Type'] === 'Paid Subscription' ||
+    (p['Person - Customer Type'] === 'Access Revoked' &&
+     (p['Person - Previous Customer Type'] || '').includes('Paid Subscription'))
+  );
+
+  // ── TENURE CALCULATION ────────────────────────────────────────────────────────
+  // Avg days from Date Access Granted → Date Access Removed for revenue churned
+  const tenures = revChurned.map(p => {
+    const g = pdParseDate(p['Person - Date Access Granted']);
+    const r = pdParseDate(p['Person - Date Access Removed']);
+    if (!pdValidDate(g) || !pdValidDate(r)) return null;
+    return Math.round((r - g) / 86400000);
+  }).filter(v => v !== null && v > 0);
+  const avgTenureDays  = tenures.length ? Math.round(tenures.reduce((a,b)=>a+b,0) / tenures.length) : null;
+  const avgTenureMonths = avgTenureDays ? Math.round(avgTenureDays / 30.4) : null;
+
+  // ── CHURN RATE ────────────────────────────────────────────────────────────────
+  const overallChurnRate = everPaid.length ? pct(revChurned.length, everPaid.length) : null;
+
+  // ── CHURN BY MONTH (range-filtered, by Date Access Removed) ──────────────────
+  const revChurnByMonth   = {};
+  const trialChurnByMonth = {};
+  allChurned.forEach(p => {
+    const dt = pdParseDate(p['Person - Date Access Removed']);
+    if (!pdValidDate(dt)) return;
+    if (!pdInRange(p['Person - Date Access Removed'], range)) return;
+    const k = monthKey(dt.toISOString());
+    const isRev = (p['Person - Previous Customer Type'] || '').includes('Paid Subscription');
+    if (isRev) revChurnByMonth[k] = (revChurnByMonth[k] || 0) + 1;
+    else       trialChurnByMonth[k] = (trialChurnByMonth[k] || 0) + 1;
+  });
+
+  // ── NEW PAID BY MONTH (for net chart) ────────────────────────────────────────
+  const newPaidByMonth = {};
+  _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription' ||
+    ((p['Person - Previous Customer Type'] || '').includes('Paid Subscription'))
+  ).forEach(p => {
+    const dt = pdParseDate(p['Person - Date Access Granted']);
+    if (!pdValidDate(dt) || !pdInRange(p['Person - Date Access Granted'], range)) return;
+    const k = monthKey(dt.toISOString());
+    newPaidByMonth[k] = (newPaidByMonth[k] || 0) + 1;
+  });
+
+  // ── CHURN BY ORG (all time revenue churn) ────────────────────────────────────
+  const churnByOrg = {};
+  revChurned.forEach(p => {
+    const o = p['Person - Organisation'] || 'Unknown';
+    churnByOrg[o] = (churnByOrg[o] || 0) + 1;
+  });
+  const topChurnOrgs = Object.entries(churnByOrg)
+    .filter(([k]) => k !== 'Unknown')
+    .sort((a,b) => b[1]-a[1]).slice(0, 12);
+
+  // ── TENURE BUCKETS ────────────────────────────────────────────────────────────
+  const TEN_BKTS = [
+    { lbl:'< 1 mo',  lo:0,   hi:30   },
+    { lbl:'1–3 mo',  lo:30,  hi:90   },
+    { lbl:'3–6 mo',  lo:90,  hi:180  },
+    { lbl:'6–12 mo', lo:180, hi:365  },
+    { lbl:'1–2 yr',  lo:365, hi:730  },
+    { lbl:'2 yr+',   lo:730, hi:Infinity },
+  ];
+  const tenureBuckets = TEN_BKTS.map(b => tenures.filter(d => d >= b.lo && d < b.hi).length);
+
+  // ── PREVIOUS CUSTOMER TYPE BREAKDOWN ─────────────────────────────────────────
+  const prevTypeBreakdown = {};
+  allChurned.forEach(p => {
+    const t = p['Person - Previous Customer Type'] || 'Unknown';
+    // Simplify multi-value: take last value
+    const last = t.split(',').map(s=>s.trim()).filter(Boolean).pop() || 'Unknown';
+    prevTypeBreakdown[last] = (prevTypeBreakdown[last] || 0) + 1;
+  });
+  const prevTypeEntries = Object.entries(prevTypeBreakdown).sort((a,b)=>b[1]-a[1]);
+
+  // ── PERIOD SUMMARY ────────────────────────────────────────────────────────────
+  const periodRevChurn   = Object.values(revChurnByMonth).reduce((a,b)=>a+b,0);
+  const periodTrialChurn = Object.values(trialChurnByMonth).reduce((a,b)=>a+b,0);
+
+  sc.innerHTML = `
+    ${!_pd_people.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive people CSV first.</div></div>' : ''}
+
+    <div class="cards" style="margin-bottom:18px">
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Revenue churned (all time)${infoBtn('Revenue churned','<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Access Revoked"</b> AND <b>Previous Customer Type includes "Paid Subscription"</b>. These are former paying customers who lost access.<br><div class="calc-row">Customer Type = "Access Revoked" AND Previous Type ∋ "Paid Subscription"</div>')}</div>
+        <div class="card-value" style="color:var(--re)">${revChurned.length}</div>
+        <div class="card-sub">of ${everPaid.length} ever-paid users</div>
+      </div>
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Overall churn rate${infoBtn('Overall churn rate','<span class="src-tag">Pipedrive · People</span><br>Revenue churned ÷ total people who ever held a Paid Subscription. All-time figure — not annualised.<br><div class="calc-row">Revenue churned / (Active paid + Revenue churned)</div>')}</div>
+        ${overallChurnRate != null
+          ? `<div class="card-value" style="color:${overallChurnRate>30?'var(--re)':overallChurnRate>15?'#c25a00':'var(--gr)'}">${fmtPct(overallChurnRate)}</div><div class="card-sub">all-time · not annualised</div>`
+          : '<div class="card-nodata">no data</div>'}
+      </div>
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Avg tenure before churn${infoBtn('Avg tenure before churn','<span class="src-tag">Pipedrive · People</span><br>Average days between <b>Date Access Granted</b> and <b>Date Access Removed</b> for revenue-churned people.<br><div class="calc-row">avg(Date Access Removed − Date Access Granted) for Revenue Churned</div>')}</div>
+        ${avgTenureMonths != null
+          ? `<div class="card-value">${avgTenureMonths} mo</div><div class="card-sub">${avgTenureDays} days avg · revenue churn only</div>`
+          : '<div class="card-nodata">no date data</div>'}
+      </div>
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Trial non-converts (all time)${infoBtn('Trial non-converts','<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Access Revoked"</b> whose previous type was a trial licence (not Paid Subscription). These trialled but never converted.<br><div class="calc-row">Customer Type = "Access Revoked" AND Previous Type includes "trial" AND NOT "Paid Subscription"</div>')}</div>
+        <div class="card-value">${trialChurned.length}</div>
+        <div class="card-sub">access revoked after trial</div>
+      </div>
+      <div class="card">
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Rev. churn · ${range.label}${infoBtn('Revenue churn in period','<span class="src-tag">Pipedrive · People</span><br>Revenue-churned people whose <b>Date Access Removed</b> falls within the selected date range.<br><div class="calc-row">Revenue Churned AND Date Access Removed in range</div>')}</div>
+        <div class="card-value" style="color:${periodRevChurn>0?'var(--re)':'var(--gr)'}">${periodRevChurn}</div>
+        <div class="card-sub">${periodTrialChurn} trial non-converts same period</div>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-title">Revenue churn vs new paid subscribers by month — ${range.label}</div>
+      <p style="font-size:12px;color:var(--tl);margin:-4px 0 12px">Green = new paid licences granted. Red = paid subscribers whose access was revoked.</p>
+      ${rangeMonths.length ? `<div class="chart-wrap" style="height:240px"><canvas id="pd-churn-net"></canvas></div>` : '<div class="no-data">No data for this range.</div>'}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title">Revenue churn by month — ${range.label}</div>
+        <div class="chart-wrap" style="height:220px"><canvas id="pd-churn-month"></canvas></div>
+      </div>
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title">Tenure at churn — distribution (revenue churn)</div>
+        ${tenures.length ? `<div class="chart-wrap" style="height:220px"><canvas id="pd-churn-tenure"></canvas></div>` : '<div class="no-data">No tenure data available — check Date Access Granted/Removed fields.</div>'}
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title">Previous customer type at churn (all time)</div>
+        ${prevTypeEntries.length ? `<div class="chart-wrap" style="height:${Math.max(200,prevTypeEntries.length*40)}px"><canvas id="pd-churn-prevtype"></canvas></div>` : '<div class="no-data">No previous type data.</div>'}
+      </div>
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title">Revenue churn by organisation (all time)</div>
+        ${topChurnOrgs.length ? `<div class="chart-wrap" style="height:${Math.max(200,topChurnOrgs.length*32)}px"><canvas id="pd-churn-orgs"></canvas></div>` : '<div class="no-data">No org data.</div>'}
+      </div>
+    </div>`;
+
+  if (!_pd_people.length) return;
+
+  // ── CHARTS ────────────────────────────────────────────────────────────────────
+  // Net: new paid vs churned
+  makeChart('pd-churn-net', {
+    type: 'bar',
+    data: {
+      labels: rangeMonths.map(m => monthLabel(m)),
+      datasets: [
+        { label: 'New paid licences', data: rangeMonths.map(m => newPaidByMonth[m] || 0), backgroundColor: '#2a7a4b', borderRadius: 3 },
+        { label: 'Revenue churn',     data: rangeMonths.map(m => -(revChurnByMonth[m] || 0)), backgroundColor: '#c0392b', borderRadius: 3 },
+      ]
+    },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+      scales: {
+        x: { grid: { display: false }, ticks: axStyle, stacked: false },
+        y: { grid: gridStyle, ticks: { ...axStyle, callback: v => (v < 0 ? '−' : '') + Math.abs(v) }, beginAtZero: false }
+      }
+    }
+  });
+
+  // Revenue churn by month
+  makeChart('pd-churn-month', {
+    type: 'bar',
+    data: {
+      labels: rangeMonths.map(m => monthLabel(m)),
+      datasets: [
+        { label: 'Revenue churn',    data: rangeMonths.map(m => revChurnByMonth[m] || 0),   backgroundColor: '#c0392b', borderRadius: 3 },
+        { label: 'Trial non-convert',data: rangeMonths.map(m => trialChurnByMonth[m] || 0), backgroundColor: '#e8b4b8', borderRadius: 3 },
+      ]
+    },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+      scales: { x: { grid: { display: false }, ticks: axStyle, stacked: true }, y: { grid: gridStyle, ticks: { ...axStyle, stepSize: 1 }, beginAtZero: true, stacked: true } }
+    }
+  });
+
+  // Tenure distribution
+  if (tenures.length) makeChart('pd-churn-tenure', {
+    type: 'bar',
+    data: { labels: TEN_BKTS.map(b => b.lbl), datasets: [{ label: 'Churned users', data: tenureBuckets, backgroundColor: '#c25a00', borderRadius: 3 }] },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: { ...axStyle, stepSize: 1 }, beginAtZero: true } }
+    }
+  });
+
+  // Previous type breakdown
+  if (prevTypeEntries.length) makeChart('pd-churn-prevtype', {
+    type: 'bar',
+    data: { labels: prevTypeEntries.map(([k]) => k.length > 35 ? k.slice(0,35)+'…' : k), datasets: [{ label: 'Churned', data: prevTypeEntries.map(([,v])=>v), backgroundColor: '#7f8c8d', borderRadius: 3 }] },
+    options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { grid: gridStyle, ticks: { ...axStyle, stepSize: 1 }, beginAtZero: true }, y: { grid: { display: false }, ticks: { ...axStyle, font: { family: 'DM Sans', size: 11 } } } }
+    }
+  });
+
+  // Top churn orgs
+  if (topChurnOrgs.length) makeChart('pd-churn-orgs', {
+    type: 'bar',
+    data: { labels: topChurnOrgs.map(([k]) => k.length > 35 ? k.slice(0,35)+'…' : k), datasets: [{ label: 'Revenue churned', data: topChurnOrgs.map(([,v])=>v), backgroundColor: '#c0392b', borderRadius: 3 }] },
+    options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { grid: gridStyle, ticks: { ...axStyle, stepSize: 1 }, beginAtZero: true }, y: { grid: { display: false }, ticks: { ...axStyle, font: { family: 'DM Sans', size: 11 } } } }
+    }
+  });
 }
 
 // ── PIPEDRIVE: USERS & LICENCES ──────────────────────────────────────────────
