@@ -145,6 +145,7 @@ tr:hover td{background:#fafcfe}
 .conv-table tr:last-child td{border-bottom:none}
 .conv-pct{font-family:'DM Mono',monospace;font-weight:600}
 .conv-pct.good{color:var(--gr)}.conv-pct.mid{color:var(--wa)}.conv-pct.bad{color:var(--re)}
+.conv-pct.good::before{content:"\25B2 "}.conv-pct.mid::before{content:"\25C6 "}.conv-pct.bad::before{content:"\25BC "}
 
 /* OPTI-MAX TABLE */
 .om-table{width:100%;border-collapse:collapse;font-size:13px}
@@ -205,6 +206,13 @@ tr:hover td{background:#fafcfe}
 #info-box-body .calc-row{margin-top:8px;padding:8px 10px;background:#f4f6f8;border-radius:6px;font-size:12px;color:var(--tm);font-family:monospace}
 #info-close{position:absolute;top:14px;right:16px;background:none;border:none;font-size:18px;color:var(--tl);cursor:pointer;line-height:1;padding:2px 4px}
 #info-close:hover{color:var(--navy)}
+@media print {
+  #main-nav, #auth-bar, #db-status-pill, .add-btn, button:not([onclick="window.print()"]), .form-section { display:none!important; }
+  body, html { background:#fff!important; }
+  .box, .card { break-inside:avoid; box-shadow:none!important; border:1px solid #ddd!important; }
+  .chart-wrap { max-height:180px!important; }
+  #main-content { padding:0!important; }
+}
 </style>
 </head>
 <body>
@@ -642,12 +650,8 @@ async function loadPostHogLive(forceRefresh = false) {
       sb.rpc('ph_feature_completion'),
       sb.rpc('ph_power_users',         { user_limit: 25 }),
     ]);
-    // Check for errors (SQL migration may not have run yet)
-    const errs = [summaryRes, weeklyRes, dailyRes, dauMauRes, featuresRes, newUsersRes, retentionRes,
-                  segmentsRes, atRiskRes, adoptionRes, completionRes, powerRes]
-      .map(r => r.error).filter(Boolean);
-    if (errs.length) throw new Error(errs[0].message);
-
+    // Load whatever succeeded — one slow/failed query no longer blanks the whole tab.
+    // (Supabase rpc() resolves with an { error } field rather than throwing.)
     _ph.summary           = summaryRes.data?.[0]   || null;
     _ph.weekly            = weeklyRes.data          || [];
     _ph.daily             = dailyRes.data           || [];
@@ -660,8 +664,20 @@ async function loadPostHogLive(forceRefresh = false) {
     _ph.featureAdoption   = adoptionRes.data        || [];
     _ph.featureCompletion = completionRes.data      || [];
     _ph.powerUsers        = powerRes.data           || [];
-    _ph.loaded     = true;
+
+    // Which specific queries failed (for a precise warning, not a generic one)
+    const failed = [
+      ['summary', summaryRes], ['weekly', weeklyRes], ['daily', dailyRes], ['DAU/MAU', dauMauRes],
+      ['features', featuresRes], ['new users', newUsersRes], ['retention', retentionRes],
+      ['segments', segmentsRes], ['at-risk', atRiskRes], ['adoption', adoptionRes],
+      ['completion', completionRes], ['power users', powerRes],
+    ].filter(([, r]) => r.error).map(([name, r]) => `${name} (${r.error.message})`);
+
+    // Tab is "live" as long as the core weekly numbers came through
+    _ph.loaded = (_ph.weekly.length > 0) || (_ph.summary != null);
+    _ph.error = failed.length ? failed.join(' · ') : null;
     _ph.refreshedAt = new Date();
+    if (failed.length) console.warn('PostHog: some queries failed —', _ph.error);
   } catch (e) {
     _ph.error = e.message || 'PostHog RPC failed';
     console.warn('PostHog live load failed:', e.message);
@@ -808,6 +824,7 @@ function delRow(key, id, dateKey = 'week') {
 // ─────────────────────────────────────────
 const TABS = [
   { id: 'home',      label: 'Home' },
+  { id: 'exec',      label: '📋 Exec Brief' },
   { id: 'pipedrive', label: 'Sales' },
   { id: 'marketing', label: 'Marketing' },
   { id: 'tracker',   label: 'Weekly Tracker' },
@@ -834,7 +851,7 @@ function switchTab(id) {
 function renderTab(id) {
   const mc = document.getElementById('main-content');
   destroyAllCharts();
-  const renderers = { home: renderHome, pipedrive: renderPipedrive, training: renderTraining, marketing: renderMarketing, tracker: renderWeeklyTracker, activity: renderActivity };
+  const renderers = { home: renderHome, exec: renderExec, pipedrive: renderPipedrive, training: renderTraining, marketing: renderMarketing, tracker: renderWeeklyTracker, activity: renderActivity };
   if (renderers[id]) renderers[id](mc);
 }
 
@@ -937,12 +954,71 @@ function renderHome(el) {
     { name: 'Marketing content',last: content[content.length - 1],   dk: 'date' },
   ];
 
+  // ── HEADLINE NUMBER (#9): active paying customers toward 600 ──────────────
+  const heroPct = Math.min(100, Math.round(pct(pdActivePaid, TARGET_USERS) || 0));
+  const heroCol = heroPct >= 80 ? '#2a7a4b' : heroPct >= 50 ? '#2e8bc0' : '#c25a00';
+
+  // ── WHAT CHANGED (#4): flag big moves vs the previous period ──────────────
+  const _pm = new Date(_now.getFullYear(), _now.getMonth() - 1, 1);
+  const inMonth = (dstr, y, mo) => { const d = pdParseDate(dstr); return pdValidDate(d) && d.getFullYear() === y && d.getMonth() === mo; };
+  const wonLastMonth = _pd_deals.filter(d => d['Deal - Status'] === 'Won' && d['Deal - Pipeline'] === '2026 Sales' && inMonth(d['Deal - Won time'], _pm.getFullYear(), _pm.getMonth()));
+  const revLastMonth = wonLastMonth.reduce((s, d) => s + (parseFloat(d['Deal - Value']) || 0), 0);
+  const trialGrantedMonth = (y, mo) => _pd_people.filter(p => isTrialType(p['Person - Customer Type']) && inMonth(p['Person - Date Access Granted'], y, mo)).length;
+  const trialsThisMonth = trialGrantedMonth(_now.getFullYear(), _now.getMonth());
+  const trialsLastMonth = trialGrantedMonth(_pm.getFullYear(), _pm.getMonth());
+  const phW = _ph.weekly || [];
+  const auNow = phW.length ? Number(phW[phW.length-1].active_users) : null;
+  const auPrev = phW.length > 1 ? Number(phW[phW.length-2].active_users) : null;
+
+  const alertDefs = [
+    { label: 'Won deals this month', curr: pdWonThisMonth.length, prev: wonLastMonth.length },
+    { label: 'Revenue this month', curr: pdRevThisMonth, prev: revLastMonth, money: true },
+    { label: 'New trials this month', curr: trialsThisMonth, prev: trialsLastMonth },
+    { label: 'Weekly active users', curr: auNow, prev: auPrev },
+  ];
+  const alerts = [];
+  alertDefs.forEach(a => {
+    if (a.curr == null || a.prev == null || a.prev === 0) return;
+    const ch = Math.round((a.curr - a.prev) / a.prev * 100);
+    if (Math.abs(ch) < 25) return;
+    const up = ch > 0;
+    const val = a.money ? fmtCur(a.curr) : fmtNum(a.curr);
+    alerts.push({ up, txt: `${a.label} ${up ? 'up' : 'down'} ${Math.abs(ch)}% vs last ${a.label.includes('week') ? 'week' : 'month'} — now ${val}` });
+  });
+
   el.innerHTML = `
+    <div class="box" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:12px;color:var(--tl);text-transform:uppercase;letter-spacing:.5px;font-weight:600">Active paying customers</div>
+        <div style="font-size:46px;font-weight:700;color:${heroCol};line-height:1.05">${fmtNum(pdActivePaid)}<span style="font-size:20px;color:var(--tl);font-weight:500"> / ${TARGET_USERS}</span></div>
+      </div>
+      <div style="flex:1;min-width:220px">
+        <div style="height:14px;border-radius:7px;background:var(--bg2);overflow:hidden">
+          <div style="height:100%;border-radius:7px;background:${heroCol};width:${heroPct}%;transition:width .4s"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:12px;color:var(--tl)">
+          <span>${heroPct}% of target</span>
+          <span>${Math.max(0, TARGET_USERS - pdActivePaid)} to go</span>
+        </div>
+      </div>
+    </div>
+
+    ${alerts.length ? `<div class="box" style="padding:12px 16px">
+      <div style="font-size:12px;color:var(--tl);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:8px">What changed</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${alerts.map(a => `<div style="display:flex;align-items:center;gap:8px;font-size:13px">
+          <span style="color:${a.up ? 'var(--gr)' : 'var(--re)'};font-weight:700">${a.up ? '▲' : '▼'}</span>
+          <span style="color:var(--tx)">${a.txt}</span>
+        </div>`).join('')}
+      </div>
+    </div>` : ''}
+`;
+  el.innerHTML += `
     ${cardsHTML([
-      ['Won deals (this month)', pdWonThisMonth.length || null, null, null, '2026 Sales pipeline',
-        '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with <b>Status = Won</b> and <b>Won time</b> in the current calendar month.<br><div class="calc-row">Filter: Pipeline = "2026 Sales" AND Status = "Won" AND Won time in current month</div>'],
-      ['Revenue (this month)', pdRevThisMonth || null, null, '$', '2026 Sales pipeline',
-        '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Sum of <b>Deal Value</b> for all Won deals with Won time in the current calendar month.<br><div class="calc-row">SUM(Deal Value) where Status = "Won" AND Won time in current month</div>'],
+      ['Won deals (this month)', pdWonThisMonth.length || null, wonLastMonth.length || null, null, 'vs last month · 2026 Sales',
+        '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with <b>Status = Won</b> and <b>Won time</b> in the current calendar month. The ▲/▼ compares to last calendar month.<br><div class="calc-row">Filter: Pipeline = "2026 Sales" AND Status = "Won" AND Won time in current month</div>'],
+      ['Revenue (this month)', pdRevThisMonth || null, revLastMonth || null, '$', 'vs last month · 2026 Sales',
+        '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Sum of <b>Deal Value</b> for all Won deals with Won time in the current calendar month. The ▲/▼ compares to last calendar month.<br><div class="calc-row">SUM(Deal Value) where Status = "Won" AND Won time in current month</div>'],
       ['Win rate (2026 Sales)', pdWinRate, null, '%', 'Won ÷ (Won + Lost) all time',
         '<span class="src-tag">Pipedrive · 2026 Sales</span><br><b>Won ÷ (Won + Lost)</b> across all time in the 2026 Sales pipeline. Open deals are excluded from the calculation.<br><div class="calc-row">Won.count / (Won.count + Lost.count) × 100</div>'],
       ['Active paid subscribers', pdActivePaid || null, null, null, 'Target: 600',
@@ -1081,6 +1157,227 @@ const DEAL_STAGES = [
   { key: 'invoiceSent',   label: 'Invoice Sent' },
   { key: 'won',           label: 'Won' },
 ];
+
+// ── EXECUTIVE BRIEF ──────────────────────────────────────────────────────────
+function renderExec(el) {
+  el = el || document.getElementById('main-content');
+  const today = new Date();
+  const fmtToday = fmtDate(today);
+
+  // ── Pull headline numbers from every source ─────────────────────────────
+  // Sales (Pipedrive)
+  const paidPeople = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
+  const allWon = _pd_deals.filter(d => d['Deal - Status'] === 'won');
+  const wonARR = allWon.reduce((s,d) => s + (parseFloat(d['Deal - Value'])||0), 0);
+  const wonThisMonth = allWon.filter(d => {
+    const dt = pdParseDate(d['Deal - Won time'] || d['Deal - Deal created']);
+    return pdValidDate(dt) && dt.getFullYear() === today.getFullYear() && dt.getMonth() === today.getMonth();
+  });
+  const openDeals = _pd_deals.filter(d => d['Deal - Pipeline'] === '2026 Sales' && d['Deal - Status'] === 'Open');
+  const pipelineValue = openDeals.reduce((s,d) => s + (parseFloat(d['Deal - Value'])||0), 0);
+  const activeTrial = _pd_people.filter(p => {
+    if (!isTrialType(p['Person - Customer Type'])) return false;
+    const rem = pdParseDate(p['Person - Date Access Removed']);
+    return !pdValidDate(rem) || rem > today;
+  });
+  const churnedThisMonth = _pd_people.filter(p => {
+    if (p['Person - Customer Type'] !== 'Access Revoked') return false;
+    if (!p['Person - Previous Customer Type']?.includes('Paid Subscription')) return false;
+    const dt = pdParseDate(p['Person - Date Access Removed']);
+    return pdValidDate(dt) && dt.getFullYear() === today.getFullYear() && dt.getMonth() === today.getMonth();
+  });
+
+  // Marketing (weekly tracker — most recent row)
+  const tracker = load('weekly_tracker').sort((a,b) => a.week > b.week ? 1 : -1);
+  const tLast = tracker[tracker.length-1] || {};
+  const tPrev = tracker[tracker.length-2] || {};
+  const visitors = tLast.websiteVisits ?? null;
+  const visitorsPrev = tPrev.websiteVisits ?? null;
+
+  // Activity (PostHog)
+  const phWeekly = (_ph.weekly || []).slice(-1)[0] || {};
+  const phWeeklyPrev = (_ph.weekly || []).slice(-2,-1)[0] || {};
+  const dauMau = (_ph.daumau || []).slice(-1)[0] || {};
+  const segments = _ph.segments || [];
+
+  // Training
+  const pdTrained = _pd_people.filter(p => {
+    const dt = pdParseDate(p['Person - Date Access Granted']);
+    return pdValidDate(dt) && !['Contact Register','Expression of Interest'].includes(p['Person - Customer Type']);
+  });
+  const trainedThisMonth = pdTrained.filter(p => {
+    const dt = pdParseDate(p['Person - Date Access Granted']);
+    return dt && dt.getFullYear() === today.getFullYear() && dt.getMonth() === today.getMonth();
+  }).length;
+
+  // Content (marketing)
+  const content = load('content');
+  const contentThisMonth = content.filter(r => {
+    const dt = new Date(r.date || r.week || '');
+    return !isNaN(dt) && dt.getFullYear() === today.getFullYear() && dt.getMonth() === today.getMonth();
+  }).length;
+
+  // ── Trend arrows ──────────────────────────────────────────────────────────
+  function trend(curr, prev) {
+    if (curr == null || prev == null) return '';
+    const d = curr - prev;
+    if (d > 0) return `<span style="color:#2a7a4b;font-size:11px;margin-left:4px">▲ ${fmtNum(d)}</span>`;
+    if (d < 0) return `<span style="color:#e05252;font-size:11px;margin-left:4px">▼ ${fmtNum(Math.abs(d))}</span>`;
+    return `<span style="font-size:11px;margin-left:4px;color:#999">→</span>`;
+  }
+
+  // ── Build auto-narrative bullets ─────────────────────────────────────────
+  const bullets = [];
+  if (wonThisMonth.length > 0)
+    bullets.push(`<b>${wonThisMonth.length}</b> deal${wonThisMonth.length>1?'s':''} won this month — ${fmtCur(wonThisMonth.reduce((s,d)=>s+(parseFloat(d['Deal - Value'])||0),0))} in new revenue.`);
+  if (churnedThisMonth.length > 0)
+    bullets.push(`<b>${churnedThisMonth.length}</b> paid subscriber${churnedThisMonth.length>1?'s':''} churned this month.`);
+  if (activeTrial.length > 0)
+    bullets.push(`<b>${activeTrial.length}</b> active trial${activeTrial.length>1?'s':''} in progress.`);
+  if (pipelineValue > 0)
+    bullets.push(`Open pipeline: <b>${fmtCur(pipelineValue)}</b> across ${openDeals.length} deals (2026 Sales).`);
+  if (phWeekly.active_users)
+    bullets.push(`PostHog: <b>${fmtNum(phWeekly.active_users)}</b> active users last week${trend(phWeekly.active_users, phWeeklyPrev.active_users)}.`);
+  if (dauMau.dau_mau_pct)
+    bullets.push(`DAU/MAU stickiness: <b>${fmtPct(dauMau.dau_mau_pct)}</b> (last 30 days).`);
+  if (visitors)
+    bullets.push(`Website visitors last week: <b>${fmtNum(visitors)}</b>${trend(visitors, visitorsPrev)}.`);
+  if (trainedThisMonth > 0)
+    bullets.push(`<b>${trainedThisMonth}</b> new user${trainedThisMonth>1?'s':''} onboarded (access granted) this month.`);
+  if (contentThisMonth > 0)
+    bullets.push(`<b>${contentThisMonth}</b> content piece${contentThisMonth>1?'s':''} published this month.`);
+
+  // ── Segment donut data ─────────────────────────────────────────────────────
+  const segColors = { New:'#2e8bc0', Active:'#2a7a4b', 'At-risk':'#e6a817', Dormant:'#e05252' };
+  const segData = ['New','Active','At-risk','Dormant'].map(s => {
+    const row = segments.find(r => r.segment === s);
+    return { label: s, count: row?.user_count || 0, color: segColors[s] };
+  });
+
+  el.innerHTML = `
+    <div class="section-header">
+      <div>
+        <div class="section-title">Executive Brief</div>
+        <div class="section-sub">Auto-generated summary · as of ${fmtToday}</div>
+      </div>
+      <button onclick="renderExec()" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--bor);background:var(--bg2);cursor:pointer;color:var(--tx)">↺ Refresh</button>
+    </div>
+
+    <!-- Headline KPI row -->
+    ${cardsHTML([
+      ['Paid subscribers', paidPeople.length || null, null, null, `target ${fmtNum(TARGET_USERS)}`],
+      ['Total revenue (won deals)', wonARR || null, null, '$', null],
+      ['Open pipeline', pipelineValue || null, null, '$', `${openDeals.length} deals · 2026 Sales`],
+      ['Active trials', activeTrial.length || null, null, null, null],
+      ['Active users (last week)', phWeekly.active_users || null, null, null, 'PostHog'],
+      ['Website visitors (last week)', visitors || null, null, null, 'Weekly Tracker'],
+    ])}
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0">
+      <!-- Narrative -->
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title" style="font-size:14px;font-weight:700;margin-bottom:12px">This month at a glance</div>
+        ${bullets.length
+          ? `<ul style="margin:0;padding-left:18px;line-height:1.9;font-size:13px;color:var(--tx)">${bullets.map(b=>`<li>${b}</li>`).join('')}</ul>`
+          : '<div class="no-data">Load Pipedrive + PostHog data to generate narrative.</div>'}
+      </div>
+
+      <!-- User segments -->
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title" style="font-size:14px;font-weight:700;margin-bottom:12px">User segments (PostHog)</div>
+        ${segData.some(s=>s.count>0) ? `
+          <div style="display:flex;flex-direction:column;gap:10px">
+            ${segData.map(s => {
+              const total = segData.reduce((sum,x)=>sum+x.count,0)||1;
+              return `<div style="display:flex;align-items:center;gap:10px">
+                <div style="font-size:12px;color:var(--tx);min-width:72px">${s.label}</div>
+                <div style="flex:1;background:var(--bd);border-radius:4px;height:16px;position:relative;overflow:hidden">
+                  <div style="position:absolute;left:0;top:0;bottom:0;width:${Math.round(s.count/total*100)}%;background:${s.color};border-radius:4px"></div>
+                </div>
+                <div style="font-size:13px;font-weight:700;min-width:40px;text-align:right">${fmtNum(s.count)}</div>
+              </div>`;
+            }).join('')}
+          </div>` : '<div class="no-data">No PostHog segment data. Check Activity tab.</div>'}
+      </div>
+    </div>
+
+    <!-- Sales + Marketing summary grid -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px">
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title">Sales pipeline</div>
+        ${openDeals.length ? `
+          <table style="width:100%;font-size:12px;border-collapse:collapse">
+            ${['Follow Up','Demo Scheduled','Demo Booked','Trial in Progress','Negotiation','Contract Sent','Won'].map(s => {
+              const n = openDeals.filter(d=>d['Deal - Stage']===s).length;
+              if (!n) return '';
+              return `<tr><td style="padding:3px 0;color:var(--tl)">${s}</td><td style="text-align:right;font-weight:600">${n}</td></tr>`;
+            }).join('')}
+          </table>` : '<div class="no-data">No 2026 Sales pipeline data.</div>'}
+      </div>
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title">Training this month</div>
+        <div style="font-size:28px;font-weight:700;color:var(--navy);margin:8px 0">${trainedThisMonth || '—'}</div>
+        <div style="font-size:12px;color:var(--tl)">new users onboarded (access granted)</div>
+        <div style="margin-top:12px;font-size:12px;color:var(--tl)">Total trained: <strong style="color:var(--navy)">${fmtNum(pdTrained.length)}</strong></div>
+      </div>
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title">Top at-risk users</div>
+        ${(_ph.atRisk||[]).length ? `
+          <table style="width:100%;font-size:11px;border-collapse:collapse">
+            ${(_ph.atRisk||[]).slice(0,6).map(u=>`<tr>
+              <td style="padding:2px 0;color:var(--tl);font-family:monospace">${(u.distinct_id||'').slice(0,28)}</td>
+              <td style="text-align:right;color:#e05252">${u.last_seen ? fmtDate(new Date(u.last_seen)).slice(0,6) : '—'}</td>
+            </tr>`).join('')}
+          </table>` : '<div class="no-data">No at-risk data. See Activity tab.</div>'}
+      </div>
+    </div>
+
+    <!-- Recent deal activity -->
+    <div class="box">
+      <div class="box-title">Recent deal activity</div>
+      ${(() => {
+        const recent = _pd_deals
+          .filter(d => d['Deal - Status'] === 'Won' || d['Deal - Status'] === 'Lost')
+          .map(d => ({
+            title:  d['Deal - Title'] || d['Title'] || '—',
+            org:    d['Deal - Organisation'] || d['Organisation'] || '',
+            status: d['Deal - Status'],
+            value:  parseFloat(d['Deal - Value']) || 0,
+            date:   pdParseDate(d['Deal - Won time'] || d['Deal - Lost time'] || d['Deal - Deal created']),
+            owner:  d['Deal - Owner'] || '',
+          }))
+          .filter(d => pdValidDate(d.date))
+          .sort((a,b) => b.date - a.date)
+          .slice(0, 10);
+        if (!recent.length) return '<div class="no-data">No closed deals yet. Import Pipedrive data.</div>';
+        return `<table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr>
+            <th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--bor)">Deal</th>
+            <th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--bor)">Org</th>
+            <th style="text-align:center;padding:4px 8px;border-bottom:1px solid var(--bor)">Status</th>
+            <th style="text-align:right;padding:4px 8px;border-bottom:1px solid var(--bor)">Value</th>
+            <th style="text-align:right;padding:4px 8px;border-bottom:1px solid var(--bor)">Date</th>
+            <th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--bor)">Owner</th>
+          </tr></thead>
+          <tbody>${recent.map(d => `<tr style="border-bottom:1px solid var(--bg2)">
+            <td style="padding:5px 8px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.title}</td>
+            <td style="padding:5px 8px;color:var(--tl);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.org}</td>
+            <td style="padding:5px 8px;text-align:center">
+              <span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:${d.status==='Won'?'rgba(42,122,75,.12)':'rgba(224,82,82,.1)'};color:${d.status==='Won'?'#2a7a4b':'#e05252'}">${d.status}</span>
+            </td>
+            <td style="padding:5px 8px;text-align:right;font-weight:600">${d.value ? fmtCur(d.value) : '—'}</td>
+            <td style="padding:5px 8px;text-align:right;color:var(--tl)">${fmtDate(d.date).slice(0,6)}</td>
+            <td style="padding:5px 8px;color:var(--tl)">${d.owner}</td>
+          </tr>`).join('')}</tbody>
+        </table>`;
+      })()}
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+      <div style="font-size:11px;color:var(--tl)">Generated ${fmtToday} · Pipedrive ${fmtNum(_pd_people.length)} people · ${fmtNum(_pd_deals.length)} deals</div>
+      <button onclick="window.print()" style="font-size:11px;padding:4px 12px;border-radius:6px;border:1px solid var(--bor);background:var(--bg2);cursor:pointer;color:var(--tx)">🖨 Print / Export PDF</button>
+    </div>`;
+}
 
 function renderSales(el) {
   el = el || document.getElementById('main-content');
@@ -1311,7 +1608,7 @@ function setSalesSub(sub, rerender = true) {
           datasets: [
             { label: 'Won ($)', data: wlMonths.map(([,v]) => v.wonVal), backgroundColor: '#2a7a4b', borderRadius: 4 },
             { label: 'Lost ($)', data: wlMonths.map(([,v]) => v.lostVal), backgroundColor: '#f5b7b1', borderRadius: 4 },
-            { label: 'Monthly ARR target ($200k)', data: wlMonths.map(() => TARGET_ARR / 12), type: 'line', borderColor: '#c25a00', borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false },
+            { label: 'Monthly revenue target ($200k)', data: wlMonths.map(() => TARGET_ARR / 12), type: 'line', borderColor: '#c25a00', borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false },
           ]
         },
         options: { responsive: true, maintainAspectRatio: false,
@@ -3069,6 +3366,87 @@ function setTrainingSub(sub, rerender = true, barData, data, webinars, convMonth
       });
     }
 
+    // ── TRAINING ROI: trained vs untrained orgs ──────────────────────────────
+    // Build a training-sessions-per-org map from the manual training log
+    const trainingData2 = load('training');
+    const trainedOrgsMap = {};
+    trainingData2.forEach(r => {
+      const o = (r.org || r.organisation || '').trim();
+      if (o) trainedOrgsMap[o] = (trainedOrgsMap[o] || 0) + (r.attendees || 1);
+    });
+
+    // Paid orgs with PostHog signal
+    const paidPeopleROI = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
+    const powerEmails  = new Set((_ph.powerUsers   || []).map(u => (u.distinct_id||'').toLowerCase()));
+    const atRiskEmails = new Set((_ph.atRisk  || []).map(u => (u.distinct_id||'').toLowerCase()));
+
+    const orgROI = {};
+    paidPeopleROI.forEach(p => {
+      const org = (p['Person - Organisation'] || 'Unknown').trim();
+      if (!orgROI[org]) orgROI[org] = { sessions:0, hasPower:false, hasAtRisk:false, userCount:0 };
+      orgROI[org].userCount++;
+      orgROI[org].sessions = trainedOrgsMap[org] || 0;
+      const em = (p['Person - Email'] || p['Email'] || '').toLowerCase();
+      if (em && powerEmails.has(em))  orgROI[org].hasPower = true;
+      if (em && atRiskEmails.has(em)) orgROI[org].hasAtRisk = true;
+    });
+
+    const roiOrgs = Object.entries(orgROI).map(([org, m]) => ({org, ...m}));
+    const trained2   = roiOrgs.filter(o => o.sessions > 0);
+    const untrained2 = roiOrgs.filter(o => o.sessions === 0);
+    const trainedPower   = trained2.filter(o => o.hasPower).length;
+    const untrainedPower = untrained2.filter(o => o.hasPower).length;
+    const trainedAtRisk  = trained2.filter(o => o.hasAtRisk).length;
+    const untrainedAtRisk = untrained2.filter(o => o.hasAtRisk).length;
+
+    const roiHTML = roiOrgs.length ? `
+      <div class="section-block" style="margin-top:0">
+        <h3>Training ROI — trained vs untrained orgs ${infoBtn('Training ROI',
+          `<p>Compares the PostHog engagement profile of <b>paying orgs that received training sessions</b> (from the manual training log) against those that did not.</p>
+          <p><b>Power user</b>: in PostHog top-25 most active users. <b>At-risk</b>: not seen in the last 14 days but were previously active.</p>
+          <p>PostHog matching is by user email address — orgs with no email in PostHog are excluded from the signal columns.</p>
+          <span class="src-tag">Training log · Pipedrive People · PostHog</span>`)}</h3>
+        ${cardsHTML([
+          ['Trained orgs', trained2.length, null, null, `${fmtPct(pct(trained2.length, roiOrgs.length))} of paid orgs`],
+          ['Trained → power user', trainedPower, null, null, trained2.length ? fmtPct(pct(trainedPower, trained2.length)) + ' of trained orgs' : null],
+          ['Trained → at-risk', trainedAtRisk, null, null, trained2.length ? fmtPct(pct(trainedAtRisk, trained2.length)) + ' of trained orgs' : null],
+          ['Untrained → power user', untrainedPower, null, null, untrained2.length ? fmtPct(pct(untrainedPower, untrained2.length)) + ' of untrained orgs' : null],
+          ['Untrained → at-risk', untrainedAtRisk, null, null, untrained2.length ? fmtPct(pct(untrainedAtRisk, untrained2.length)) + ' of untrained orgs' : null],
+        ])}
+        ${roiOrgs.length ? `<div class="chart-wrap" style="height:220px"><canvas id="training-roi-chart"></canvas></div>` : ''}
+      </div>` : '';
+
+    // Append ROI section
+    const roiEl = document.createElement('div');
+    roiEl.innerHTML = roiHTML;
+    sc.appendChild(roiEl);
+
+    if (roiOrgs.length) {
+      makeChart('training-roi-chart', {
+        type: 'bar',
+        data: {
+          labels: ['Trained orgs', 'Untrained orgs'],
+          datasets: [
+            { label: 'Power users (%)', data: [
+                trained2.length   ? Math.round(pct(trainedPower,   trained2.length))   : 0,
+                untrained2.length ? Math.round(pct(untrainedPower, untrained2.length)) : 0
+              ], backgroundColor: '#2a7a4b', borderRadius: 4 },
+            { label: 'At-risk (%)', data: [
+                trained2.length   ? Math.round(pct(trainedAtRisk,   trained2.length))   : 0,
+                untrained2.length ? Math.round(pct(untrainedAtRisk, untrained2.length)) : 0
+              ], backgroundColor: '#e05252', borderRadius: 4 },
+          ]
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+          scales: {
+            x: { grid: { display: false }, ticks: axStyle },
+            y: { grid: gridStyle, ticks: { ...axStyle, callback: v => v + '%' }, beginAtZero: true, max: 100 }
+          }
+        }
+      });
+    }
+
   }
 }
 
@@ -3253,9 +3631,71 @@ function renderMarketing(el) {
   // Webinars data
   const webinars = load('webinars');
 
+  // ── FUNNEL: join tracker + trials by week ─────────────────────────────────
+  const trialsData = load('trials').sort((a,b) => a.week > b.week ? 1 : -1);
+  const trackerMap = Object.fromEntries(tracker.map(r => [r.week, r]));
+  const trialsMap  = Object.fromEntries(trialsData.map(r => [r.week, r]));
+  // All weeks that appear in either source
+  const allFunnelWeeks = [...new Set([...tracker.map(r=>r.week), ...trialsData.map(r=>r.week)])].sort();
+  const funnelRecent12 = allFunnelWeeks.slice(-12);
+  // Funnel stages: [label, getValue(week)]
+  const FUNNEL_STAGES_MK = [
+    { label:'Website visitors',   key:'visitors',   get: w => (trackerMap[w]?.websiteVisits ?? null) },
+    { label:'EOI / enquiries',    key:'eoi',        get: w => ((trackerMap[w]?.eoiTickets||0) + (trackerMap[w]?.purchaseEnq||0)) || null },
+    { label:'Trials started',     key:'trials',     get: w => (trackerMap[w]?.trialsStarted ?? trialsMap[w]?.trialsGranted ?? null) },
+    { label:'Demo attended',      key:'demos',      get: w => (trialsMap[w]?.demoAttended ?? null) },
+    { label:'SDK active',         key:'sdk',        get: w => (trialsMap[w]?.sdkActive ?? null) },
+    { label:'Order form sent',    key:'order',      get: w => (trialsMap[w]?.orderFormSent ?? null) },
+    { label:'Signed',             key:'signed',     get: w => (trialsMap[w]?.signed ?? null) },
+  ];
+  // Cumulative totals across all recorded weeks
+  const funnelTotals = FUNNEL_STAGES_MK.map(s =>
+    allFunnelWeeks.reduce((sum, w) => { const v = s.get(w); return sum + (v || 0); }, 0)
+  );
+  // Stage-to-stage conversion rates (cumulative)
+  const funnelConvRates = funnelTotals.map((v, i) =>
+    i === 0 ? null : (funnelTotals[i-1] > 0 ? pct(v, funnelTotals[i-1]) : null)
+  );
+  // Entry-to-end overall rate
+  const funnelOverall = funnelTotals[0] > 0 ? pct(funnelTotals[funnelTotals.length-1], funnelTotals[0]) : null;
+  // Per-week trend data for each stage
+  const funnelWeeklyData = FUNNEL_STAGES_MK.map(s => funnelRecent12.map(w => s.get(w) ?? 0));
+
   // EDM data
   const edms = data.filter(r => r.type === 'EDM').reverse();
   const growth2m = load('edm_2m');
+
+  // ── CONTENT → PIPELINE ATTRIBUTION ────────────────────────────────────────
+  // For each content piece, find deals created within 30 days after its publish date
+  const ATTR_WINDOW = 30; // days
+  const attrDeals = _pd_deals.filter(d => {
+    const dt = pdParseDate(d['Deal - Deal created']);
+    return pdValidDate(dt);
+  });
+  // Per content piece: { type, date, title, trialDeals, wonDeals, openDeals }
+  const attrByType = {}; // content type → { pieces, trialDeals, wonDeals, openDeals }
+  data.filter(c => c.date).forEach(c => {
+    const pubDate = new Date(c.date);
+    if (isNaN(pubDate)) return;
+    const winEnd = new Date(pubDate); winEnd.setDate(winEnd.getDate() + ATTR_WINDOW);
+    let td = 0, wd = 0, od = 0;
+    attrDeals.forEach(d => {
+      const dt = pdParseDate(d['Deal - Deal created']);
+      if (!pdValidDate(dt) || dt < pubDate || dt > winEnd) return;
+      if (d['Deal - Pipeline'] === 'Trial Pipeline') td++;
+      else if (d['Deal - Status'] === 'won') wd++;
+      else od++;
+    });
+    const type = c.type || 'Other';
+    if (!attrByType[type]) attrByType[type] = { pieces:0, trialDeals:0, wonDeals:0, openDeals:0 };
+    attrByType[type].pieces++;
+    attrByType[type].trialDeals += td;
+    attrByType[type].wonDeals   += wd;
+    attrByType[type].openDeals  += od;
+  });
+  const attrTypes = Object.entries(attrByType).sort((a,b) => (b[1].trialDeals+b[1].wonDeals) - (a[1].trialDeals+a[1].wonDeals));
+  // Avg deals per piece per type
+  attrTypes.forEach(([t, m]) => { m.avgDeals = m.pieces ? +((m.trialDeals + m.wonDeals + m.openDeals) / m.pieces).toFixed(1) : 0; });
 
   // Correlation data
   const websiteData = load('website');
@@ -3301,6 +3741,57 @@ function renderMarketing(el) {
       ['Website visits', latestW?.websiteVisits ?? null, null, null, latestW ? fmtDate(latestW.week) : null,
         '<span class="src-tag">Manual · Weekly Tracker</span><br>Total website users (visits) from the <b>websiteVisits</b> field of the latest Weekly Tracker row. Manually entered from Google Analytics / Looker Studio.'],
     ])}
+
+    <!-- ── FUNNEL ── -->
+    <div class="box">
+      <div class="box-title">Website → Trial → Signed funnel
+        <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">Cumulative all-time totals · entry→signed: ${funnelOverall!=null?fmtPct(funnelOverall):'—'}</span>
+      </div>
+      ${allFunnelWeeks.length ? `
+      <div style="display:grid;grid-template-columns:repeat(${FUNNEL_STAGES_MK.length},1fr);gap:6px;margin-bottom:18px">
+        ${FUNNEL_STAGES_MK.map((s,i) => {
+          const v = funnelTotals[i];
+          const rate = funnelConvRates[i];
+          const barPct = funnelTotals[0] > 0 ? Math.round(v/funnelTotals[0]*100) : 0;
+          const rateCol = rate==null?'':rate>=70?'#2a7a4b':rate>=40?'#c25a00':'#c0392b';
+          return `<div style="text-align:center;position:relative">
+            ${i>0?`<div style="position:absolute;top:50%;left:-8px;transform:translateY(-100%);font-size:18px;color:var(--tl);line-height:1">›</div>`:''}
+            <div style="background:var(--bg2);border-radius:8px;padding:10px 6px 8px">
+              <div style="font-size:20px;font-weight:700;color:var(--navy);line-height:1.1">${fmtNum(v)||'—'}</div>
+              <div style="font-size:10px;color:var(--tm);margin:3px 0 6px;font-weight:500;line-height:1.2">${s.label}</div>
+              <div style="height:4px;border-radius:2px;background:var(--bd);overflow:hidden">
+                <div style="height:100%;border-radius:2px;background:var(--acc);width:${barPct}%"></div>
+              </div>
+              ${rate!=null?`<div style="font-size:10px;font-weight:700;color:${rateCol};margin-top:4px">${fmtPct(rate)} conv.</div>`:
+                i===0?`<div style="font-size:10px;color:var(--tl);margin-top:4px">entry</div>`:''}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="box-title" style="margin-bottom:8px">Weekly trend — last 12 weeks</div>
+      <div class="chart-wrap" style="height:220px"><canvas id="mk-funnel-trend"></canvas></div>
+      <div style="margin-top:14px">
+        <div class="box-title" style="margin-bottom:8px">Stage conversion rates — all time</div>
+        <table class="conv-table">
+          <thead><tr><th>Stage</th><th style="text-align:right">Total</th><th style="text-align:right">Conv. from prev</th></tr></thead>
+          <tbody>${FUNNEL_STAGES_MK.map((s,i) => {
+            const rate = funnelConvRates[i];
+            const cls = rate==null?'':rate>=70?'good':rate>=40?'mid':'bad';
+            return `<tr>
+              <td style="font-size:12px">${s.label}</td>
+              <td style="text-align:right;font-weight:600">${fmtNum(funnelTotals[i])}</td>
+              <td style="text-align:right">${rate!=null?`<span class="conv-pct ${cls}">${fmtPct(rate)}</span>`:i===0?'<span style="color:var(--tl)">entry</span>':'—'}</td>
+            </tr>`;
+          }).join('')}
+          <tr style="border-top:2px solid var(--bd);font-weight:600">
+            <td>Overall (visitors → signed)</td>
+            <td></td>
+            <td style="text-align:right">${funnelOverall!=null?`<span class="conv-pct ${funnelOverall>=5?'good':funnelOverall>=2?'mid':'bad'}">${fmtPct(funnelOverall)}</span>`:'—'}</td>
+          </tr>
+          </tbody>
+        </table>
+      </div>` : '<div class="no-data">No funnel data yet. Enter data via Weekly Tracker and Trials tabs.</div>'}
+    </div>
 
     <!-- ── LINKEDIN ── -->
     <div class="box">
@@ -3555,6 +4046,49 @@ function renderMarketing(el) {
       ], '_id')}
     </div>
 
+    <!-- ── CONTENT → PIPELINE ATTRIBUTION ── -->
+    <div class="box">
+      <div class="box-title">Content → Pipeline attribution (${ATTR_WINDOW}-day window) ${infoBtn('Content attribution',
+        `<p>For each content piece in the log, counts deals <b>created within ${ATTR_WINDOW} days</b> of the publish date. Grouped by content type.</p>
+        <p>This is a coincidence window — it shows what deal activity happened in the period after a piece was published, not a tracked source attribution.</p>
+        <div class="calc-row">Deals created ≥ publish date AND ≤ publish date + ${ATTR_WINDOW} days</div>
+        <span class="src-tag">Content log · Pipedrive Deals</span>`)}</div>
+      ${attrTypes.length && _pd_deals.length ? `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div>
+            <div style="font-size:11px;color:var(--tl);margin-bottom:10px">Deal activity in 30-day window after publish — by content type</div>
+            <div class="chart-wrap" style="height:${Math.max(180, attrTypes.length * 42)}px"><canvas id="mk-attr-chart"></canvas></div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--tl);margin-bottom:10px">Avg deals per piece published</div>
+            <table style="width:100%;border-collapse:collapse;font-size:12px">
+              <thead><tr>
+                <th style="text-align:left;padding:4px 6px;border-bottom:1px solid var(--bor)">Type</th>
+                <th style="text-align:center;padding:4px 6px;border-bottom:1px solid var(--bor)">Pieces</th>
+                <th style="text-align:right;padding:4px 6px;border-bottom:1px solid var(--bor)">Trial deals</th>
+                <th style="text-align:right;padding:4px 6px;border-bottom:1px solid var(--bor)">Won deals</th>
+                <th style="text-align:right;padding:4px 6px;border-bottom:1px solid var(--bor)">Avg/piece</th>
+              </tr></thead>
+              <tbody>
+                ${attrTypes.map(([type, m]) => {
+                  const col = typeColors[type] || '#888';
+                  const avgCol = m.avgDeals >= 2 ? '#2a7a4b' : m.avgDeals >= 0.5 ? '#c25a00' : '#999';
+                  return `<tr>
+                    <td style="padding:5px 6px;display:flex;align-items:center;gap:6px">
+                      <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${col}"></span>${type}
+                    </td>
+                    <td style="text-align:center;padding:5px 6px;color:var(--tl)">${m.pieces}</td>
+                    <td style="text-align:right;padding:5px 6px">${m.trialDeals || '—'}</td>
+                    <td style="text-align:right;padding:5px 6px">${m.wonDeals || '—'}</td>
+                    <td style="text-align:right;padding:5px 6px;font-weight:700;color:${avgCol}">${m.avgDeals}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>` : `<div class="no-data">Add content to the log and import Pipedrive deals to see attribution data.</div>`}
+    </div>
+
     <!-- ── CORRELATION ── -->
     <div class="box">
       <div class="box-title">Content events vs website traffic — daily (last 90 days)</div>
@@ -3570,6 +4104,28 @@ function renderMarketing(el) {
 
   // Populate website inline section
   renderWebsite(document.getElementById('website-inline'));
+
+  // Content attribution bar chart
+  if (attrTypes.length && _pd_deals.length) {
+    makeChart('mk-attr-chart', {
+      type: 'bar',
+      data: {
+        labels: attrTypes.map(([t]) => t),
+        datasets: [
+          { label: 'Trial deals', data: attrTypes.map(([,m]) => m.trialDeals), backgroundColor: '#2e8bc0', borderRadius: 3 },
+          { label: 'Won deals',   data: attrTypes.map(([,m]) => m.wonDeals),   backgroundColor: '#2a7a4b', borderRadius: 3 },
+          { label: 'Open deals',  data: attrTypes.map(([,m]) => m.openDeals),  backgroundColor: '#c0c0c0', borderRadius: 3 },
+        ]
+      },
+      options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+        scales: {
+          x: { stacked: true, grid: gridStyle, ticks: axStyle, beginAtZero: true },
+          y: { stacked: true, grid: { display: false }, ticks: axStyle }
+        }
+      }
+    });
+  }
 
   // LinkedIn stacked bar + total line
   if (trackerRecent.length) {
@@ -3592,6 +4148,29 @@ function renderMarketing(el) {
           x: { stacked: true, grid: { display: false }, ticks: axStyle },
           y: { stacked: true, grid: gridStyle, ticks: axStyle }
         }
+      }
+    });
+
+    // Funnel trend chart
+    const funnelColors = ['#2e8bc0','#3949ab','#2a7a4b','#00796b','#c25a00','#7b1fa2','#c0392b'];
+    makeChart('mk-funnel-trend', {
+      type: 'line',
+      data: {
+        labels: funnelRecent12.map(w => fmtDate(w).slice(0,6)),
+        datasets: FUNNEL_STAGES_MK.map((s, i) => ({
+          label: s.label,
+          data: funnelWeeklyData[i],
+          borderColor: funnelColors[i],
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          pointRadius: 3,
+          tension: .3,
+          spanGaps: true
+        }))
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+        scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: axStyle, beginAtZero: true } }
       }
     });
 
@@ -4077,8 +4656,8 @@ function renderPipedrive(el) {
         '<span class="src-tag">Pipedrive · People CSV</span><br>Total row count of the imported People CSV. All contacts regardless of type, licence status, or date. This is the raw import size.<br>Last imported: <b>' + (_pd_people_imported_at ? fmtDate(_pd_people_imported_at) : 'unknown') + '</b>'],
     ])}
     <div class="sub-tabs">
-      ${['import','revenue','sales','users','churn','trials','optimax'].map(s =>
-        `<button class="sub-tab${sub===s?' active':''}" onclick="setPdSub('${s}')">${{import:'Import Data',revenue:'Revenue & ARR',sales:'Sales',users:'Users & Licences',churn:'Churn',trials:'Trial Pipeline',optimax:'OPTI-MAX'}[s]}</button>`
+      ${['import','revenue','sales','users','churn','trials','optimax','health'].map(s =>
+        `<button class="sub-tab${sub===s?' active':''}" onclick="setPdSub('${s}')">${{import:'Import Data',revenue:'Revenue',sales:'Sales',users:'Users & Licences',churn:'Churn',trials:'Trial Pipeline',optimax:'OPTI-MAX',health:'Health Score'}[s]}</button>`
       ).join('')}
     </div>
     <div id="pd-sub-content"></div>`;
@@ -4097,6 +4676,7 @@ function setPdSub(sub, rerender = true) {
   else if (sub === 'churn')   renderPdChurn(sc);
   else if (sub === 'trials')  renderPdTrials(sc);
   else if (sub === 'optimax') renderPdOptimax(sc);
+  else if (sub === 'health')  renderPdHealth(sc);
 }
 
 function renderPdImport(sc) {
@@ -4133,6 +4713,30 @@ function renderPdImport(sc) {
       : `<div class="callout info"><div class="callout-label">Getting started</div><div class="callout-text">In Pipedrive: Deals → ··· → Export all deals as CSV. Repeat for People. Then upload both files above.</div></div>`}`;
 }
 
+// Sanity-check imported rows; returns a list of human-readable warnings (#8)
+function pdValidateImport(rows, kind) {
+  const warns = [];
+  const now = new Date(); now.setHours(23,59,59,999);
+  if (kind === 'deals') {
+    const wonZero = rows.filter(r => (r['Deal - Status']||'').toLowerCase()==='won' && !(parseFloat(r['Deal - Value'])>0)).length;
+    const negVal  = rows.filter(r => parseFloat(r['Deal - Value']) < 0).length;
+    const future  = rows.filter(r => { const d=pdParseDate(r['Deal - Won time']); return pdValidDate(d) && d>now; }).length;
+    const noPipe  = rows.filter(r => !(r['Deal - Pipeline']||'').trim()).length;
+    if (wonZero) warns.push(`${wonZero} won deal(s) have no dollar value`);
+    if (negVal)  warns.push(`${negVal} deal(s) have a negative value`);
+    if (future)  warns.push(`${future} deal(s) have a "won" date in the future`);
+    if (noPipe)  warns.push(`${noPipe} deal(s) have no pipeline set`);
+  } else {
+    const futureG = rows.filter(r => { const d=pdParseDate(r['Person - Date Access Granted']); return pdValidDate(d) && d>now; }).length;
+    const badRange = rows.filter(r => { const g=pdParseDate(r['Person - Date Access Granted']), x=pdParseDate(r['Person - Date Access Removed']); return pdValidDate(g)&&pdValidDate(x)&&x<g; }).length;
+    const noType  = rows.filter(r => !(r['Person - Customer Type']||r['Customer Type']||'').trim()).length;
+    if (futureG)  warns.push(`${futureG} person(s) have an access-granted date in the future`);
+    if (badRange) warns.push(`${badRange} person(s) have access removed before it was granted`);
+    if (noType)   warns.push(`${noType} person(s) have no customer type`);
+  }
+  return warns;
+}
+
 async function handleDealsImport(input) {
   const file = input.files[0];
   if (!file) return;
@@ -4141,6 +4745,8 @@ async function handleDealsImport(input) {
     header: true, skipEmptyLines: true,
     complete: async (results) => {
       const rows = results.data;
+      const warns = pdValidateImport(rows, 'deals');
+      if (warns.length) toast('⚠ Data check: ' + warns.join(' · '), 7000);
       toast('Uploading ' + rows.length + ' deals…');
       await sb.from('liq_pipedrive_deals').delete().gte('imported_at', '1970-01-01T00:00:00Z');
       const batchSize = 100;
@@ -4165,6 +4771,8 @@ async function handlePeopleImport(input) {
     header: true, skipEmptyLines: true,
     complete: async (results) => {
       const rows = results.data;
+      const warns = pdValidateImport(rows, 'people');
+      if (warns.length) toast('⚠ Data check: ' + warns.join(' · '), 7000);
       toast('Uploading ' + rows.length + ' people…');
       await sb.from('liq_pipedrive_people').delete().gte('imported_at', '1970-01-01T00:00:00Z');
       const batchSize = 100;
@@ -4199,9 +4807,7 @@ function renderPdRevenue(sc) {
   // Sum of all-time won deal values = total contracted revenue
   const totalBooked  = wonDeals.reduce((s, d) => s + (parseFloat(d['Deal - Value']) || 0), 0);
 
-  // ── ACTIVE ARR (won deals whose person still has active access) ───────────────
-  // Proxy: deals won AND not yet "lost" status — use total booked as upper bound.
-  // True active ARR = active paid subscribers × avg deal value
+  // ── ACTIVE GROSS REVENUE (real sum of contract values for still-active customers) ─
   const activePaid   = _pd_people.filter(p => {
     if (p['Person - Customer Type'] !== 'Paid Subscription') return false;
     const rem = p['Person - Date Access Removed'];
@@ -4209,7 +4815,26 @@ function renderPdRevenue(sc) {
     const d = pdParseDate(rem); return pdValidDate(d) && d > today;
   });
   const avgDealVal   = wonDeals.length ? totalBooked / wonDeals.length : 0;
-  const estActiveARR = activePaid.length && avgDealVal ? activePaid.length * avgDealVal : null;
+
+  // Real gross: add up the actual won-deal value of every organisation that still
+  // has at least one active paying person. Linked by organisation name (normalised).
+  const normOrg = s => (s || '').trim().toLowerCase();
+  const activeOrgSet = new Set(activePaid.map(p => normOrg(p['Person - Organisation'])).filter(Boolean));
+  // Resolve a deal's organisation (fall back to its person's org if the deal org is blank)
+  const personOrgByName = {};
+  _pd_people.forEach(p => { const n = normOrg(p['Person - Name']); if (n) personOrgByName[n] = normOrg(p['Person - Organisation']); });
+  const dealOrg = d => normOrg(d['Deal - Organisation']) || personOrgByName[normOrg(d['Deal - Person'])] || '';
+  // Count each active org's contract value once (use its largest won deal to avoid
+  // double-counting multiple seats/people booked under separate line items).
+  const wonByOrg = {};
+  wonDeals.forEach(d => {
+    const o = dealOrg(d); if (!o || !activeOrgSet.has(o)) return;
+    const v = parseFloat(d['Deal - Value']) || 0;
+    wonByOrg[o] = Math.max(wonByOrg[o] || 0, v);
+  });
+  const realActiveGross = Object.values(wonByOrg).reduce((s, v) => s + v, 0);
+  const matchedActiveOrgs = Object.keys(wonByOrg).length;
+  const estActiveARR = realActiveGross > 0 ? realActiveGross : null;
   const estActiveMRR = estActiveARR ? estActiveARR / 12 : null;
 
   // ── NEW ARR BY MONTH ──────────────────────────────────────────────────────────
@@ -4278,18 +4903,18 @@ function renderPdRevenue(sc) {
 
     <div class="cards" style="margin-bottom:18px">
       <div class="card">
-        <div class="card-label" style="display:flex;align-items:center;gap:0">Booked ARR (all time)${infoBtn('Booked ARR','<span class="src-tag">Pipedrive · Won Deals</span><br>Sum of <b>Deal Value</b> across all Won deals of all time. Represents total contracted revenue ever booked — not adjusted for churn.<br><div class="calc-row">SUM(Deal Value) where Status = "Won"</div>')}</div>
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Total contracted revenue (all time)${infoBtn('Total contracted revenue','<span class="src-tag">Pipedrive · Won Deals</span><br>Sum of <b>Deal Value</b> across all won deals, ever. Total revenue ever signed — not adjusted for customers who later left.<br><div class="calc-row">SUM(Deal Value) where Status = "Won"</div>')}</div>
         <div class="card-value">${fmtCur(totalBooked)}</div>
         <div class="card-sub">vs $${(TARGET_ARR/1e6).toFixed(1)}M target · ${fmtPct(arrGapPct)} there</div>
       </div>
       <div class="card">
-        <div class="card-label" style="display:flex;align-items:center;gap:0">Est. active ARR${infoBtn('Est. active ARR','<span class="src-tag">Pipedrive · People + Deals</span><br>Active paid subscribers × average won deal value. Proxy for current recurring revenue — not a direct Pipedrive field.<br><div class="calc-row">Active paid subscribers × (Total booked ARR ÷ Won deals)</div>')}</div>
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Active customer revenue (gross)${infoBtn('Active customer revenue (gross)','<span class="src-tag">Pipedrive · People + Deals</span><br>Real sum of the actual contract value of every organisation that still has at least one active paying person. Linked by organisation name; counts each org\'s largest won deal once to avoid double-counting seats.<br><div class="calc-row">SUM(largest won Deal Value per still-active organisation)</div>This is gross signed revenue from current customers — not adjusted for partial-year or discounts.')}</div>
         ${estActiveARR != null
-          ? `<div class="card-value">${fmtCur(estActiveARR)}</div><div class="card-sub">${activePaid.length} subs × ${fmtCur(Math.round(avgDealVal))} avg</div>`
+          ? `<div class="card-value">${fmtCur(estActiveARR)}</div><div class="card-sub">${matchedActiveOrgs} active orgs matched to a deal</div>`
           : `<div class="card-nodata">import people CSV</div>`}
       </div>
       <div class="card">
-        <div class="card-label" style="display:flex;align-items:center;gap:0">Est. MRR${infoBtn('Est. MRR','<span class="src-tag">Pipedrive · People + Deals</span><br>Estimated active ARR ÷ 12. Assumes annual contracts.<br><div class="calc-row">Active ARR / 12</div>')}</div>
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Active revenue per month${infoBtn('Active revenue per month','<span class="src-tag">Pipedrive · People + Deals</span><br>Active customer revenue (gross) ÷ 12. Assumes yearly contracts.<br><div class="calc-row">Active customer revenue ÷ 12</div>')}</div>
         ${estActiveMRR != null
           ? `<div class="card-value">${fmtCur(Math.round(estActiveMRR))}</div><div class="card-sub">target ${fmtCur(MRR_TARGET)}/mo</div>`
           : `<div class="card-nodata">import people CSV</div>`}
@@ -4301,24 +4926,24 @@ function renderPdRevenue(sc) {
           : `<div class="card-nodata">no data</div>`}
       </div>
       <div class="card">
-        <div class="card-label" style="display:flex;align-items:center;gap:0">ARR gap to target${infoBtn('ARR gap to target','<span class="src-tag">Calculated</span><br>Difference between $2.4M ARR target and total booked ARR. Indicates how much more revenue needs to be contracted to hit the annual target.<br><div class="calc-row">$2.4M − Booked ARR</div>')}</div>
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Gap to $2.4M target${infoBtn('Gap to $2.4M target','<span class="src-tag">Calculated</span><br>Difference between the $2.4M yearly revenue target and total contracted revenue. How much more needs to be signed to hit the annual goal.<br><div class="calc-row">$2.4M − total contracted revenue</div>')}</div>
         <div class="card-value" style="color:${arrGap > 0 ? 'var(--re)' : 'var(--gr)'}">${arrGap > 0 ? '−' : '+'}${fmtCur(Math.abs(arrGap))}</div>
         <div class="card-sub">${arrGap > 0 ? 'still needed' : 'target exceeded'}</div>
       </div>
     </div>
 
     <div class="box">
-      <div class="box-title">Cumulative booked ARR — all time</div>
+      <div class="box-title">Cumulative contracted revenue — all time</div>
       ${allMonthsSorted.length ? `<div class="chart-wrap" style="height:260px"><canvas id="pd-arr-cumul"></canvas></div>` : '<div class="no-data">No won deal data.</div>'}
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
       <div class="box" style="margin-bottom:0">
-        <div class="box-title">New ARR by month — ${range.label}</div>
+        <div class="box-title">New revenue by month — ${range.label}</div>
         <div class="chart-wrap" style="height:240px"><canvas id="pd-arr-month"></canvas></div>
       </div>
       <div class="box" style="margin-bottom:0">
-        <div class="box-title">Est. MRR by month — ${range.label}</div>
+        <div class="box-title">Revenue per month — ${range.label}</div>
         <div class="chart-wrap" style="height:240px"><canvas id="pd-mrr-month"></canvas></div>
       </div>
     </div>
@@ -4329,18 +4954,18 @@ function renderPdRevenue(sc) {
         <div class="chart-wrap" style="height:220px"><canvas id="pd-arr-bands"></canvas></div>
       </div>
       <div class="box" style="margin-bottom:0">
-        <div class="box-title">ARR by band — revenue concentration</div>
+        <div class="box-title">Revenue by deal size</div>
         <div class="chart-wrap" style="height:220px"><canvas id="pd-arr-band-rev"></canvas></div>
       </div>
     </div>
 
     ${topOrgs.length ? `<div class="box">
-      <div class="box-title">Top orgs by contracted ARR — ${range.label}</div>
+      <div class="box-title">Top organisations by contracted revenue — ${range.label}</div>
       <div class="chart-wrap" style="height:${Math.max(240, topOrgs.length * 30)}px"><canvas id="pd-arr-orgs"></canvas></div>
     </div>` : ''}
 
     <div class="box">
-      <div class="box-title">ARR progress to $2.4M target</div>
+      <div class="box-title">Revenue progress to $2.4M target</div>
       <div style="margin:16px 0 8px">
         <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:12px">
           <span style="font-weight:600;color:var(--navy)">${fmtCur(totalBooked)}</span>
@@ -4358,7 +4983,116 @@ function renderPdRevenue(sc) {
         At current avg deal value of <strong>${fmtCur(Math.round(avgDealVal))}</strong>, you need
         <strong>${avgDealVal > 0 ? Math.ceil(arrGap / avgDealVal) : '—'}</strong> more won deals to hit $2.4M.
       </div>
+    </div>
+
+    <div class="box">
+      <div class="box-title">Growth health ${infoBtn('Growth health',
+        `<p>Compares the last 12 months to the 12 months before that, for both new signed revenue and number of deals won.</p>
+        <p><b>Note:</b> a full business-health score would also include a profit/efficiency measure (such as the "Rule of 40"). That needs cost data, which isn\'t in the dashboard — so this shows the growth side only.</p>
+        <span class="src-tag">Pipedrive · Won Deals</span>`)}</div>
+      ${(() => {
+        const mk = (back) => { const d = new Date(today.getFullYear(), today.getMonth() - back, 1); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'); };
+        const last12 = Array.from({length:12}, (_,i) => mk(i));
+        const prev12 = Array.from({length:12}, (_,i) => mk(i+12));
+        const sum = (months, map) => months.reduce((s,m) => s + (map[m]||0), 0);
+        const revNow = sum(last12, newARRByMonth), revPrev = sum(prev12, newARRByMonth);
+        const dealNow = sum(last12, newDealsCountByMonth), dealPrev = sum(prev12, newDealsCountByMonth);
+        const g = (n,p) => p > 0 ? Math.round((n-p)/p*100) : null;
+        const revG = g(revNow, revPrev), dealG = g(dealNow, dealPrev);
+        const tile = (label, now, prev, gr, money) => {
+          const col = gr == null ? 'var(--tl)' : gr >= 0 ? '#2a7a4b' : '#e05252';
+          return `<div style="background:var(--bg2);border-radius:8px;padding:12px 14px">
+            <div style="font-size:12px;color:var(--tl)">${label}</div>
+            <div style="font-size:24px;font-weight:700;color:${col};margin:2px 0">${gr==null?'—':(gr>=0?'+':'')+gr+'%'}</div>
+            <div style="font-size:11px;color:var(--tl)">${money?fmtCur(now):fmtNum(now)} vs ${money?fmtCur(prev):fmtNum(prev)} prior 12 mo</div>
+          </div>`;
+        };
+        return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          ${tile('New revenue growth (year on year)', revNow, revPrev, revG, true)}
+          ${tile('Deals-won growth (year on year)', dealNow, dealPrev, dealG, false)}
+        </div>`;
+      })()}
     </div>`;
+
+  // ── REVENUE FORECAST (open pipeline × win rate) ───────────────────────────
+  // Append forecast section after progress bar
+  (() => {
+    const openSalesPipe = _pd_deals.filter(d =>
+      d['Deal - Status'] === 'Open' &&
+      (!_pdSalesPipeline || d['Deal - Pipeline'] === _pdSalesPipeline)
+    );
+    const allSales = _pd_deals.filter(d =>
+      !_pdSalesPipeline || d['Deal - Pipeline'] === _pdSalesPipeline
+    );
+    const allWon2  = allSales.filter(d => d['Deal - Status'] === 'Won');
+    const allLost2 = allSales.filter(d => d['Deal - Status'] === 'Lost');
+    const winRate2 = (allWon2.length + allLost2.length) ? allWon2.length / (allWon2.length + allLost2.length) : 0.5;
+    const pipeVal  = openSalesPipe.reduce((s,d) => s + (parseFloat(d['Deal - Value'])||0), 0);
+    const forecast = pipeVal * winRate2; // expected value
+
+    // Monthly ARR run-rate for last 6 months
+    const now = new Date();
+    const last6 = Array.from({length:6}, (_,i) => {
+      const d = new Date(now.getFullYear(), now.getMonth()-5+i, 1);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    });
+    const avgMonthlyARR = last6.reduce((s,m) => s+(newARRByMonth[m]||0), 0) / 6;
+    const projMonths = Array.from({length:6}, (_,i) => {
+      const d = new Date(now.getFullYear(), now.getMonth()+1+i, 1);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    });
+
+    if (!openSalesPipe.length) return;
+    const forecastEl = document.createElement('div');
+    forecastEl.className = 'box';
+    forecastEl.innerHTML = `
+      <div class="box-title">Revenue forecast ${infoBtn('Revenue forecast',
+        `<p><b>Pipeline forecast</b>: sum of open deal values × current win rate (${fmtPct(winRate2*100)}).</p>
+        <p><b>Run-rate projection</b>: average monthly new revenue from the last 6 months, projected forward 6 months.</p>
+        <div class="calc-row">Forecast = Open pipeline × Win rate</div>
+        <span class="src-tag">Pipedrive Deals</span>`)}</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px">
+        <div class="card" style="margin:0">
+          <div class="card-label">Open pipeline</div>
+          <div class="card-value">${fmtCur(pipeVal)}</div>
+          <div class="card-sub">${openSalesPipe.length} deals</div>
+        </div>
+        <div class="card" style="margin:0">
+          <div class="card-label">Expected from pipeline</div>
+          <div class="card-value" style="color:var(--gr)">${fmtCur(forecast)}</div>
+          <div class="card-sub">at ${fmtPct(winRate2*100)} win rate</div>
+        </div>
+        <div class="card" style="margin:0">
+          <div class="card-label">6-mo run-rate projection</div>
+          <div class="card-value">${avgMonthlyARR>0?fmtCur(avgMonthlyARR*6):'—'}</div>
+          <div class="card-sub">${avgMonthlyARR>0?fmtCur(avgMonthlyARR)+'/mo avg':'insufficient history'}</div>
+        </div>
+      </div>
+      <div class="chart-wrap" style="height:220px"><canvas id="pd-arr-forecast"></canvas></div>`;
+    sc.appendChild(forecastEl);
+
+    // Build chart: historical last 6 months + projected next 6
+    const histLabels = last6.map(m => monthLabel(m));
+    const projLabels = projMonths.map(m => monthLabel(m));
+    const histData   = last6.map(m => newARRByMonth[m] || 0);
+    const projData   = projMonths.map(() => avgMonthlyARR);
+
+    makeChart('pd-arr-forecast', {
+      type: 'bar',
+      data: {
+        labels: [...histLabels, ...projLabels],
+        datasets: [
+          { label: 'Actual new revenue', data: [...histData, ...projMonths.map(()=>null)], backgroundColor: '#2a7a4b', borderRadius: 3 },
+          { label: 'Projected (run-rate)', data: [...last6.map(()=>null), ...projData], backgroundColor: 'rgba(42,122,75,0.25)', borderRadius: 3, borderWidth: 2, borderColor: '#2a7a4b', borderDash: [4,4] },
+          { label: 'Pipeline expected', data: [...last6.map(()=>null), projMonths.map(()=>null), forecast].flat(), type:'line', borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false },
+        ]
+      },
+      options: { responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{position:'bottom', labels:{font:{family:'DM Sans',size:11},boxWidth:12}} },
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle, ticks:{...axStyle,callback:v=>'$'+(v/1000).toFixed(0)+'k'}, beginAtZero:true} }
+      }
+    });
+  })();
 
   if (!wonDeals.length) return;
 
@@ -4370,7 +5104,7 @@ function renderPdRevenue(sc) {
       data: {
         labels: allMonthsSorted.map(m => monthLabel(m)),
         datasets: [
-          { label: 'Cumulative ARR ($)', data: allMonthsSorted.map(m => cumulARR[m]), borderColor: '#2a7a4b', borderWidth: 2.5, backgroundColor: 'rgba(42,122,75,.08)', fill: true, tension: .3, pointRadius: 2 },
+          { label: 'Cumulative revenue ($)', data: allMonthsSorted.map(m => cumulARR[m]), borderColor: '#2a7a4b', borderWidth: 2.5, backgroundColor: 'rgba(42,122,75,.08)', fill: true, tension: .3, pointRadius: 2 },
           { label: 'Target $2.4M', data: allMonthsSorted.map(() => TARGET_ARR), type: 'line', borderColor: '#c25a00', borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false },
         ]
       },
@@ -4381,14 +5115,14 @@ function renderPdRevenue(sc) {
     });
   }
 
-  // New ARR by month
+  // New revenue by month
   makeChart('pd-arr-month', {
     type: 'bar',
     data: {
       labels: rangeMonths.map(m => monthLabel(m)),
       datasets: [
-        { label: 'New ARR ($)', data: rangeMonths.map(m => newARRByMonth[m] || 0), backgroundColor: '#2a7a4b', borderRadius: 3, yAxisID: 'y' },
-        { label: 'Target ARR/mo', data: rangeMonths.map(() => TARGET_ARR / 12), type: 'line', borderColor: '#c25a00', borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false, yAxisID: 'y' },
+        { label: 'New revenue ($)', data: rangeMonths.map(m => newARRByMonth[m] || 0), backgroundColor: '#2a7a4b', borderRadius: 3, yAxisID: 'y' },
+        { label: 'Target revenue/mo', data: rangeMonths.map(() => TARGET_ARR / 12), type: 'line', borderColor: '#c25a00', borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false, yAxisID: 'y' },
       ]
     },
     options: { responsive: true, maintainAspectRatio: false,
@@ -4397,14 +5131,14 @@ function renderPdRevenue(sc) {
     }
   });
 
-  // Est. MRR by month (new ARR / 12)
+  // Revenue per month (new ARR / 12)
   makeChart('pd-mrr-month', {
     type: 'bar',
     data: {
       labels: rangeMonths.map(m => monthLabel(m)),
       datasets: [
-        { label: 'Est. new MRR', data: rangeMonths.map(m => newARRByMonth[m] ? Math.round(newARRByMonth[m] / 12) : 0), backgroundColor: '#1a3c5e', borderRadius: 3 },
-        { label: 'MRR target ($200k)', data: rangeMonths.map(() => MRR_TARGET), type: 'line', borderColor: '#c25a00', borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false },
+        { label: 'New revenue per month (est.)', data: rangeMonths.map(m => newARRByMonth[m] ? Math.round(newARRByMonth[m] / 12) : 0), backgroundColor: '#1a3c5e', borderRadius: 3 },
+        { label: 'Monthly revenue target ($200k)', data: rangeMonths.map(() => MRR_TARGET), type: 'line', borderColor: '#c25a00', borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false },
       ]
     },
     options: { responsive: true, maintainAspectRatio: false,
@@ -4441,7 +5175,7 @@ function renderPdRevenue(sc) {
   if (topOrgs.length) {
     makeChart('pd-arr-orgs', {
       type: 'bar',
-      data: { labels: topOrgs.map(([k]) => k.length > 40 ? k.slice(0,40)+'…' : k), datasets: [{ label: 'ARR ($)', data: topOrgs.map(([,v]) => v), backgroundColor: '#2a7a4b', borderRadius: 3 }] },
+      data: { labels: topOrgs.map(([k]) => k.length > 40 ? k.slice(0,40)+'…' : k), datasets: [{ label: 'Revenue ($)', data: topOrgs.map(([,v]) => v), backgroundColor: '#2a7a4b', borderRadius: 3 }] },
       options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: { x: { grid: gridStyle, ticks: { ...axStyle, callback: v => '$'+(v/1000).toFixed(0)+'k' }, beginAtZero: true }, y: { grid: { display: false }, ticks: { ...axStyle, font: { family: 'DM Sans', size: 11 } } } }
@@ -4460,6 +5194,17 @@ function renderPdSales(sc) {
   const wonDeals   = salesDeals.filter(d => d['Deal - Status'] === 'Won'  && pdInRange(d['Deal - Won time'],  range));
   const lostDeals  = salesDeals.filter(d => d['Deal - Status'] === 'Lost' && pdInRange(d['Deal - Lost time'], range));
   const months12   = rangeMonths;
+
+  // ── WIN / LOSS ANALYSIS (#15) ──────────────────────────────────────────────
+  const wlReasons = {};
+  lostDeals.forEach(d => { const r = (d['Deal - Lost reason'] || '').trim() || '(no reason given)'; wlReasons[r] = (wlReasons[r] || 0) + 1; });
+  const wlReasonEntries = Object.entries(wlReasons).sort((a, b) => b[1] - a[1]);
+  const wlClosed   = wonDeals.length + lostDeals.length;
+  const wlOverall  = wlClosed ? pct(wonDeals.length, wlClosed) : null;
+  const wlBySrc = {};
+  wonDeals.forEach(d => { const s = (d['Deal - Source channel'] || 'Unknown').trim() || 'Unknown'; (wlBySrc[s] = wlBySrc[s] || {won:0,lost:0}).won++; });
+  lostDeals.forEach(d => { const s = (d['Deal - Source channel'] || 'Unknown').trim() || 'Unknown'; (wlBySrc[s] = wlBySrc[s] || {won:0,lost:0}).lost++; });
+  const wlSrcRows = Object.entries(wlBySrc).map(([s, v]) => ({ s, ...v, rate: pct(v.won, v.won + v.lost) })).filter(r => r.won + r.lost >= 2).sort((a, b) => b.rate - a.rate);
 
   // Won by month (count + value)
   const wonByMonth = {};
@@ -4731,7 +5476,84 @@ function renderPdSales(sc) {
         <div><div style="font-size:12px;font-weight:500;color:var(--navy);margin-bottom:8px">% won within 30 days — by month</div>
           <div class="chart-wrap" style="height:200px"><canvas id="pd-vel-month"></canvas></div></div>
       </div>
+    </div>
+
+    <!-- Won deals detail table -->
+    ${wonDeals.length ? `<div class="box" style="margin-top:14px">
+      <div class="box-title">All won deals — ${range.label} · ${pipelineLabel}</div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="border-bottom:2px solid var(--bor)">
+            <th style="text-align:left;padding:5px 8px">Deal</th>
+            <th style="text-align:left;padding:5px 8px">Org / Person</th>
+            <th style="text-align:left;padding:5px 8px">Owner</th>
+            <th style="text-align:left;padding:5px 8px">Source</th>
+            <th style="text-align:right;padding:5px 8px">Value</th>
+            <th style="text-align:right;padding:5px 8px">Won date</th>
+            <th style="text-align:right;padding:5px 8px">Cycle</th>
+          </tr></thead>
+          <tbody>
+            ${wonDeals.slice().sort((a,b)=>{
+              const da=pdParseDate(a['Deal - Won time']), db=pdParseDate(b['Deal - Won time']);
+              return (pdValidDate(db)?db:new Date(0)) - (pdValidDate(da)?da:new Date(0));
+            }).map(d => {
+              const cycle = dealCycleDays(d);
+              const won = pdParseDate(d['Deal - Won time']);
+              return `<tr style="border-bottom:1px solid var(--bg2)">
+                <td style="padding:5px 8px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d['Deal - Title']||d['Title']||'—'}</td>
+                <td style="padding:5px 8px;color:var(--tl);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d['Deal - Organisation']||d['Organisation']||d['Deal - Person']||'—'}</td>
+                <td style="padding:5px 8px;color:var(--tl)">${d['Deal - Owner']||'—'}</td>
+                <td style="padding:5px 8px;color:var(--tl)">${d['Deal - Source channel']||d['Source channel']||'—'}</td>
+                <td style="padding:5px 8px;text-align:right;font-weight:600">${d['Deal - Value']?fmtCur(parseFloat(d['Deal - Value'])):'—'}</td>
+                <td style="padding:5px 8px;text-align:right">${pdValidDate(won)?fmtDate(won).slice(0,6):'—'}</td>
+                <td style="padding:5px 8px;text-align:right;color:${cycle!=null?(cycle<=30?'#2a7a4b':cycle<=60?'#c25a00':'#e05252'):'#999'}">${cycle!=null?cycle+'d':'—'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>` : ''}
+
+    <div class="box" style="margin-top:14px">
+      <div class="box-title">Win / loss analysis — ${range.label} · ${pipelineLabel}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">
+        <div>
+          <div style="font-size:12px;color:var(--tl);margin-bottom:8px">Why deals were lost · ${lostDeals.length} lost · overall win rate <b>${wlOverall!=null?fmtPct(wlOverall):'—'}</b></div>
+          ${wlReasonEntries.length ? `<div class="chart-wrap" style="height:${Math.max(180, wlReasonEntries.length*34)}px"><canvas id="pd-winloss-reasons"></canvas></div>` : '<div class="no-data">No lost deals in this period.</div>'}
+        </div>
+        <div>
+          <div style="font-size:12px;color:var(--tl);margin-bottom:8px">Win rate by lead source <span style="color:var(--tl)">(2+ closed deals)</span></div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr>
+              <th style="text-align:left;padding:5px 6px;border-bottom:1px solid var(--bor)">Source</th>
+              <th style="text-align:center;padding:5px 6px;border-bottom:1px solid var(--bor)">Won</th>
+              <th style="text-align:center;padding:5px 6px;border-bottom:1px solid var(--bor)">Lost</th>
+              <th style="text-align:right;padding:5px 6px;border-bottom:1px solid var(--bor)">Win rate</th>
+            </tr></thead>
+            <tbody>${wlSrcRows.length ? wlSrcRows.map(r => { const cls = r.rate>=60?'good':r.rate>=35?'mid':'bad'; return `<tr style="border-bottom:1px solid var(--bg2)">
+              <td style="padding:5px 6px">${r.s}</td>
+              <td style="text-align:center;padding:5px 6px">${r.won}</td>
+              <td style="text-align:center;padding:5px 6px">${r.lost}</td>
+              <td style="text-align:right;padding:5px 6px"><span class="conv-pct ${cls}">${fmtPct(r.rate)}</span></td>
+            </tr>`; }).join('') : '<tr><td colspan="4" style="padding:8px;color:var(--tl)">Not enough closed deals to compare sources.</td></tr>'}</tbody>
+          </table>
+        </div>
+      </div>
     </div>`;
+
+  if (wlReasonEntries.length) {
+    makeChart('pd-winloss-reasons', {
+      type: 'bar',
+      data: {
+        labels: wlReasonEntries.map(([r]) => r.length > 32 ? r.slice(0,32)+'…' : r),
+        datasets: [{ label: 'Lost deals', data: wlReasonEntries.map(([,n]) => n), backgroundColor: '#c0392b', borderRadius: 3 }]
+      },
+      options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { grid: gridStyle, ticks: { ...axStyle, stepSize: 1 }, beginAtZero: true }, y: { grid: { display: false }, ticks: { ...axStyle, font: { family: 'DM Sans', size: 10 } } } }
+      }
+    });
+  }
 
   if (wonDeals.length) {
     makeChart('pd-won-month', {
@@ -5033,7 +5855,46 @@ function renderPdChurn(sc) {
         <div class="box-title">Revenue churn by organisation (all time)</div>
         ${topChurnOrgs.length ? `<div class="chart-wrap" style="height:${Math.max(200,topChurnOrgs.length*32)}px"><canvas id="pd-churn-orgs"></canvas></div>` : '<div class="no-data">No org data.</div>'}
       </div>
-    </div>`;
+    </div>
+
+    <!-- Recently churned feed -->
+    ${revChurned.length ? `
+    <div class="box">
+      <div class="box-title">Recently churned paid subscribers ${infoBtn('Churned subscribers',
+        `<p>People whose <b>Customer Type = Access Revoked</b> and whose <b>Previous Customer Type</b> includes "Paid Subscription". Sorted by Date Access Removed (most recent first).</p>
+        <span class="src-tag">Pipedrive People</span>`)}</div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="border-bottom:2px solid var(--bor)">
+            <th style="text-align:left;padding:5px 8px">Name</th>
+            <th style="text-align:left;padding:5px 8px">Organisation</th>
+            <th style="text-align:left;padding:5px 8px">Previous type</th>
+            <th style="text-align:right;padding:5px 8px">Access granted</th>
+            <th style="text-align:right;padding:5px 8px">Access removed</th>
+            <th style="text-align:right;padding:5px 8px">Tenure</th>
+          </tr></thead>
+          <tbody>
+            ${revChurned.slice().sort((a,b) => {
+              const da=pdParseDate(a['Person - Date Access Removed']), db=pdParseDate(b['Person - Date Access Removed']);
+              return (pdValidDate(db)?db:new Date(0)) - (pdValidDate(da)?da:new Date(0));
+            }).slice(0, 25).map(p => {
+              const granted = pdParseDate(p['Person - Date Access Granted']);
+              const removed = pdParseDate(p['Person - Date Access Removed']);
+              const tenDays = (pdValidDate(granted) && pdValidDate(removed)) ? Math.round((removed-granted)/86400000) : null;
+              return `<tr style="border-bottom:1px solid var(--bg2)">
+                <td style="padding:5px 8px">${p['Person - Name']||p['Name']||'—'}</td>
+                <td style="padding:5px 8px;color:var(--tl)">${p['Person - Organisation']||'—'}</td>
+                <td style="padding:5px 8px;color:var(--tl);font-size:11px">${p['Person - Previous Customer Type']||'—'}</td>
+                <td style="padding:5px 8px;text-align:right;color:var(--tl)">${pdValidDate(granted)?fmtDate(granted).slice(0,6):'—'}</td>
+                <td style="padding:5px 8px;text-align:right;color:#e05252">${pdValidDate(removed)?fmtDate(removed).slice(0,6):'—'}</td>
+                <td style="padding:5px 8px;text-align:right;color:${tenDays!=null?(tenDays>=365?'#2a7a4b':tenDays>=90?'#c25a00':'#e05252'):'#999'}">${tenDays!=null?tenDays+'d':'—'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+        ${revChurned.length > 25 ? `<div style="font-size:11px;color:var(--tl);padding:8px">Showing 25 of ${revChurned.length} churned subscribers.</div>` : ''}
+      </div>
+    </div>` : ''}`;
 
   if (!_pd_people.length) return;
 
@@ -5122,6 +5983,49 @@ function renderPdUsers(sc) {
   const paidPeople = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
   const activePaid = paidPeople.filter(isActive);
 
+  // ── RENEWALS COMING UP (#3) ────────────────────────────────────────────────
+  // Assumes yearly contracts: next renewal = next anniversary of access-granted date.
+  function nextAnniversary(granted) {
+    const r = new Date(granted);
+    while (r < today) r.setFullYear(r.getFullYear() + 1);
+    return r;
+  }
+  const RENEW_WINDOW_DAYS = 90;
+  const renewCutoff = new Date(today); renewCutoff.setDate(renewCutoff.getDate() + RENEW_WINDOW_DAYS);
+  const renewOrgMap = {};
+  activePaid.forEach(p => {
+    const g = pdParseDate(p['Person - Date Access Granted']);
+    if (!pdValidDate(g)) return;
+    const due = nextAnniversary(g);
+    if (due > renewCutoff) return;
+    const org = (p['Person - Organisation'] || 'Unknown').trim() || 'Unknown';
+    if (!renewOrgMap[org]) renewOrgMap[org] = { org, users: 0, due };
+    renewOrgMap[org].users++;
+    if (due < renewOrgMap[org].due) renewOrgMap[org].due = due;
+  });
+  const renewals = Object.values(renewOrgMap).sort((a, b) => a.due - b.due);
+  const daysUntil = d => Math.round((d - today) / 86400000);
+
+  // ── BY COUNCIL / REGION (#13) ──────────────────────────────────────────────
+  // Uses a Pipedrive council/region field if present, else detects councils from
+  // the organisation name (handles council customers automatically).
+  const COUNCIL_RE = /(council|shire|city of|municipal|regional council|county)/i;
+  function councilOf(p) {
+    const fld = p['Person - Council'] || p['Person - LGA'] || p['Person - Region'] || p['Council'] || p['LGA'] || '';
+    if (fld && fld.trim()) return fld.trim();
+    const org = (p['Person - Organisation'] || '').trim();
+    return COUNCIL_RE.test(org) ? org : null;
+  }
+  const councilMap = {};
+  activePaid.forEach(p => {
+    const c = councilOf(p); if (!c) return;
+    if (!councilMap[c]) councilMap[c] = 0;
+    councilMap[c]++;
+  });
+  const councilRows = Object.entries(councilMap).sort((a,b) => b[1]-a[1]);
+  const councilCustomers = councilRows.reduce((s,[,n]) => s+n, 0);
+  const unmappedActive = activePaid.length - councilCustomers;
+
   // Chart 11: Active paid subscribers at each month (point-in-time count, not cumulative)
   // Find all months from earliest access granted to today
   const allPaidMonths = (() => {
@@ -5197,6 +6101,39 @@ function renderPdUsers(sc) {
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Centrally funded${infoBtn('Centrally funded','<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Centrally Funded Licence"</b>. No date filter — includes all records regardless of access status.')}</div><div class="card-value">${_pd_people.filter(p=>p['Person - Customer Type']==='Centrally Funded Licence').length}</div></div>
     </div>
 
+    <div class="box">
+      <div class="box-title">Renewals due in the next ${RENEW_WINDOW_DAYS} days ${infoBtn('Renewals coming up',
+        `<p>Active paying organisations whose <b>next contract anniversary</b> falls within the next ${RENEW_WINDOW_DAYS} days. Assumes yearly contracts dated from <b>Date Access Granted</b>.</p>
+        <div class="calc-row">next anniversary of Access Granted ≤ today + ${RENEW_WINDOW_DAYS} days · still active</div>
+        <span class="src-tag">Pipedrive People</span>`)}</div>
+      ${renewals.length ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="border-bottom:2px solid var(--bor)">
+          <th style="text-align:left;padding:5px 8px">Organisation</th>
+          <th style="text-align:center;padding:5px 8px">Users</th>
+          <th style="text-align:right;padding:5px 8px">Renewal due</th>
+          <th style="text-align:right;padding:5px 8px">In</th>
+        </tr></thead>
+        <tbody>${renewals.map(r => { const du = daysUntil(r.due); const col = du <= 30 ? '#e05252' : du <= 60 ? '#c25a00' : '#2a7a4b'; return `<tr style="border-bottom:1px solid var(--bg2)">
+          <td style="padding:5px 8px;font-weight:500">${r.org}</td>
+          <td style="text-align:center;padding:5px 8px">${r.users}</td>
+          <td style="text-align:right;padding:5px 8px">${fmtDate(r.due).slice(0,11)}</td>
+          <td style="text-align:right;padding:5px 8px;color:${col};font-weight:600">${du}d</td>
+        </tr>`; }).join('')}</tbody>
+      </table></div>
+      <div style="font-size:11px;color:var(--tl);padding:8px">${renewals.length} organisation(s) · ${renewals.reduce((s,r)=>s+r.users,0)} licence(s) up for renewal</div>`
+      : '<div class="no-data">No renewals due in the next ' + RENEW_WINDOW_DAYS + ' days.</div>'}
+    </div>
+
+    <div class="box">
+      <div class="box-title">Active customers by council / region ${infoBtn('By council / region',
+        `<p>Active paying customers grouped by council. Uses a Pipedrive <b>Council / LGA / Region</b> field if you have one; otherwise it recognises organisations whose name is a council (contains "council", "shire", "city of", etc.).</p>
+        <p>${unmappedActive} active customer(s) aren\'t mapped to a council — add a council field in Pipedrive to capture non-council organisations too.</p>
+        <span class="src-tag">Pipedrive People</span>`)}</div>
+      ${councilRows.length ? `<div class="chart-wrap" style="height:${Math.max(220, councilRows.length*26)}px"><canvas id="pd-council"></canvas></div>
+        <div style="font-size:11px;color:var(--tl);padding:8px 2px 0">${councilRows.length} councils · ${councilCustomers} customers mapped · ${unmappedActive} not mapped to a council</div>`
+      : '<div class="no-data">No councils detected. Add a Council field in Pipedrive, or ensure council organisation names contain "Council".</div>'}
+    </div>
+
     <div class="box"><div class="box-title">Active paid subscribers over time (all time)</div>
       ${allPaidMonths.length ? `<div class="chart-wrap" style="height:240px"><canvas id="pd-sub-growth"></canvas></div>` : '<div class="no-data">No access granted dates found.</div>'}</div>
 
@@ -5214,6 +6151,14 @@ function renderPdUsers(sc) {
       ${revokedMonths.length ? `<div class="chart-wrap" style="height:200px"><canvas id="pd-revoked"></canvas></div>` : '<div class="no-data">No access end date data for this period.</div>'}</div>`;
 
   if (_pd_people.length) {
+    if (councilRows.length) makeChart('pd-council', {
+      type: 'bar',
+      data: { labels: councilRows.map(([c]) => c.length > 38 ? c.slice(0,38)+'…' : c), datasets: [{ label: 'Active customers', data: councilRows.map(([,n]) => n), backgroundColor: '#2e8bc0', borderRadius: 3 }] },
+      options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { grid: gridStyle, ticks: { ...axStyle, stepSize: 1 }, beginAtZero: true }, y: { grid: { display: false }, ticks: { ...axStyle, font: { family: 'DM Sans', size: 10 } } } }
+      }
+    });
     if (allPaidMonths.length) makeChart('pd-sub-growth', {
       type:'line',
       data:{ labels:allPaidMonths.map(m=>monthLabel(m)), datasets:[
@@ -5336,6 +6281,25 @@ function renderPdTrials(sc) {
   activeTrial.forEach(p => { const o = p['Person - Organisation']||'Unknown'; trialOrgs[o]=(trialOrgs[o]||0)+1; });
   const topTrialOrgs = Object.entries(trialOrgs).sort((a,b)=>b[1]-a[1]).slice(0,10);
 
+  // ── TRIAL-TO-PAID CONVERSION TIME-SERIES ──
+  // For converted people: estimate days to convert = Date Access Granted → Date Access Removed (revocation in trial) or use a fixed 14d window
+  // Better: flag via 'Person - Date Access Removed' → if null they are still active, so look at their granted date vs today
+  // Use: granted date as the month they "trialled", then classify if Current Type = Paid Subscription
+  const convByMonth = {};       // month → { count, totalDays }
+  convertedFromTrial.forEach(p => {
+    const granted = pdParseDate(p['Person - Date Access Granted']);
+    if (!pdValidDate(granted)) return;
+    if (!pdInRange(p['Person - Date Access Granted'], range)) return;
+    const k = monthKey(granted.toISOString());
+    if (!convByMonth[k]) convByMonth[k] = { count:0, totalDays:0 };
+    convByMonth[k].count++;
+    // Days estimate: we don't have a "converted date" field; use access removed date if present
+    const removed = pdParseDate(p['Person - Date Access Removed']);
+    if (pdValidDate(removed) && removed > granted) {
+      convByMonth[k].totalDays += Math.round((removed - granted) / 86400000);
+    }
+  });
+
   sc.innerHTML = `
     ${!allTrialDeals.length && !_pd_people.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive deals and people CSVs first.</div></div>' : ''}
 
@@ -5388,7 +6352,14 @@ function renderPdTrials(sc) {
       <div class="chart-wrap" style="height:${Math.max(200,topTrialOrgs.length*32)}px"><canvas id="pd-trial-orgs"></canvas></div></div>` : ''}
 
     <div class="box"><div class="box-title">Trial lost reasons — ${range.label}</div>
-      ${Object.keys(lostReasons).length ? `<div class="chart-wrap" style="height:${Math.max(200,Object.keys(lostReasons).length*40)}px"><canvas id="pd-trial-lost"></canvas></div>` : '<div class="no-data">No lost reason data for this period.</div>'}</div>`;
+      ${Object.keys(lostReasons).length ? `<div class="chart-wrap" style="height:${Math.max(200,Object.keys(lostReasons).length*40)}px"><canvas id="pd-trial-lost"></canvas></div>` : '<div class="no-data">No lost reason data for this period.</div>'}</div>
+
+    <div class="box"><div class="box-title">Trial → Paid conversions by month ${infoBtn('Trial conversion by month',
+      `<p>Monthly count of people whose current type is <b>Paid Subscription</b> and whose previous type includes a trial licence, grouped by their <b>Date Access Granted</b> (i.e. when the trial started).</p>
+      <p>Avg days shown where a Date Access Removed was recorded during the trial period.</p>
+      <span class="src-tag">Pipedrive People</span>`)}</div>
+      ${Object.keys(convByMonth).length ? `<div class="chart-wrap" style="height:220px"><canvas id="pd-trial-conv-ts"></canvas></div>` : '<div class="no-data">No conversion data for this period.</div>'}
+    </div>`;
 
   // Charts
   makeChart('pd-trial-new', {
@@ -5412,6 +6383,29 @@ function renderPdTrials(sc) {
       scales:{ x:{grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true}, y:{grid:{display:false},ticks:{...axStyle,font:{family:'DM Sans',size:10}}} }
     }
   });
+  if (Object.keys(convByMonth).length) {
+    makeChart('pd-trial-conv-ts', {
+      type: 'bar',
+      data: {
+        labels: rangeMonths.map(m => monthLabel(m)),
+        datasets: [
+          { label: 'Conversions', data: rangeMonths.map(m => convByMonth[m]?.count || 0), backgroundColor: '#2a7a4b', borderRadius: 3, yAxisID: 'y' },
+          { label: 'Avg days in trial', data: rangeMonths.map(m => {
+              const b = convByMonth[m]; return (b && b.totalDays && b.count) ? Math.round(b.totalDays/b.count) : null;
+            }), type: 'line', borderColor: '#e6a817', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 4, tension: .3, spanGaps: true, yAxisID: 'y2'
+          }
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+        scales: {
+          x: { grid: { display: false }, ticks: { ...axStyle, maxTicksLimit: 14 } },
+          y:  { grid: gridStyle, ticks: { ...axStyle, stepSize: 1 }, beginAtZero: true, position: 'left' },
+          y2: { grid: { display: false }, ticks: { ...axStyle, callback: v => v + 'd' }, beginAtZero: true, position: 'right' }
+        }
+      }
+    });
+  }
   if (Object.keys(lostReasons).length) {
     const lrEntries = Object.entries(lostReasons).sort((a,b)=>b[1]-a[1]);
     makeChart('pd-trial-lost', {
@@ -5933,6 +6927,210 @@ function renderPdOptimax(sc) {
     options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:ctx=>' '+ctx.raw+' days' }} },
       scales:{ x:{ grid:gridStyle, ticks:{...axStyle,callback:v=>v+'d'}, min:0, max:Math.ceil(maxCB) }, y:{grid:{display:false},ticks:axStyle} }
+    }
+  });
+}
+
+// ── CUSTOMER HEALTH SCORE ─────────────────────────────────────────────────────
+function renderPdHealth(sc) {
+  const people  = _pd_people;
+  const deals   = _pd_deals;
+  const training = load('training');   // [{ org, date, ... }]
+  const ph      = _ph;
+
+  if (!people.length) {
+    sc.innerHTML = `<div class="empty-state"><p>No Pipedrive people data loaded. Import a People CSV first.</p></div>`;
+    return;
+  }
+
+  // ── Build per-org metrics ──────────────────────────────────────────────
+  // Group paid subscribers by org
+  const paidPeople = people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
+  const orgMap = {};   // org → { people[], licenceType, accessDate, trained, dealValue }
+
+  for (const p of paidPeople) {
+    const org = (p['Person - Organisation'] || 'Unknown').trim();
+    if (!orgMap[org]) orgMap[org] = { people:[], trained:0, dealValue:0, accessDate:null };
+    orgMap[org].people.push(p);
+    const ad = pdParseDate(p['Person - Date Access Granted']);
+    if (ad && (!orgMap[org].accessDate || ad > orgMap[org].accessDate)) orgMap[org].accessDate = ad;
+  }
+
+  // Add deal values
+  const now = new Date();
+  for (const d of deals) {
+    if (d['Deal - Status'] !== 'won') continue;
+    const org = (d['Person - Organisation'] || d['Deal - Organisation'] || '').trim();
+    if (orgMap[org]) orgMap[org].dealValue += (parseFloat(d['Deal - Value']) || 0);
+  }
+
+  // Training events — count per org
+  const trainedOrgs = {};
+  for (const t of training) {
+    const org = (t.org || t.organisation || '').trim();
+    if (org) trainedOrgs[org] = (trainedOrgs[org] || 0) + 1;
+  }
+
+  // PostHog at-risk lookup (distinct_id often matches email)
+  const atRiskSet = new Set((ph.atRisk || []).map(u => u.distinct_id?.toLowerCase()));
+  const powerSet  = new Set((ph.powerUsers   || []).map(u => u.distinct_id?.toLowerCase()));
+
+  // ── Usage-match reliability check (#6) ──────────────────────────────────
+  // We only have IDs for at-risk + power users (not the full product-usage list),
+  // so the most honest signal is whether those IDs even look like email addresses.
+  const knownPhIds = [...new Set([...atRiskSet, ...powerSet])].filter(Boolean);
+  const phIdsLookLikeEmail = knownPhIds.filter(id => id.includes('@')).length;
+  const phEmailShare = knownPhIds.length ? Math.round(phIdsLookLikeEmail / knownPhIds.length * 100) : null;
+  // Of the customer emails we hold, how many match a known product-usage ID
+  const allCustEmails = [...new Set(paidPeople.map(p => (p['Person - Email'] || p['Email'] || '').toLowerCase()).filter(Boolean))];
+  const custEmailsMatched = allCustEmails.filter(e => atRiskSet.has(e) || powerSet.has(e)).length;
+  const matchReliable = phEmailShare != null && phEmailShare >= 50;
+  const matchVerdict = phEmailShare == null
+    ? { col:'var(--tl)', txt:'No product-usage IDs loaded yet — load the Activity data to check.' }
+    : matchReliable
+      ? { col:'var(--gr)', txt:`Looks reliable — ${phEmailShare}% of product-usage IDs are email addresses, so the activity column below can be trusted.` }
+      : { col:'var(--re)', txt:`Unreliable — only ${phEmailShare}% of product-usage IDs are email addresses (the rest are internal IDs that can't be matched to a customer). Treat the activity column below as mostly "unknown", and don't read much into the usage part of the score.` };
+
+  // ── Score each org ─────────────────────────────────────────────────────
+  // Scoring dimensions (100 pts total):
+  //   Licence size  (25): 1 user=5, 2-5=12, 6-15=20, 16+=25
+  //   Tenure        (20): months since access date (capped at 24m → 20pts)
+  //   Training      (20): any training event → 10, 2+ → 15, 3+ → 20
+  //   Deal value    (15): >$0 → 5, >$5k → 10, >$20k → 15
+  //   PostHog usage (20): power user in org → 20, no at-risk → 12, at-risk → 0
+  const orgs = [];
+  for (const [org, m] of Object.entries(orgMap)) {
+    const n = m.people.length;
+
+    // Licence size
+    let scoreSize = n >= 16 ? 25 : n >= 6 ? 20 : n >= 2 ? 12 : 5;
+
+    // Tenure
+    let scoreTenure = 0;
+    if (m.accessDate) {
+      const months = (now - m.accessDate) / (1000 * 60 * 60 * 24 * 30.44);
+      scoreTenure = Math.min(20, Math.round((months / 24) * 20));
+    }
+
+    // Training
+    const tCount = trainedOrgs[org] || 0;
+    const scoreTrain = tCount >= 3 ? 20 : tCount >= 2 ? 15 : tCount >= 1 ? 10 : 0;
+
+    // Deal value
+    const scoreVal = m.dealValue >= 20000 ? 15 : m.dealValue >= 5000 ? 10 : m.dealValue > 0 ? 5 : 0;
+
+    // PostHog usage — match emails from org's people against posthog IDs
+    const orgEmails = m.people.map(p => (p['Person - Email'] || p['Email'] || '').toLowerCase()).filter(Boolean);
+    const hasPower   = orgEmails.some(e => powerSet.has(e));
+    const hasAtRisk  = orgEmails.some(e => atRiskSet.has(e));
+    const scorePH = hasPower ? 20 : hasAtRisk ? 0 : 12;  // unknown → partial credit
+
+    const total = scoreSize + scoreTenure + scoreTrain + scoreVal + scorePH;
+
+    orgs.push({ org, n, total, scoreSize, scoreTenure, scoreTrain, scoreVal, scorePH,
+      accessDate: m.accessDate, dealValue: m.dealValue, tCount });
+  }
+
+  orgs.sort((a, b) => b.total - a.total);
+
+  // ── Bands ──────────────────────────────────────────────────────────────
+  const healthy  = orgs.filter(o => o.total >= 70);
+  const atRisk   = orgs.filter(o => o.total >= 40 && o.total < 70);
+  const critical = orgs.filter(o => o.total < 40);
+
+  const avgScore = orgs.length ? Math.round(orgs.reduce((s,o)=>s+o.total,0)/orgs.length) : 0;
+
+  function scoreBar(v) {
+    const col = v >= 70 ? '#2a7a4b' : v >= 40 ? '#e6a817' : '#e05252';
+    return `<div style="display:flex;align-items:center;gap:6px;">
+      <div style="flex:1;height:6px;background:#eee;border-radius:3px;">
+        <div style="width:${v}%;height:100%;background:${col};border-radius:3px;"></div>
+      </div>
+      <span style="font-size:12px;font-weight:600;color:${col};min-width:28px;">${v}</span>
+    </div>`;
+  }
+
+  function dimBar(v, max, col) {
+    return `<div style="width:${Math.round((v/max)*100)}%;height:4px;background:${col};border-radius:2px;"></div>`;
+  }
+
+  const rowsHTML = orgs.map(o => `
+    <tr>
+      <td style="font-weight:500;">${o.org}</td>
+      <td style="text-align:center;">${o.n}</td>
+      <td style="min-width:120px;">${scoreBar(o.total)}</td>
+      <td style="text-align:center;font-size:11px;color:${o.scoreSize>=20?'#2a7a4b':o.scoreSize>=12?'#555':'#e05252'}">${o.scoreSize}/25</td>
+      <td style="text-align:center;font-size:11px;color:${o.scoreTenure>=15?'#2a7a4b':o.scoreTenure>=8?'#555':'#e05252'}">${o.scoreTenure}/20</td>
+      <td style="text-align:center;font-size:11px;color:${o.scoreTrain>=15?'#2a7a4b':o.scoreTrain>=10?'#555':'#e05252'}">${o.scoreTrain}/20</td>
+      <td style="text-align:center;font-size:11px;color:${o.scoreVal>=10?'#2a7a4b':o.scoreVal>=5?'#555':'#e05252'}">${o.scoreVal}/15</td>
+      <td style="text-align:center;font-size:11px;color:${o.scorePH>=15?'#2a7a4b':o.scorePH>=10?'#555':'#e05252'}">${o.scorePH}/20</td>
+      <td style="text-align:center;font-size:11px;">${o.tCount || '—'}</td>
+      <td style="text-align:center;font-size:11px;">${o.accessDate ? fmtDate(o.accessDate).slice(0,6) : '—'}</td>
+      <td style="text-align:right;font-size:11px;">${o.dealValue ? fmtCur(o.dealValue) : '—'}</td>
+    </tr>`).join('');
+
+  sc.innerHTML = `
+    <div class="section-block">
+      <h3>Customer Health Score ${infoBtn('Customer Health Score',
+        `<p>Composite 0–100 score per paying organisation based on five dimensions:</p>
+        <div class="calc-row">Licence size (25) + Tenure (20) + Training (20) + Deal value (15) + PostHog usage (20)</div>
+        <p><b>Green ≥ 70</b> · <b>Amber 40–69</b> · <b>Red &lt; 40</b></p>
+        <p>PostHog matching uses email address. Orgs with no PostHog data receive 12/20 (unknown).</p>
+        <span class="src-tag">Pipedrive People + Deals · Training log · PostHog at-risk / power users</span>`)}</h3>
+      ${cardsHTML([
+        ['Avg health score', avgScore, null, null, `across ${orgs.length} orgs`],
+        ['Healthy orgs (≥70)', healthy.length, null, null, `${fmtPct(pct(healthy.length, orgs.length))} of total`],
+        ['At-risk orgs (40–69)', atRisk.length, null, null, null],
+        ['Critical orgs (<40)', critical.length, null, null, null],
+      ])}
+      <div style="margin-top:12px;padding:10px 14px;border-left:3px solid ${matchVerdict.col};background:var(--bg2);border-radius:0 6px 6px 0;font-size:12.5px;color:var(--tm)">
+        <b style="color:${matchVerdict.col}">Product-usage match reliability:</b> ${matchVerdict.txt}
+        ${phEmailShare != null ? `<br><span style="color:var(--tl)">${custEmailsMatched} of ${allCustEmails.length} customer emails matched a known active/at-risk user · ${knownPhIds.length} usage IDs checked</span>` : ''}
+      </div>
+    </div>
+
+    <div class="section-block">
+      <h3>Score distribution</h3>
+      <div class="chart-wrap" style="height:220px"><canvas id="pd-health-dist"></canvas></div>
+    </div>
+
+    <div class="section-block">
+      <h3>All paying orgs — ranked by health score</h3>
+      <div style="overflow-x:auto;">
+        <table class="data-table" style="font-size:12px;">
+          <thead><tr>
+            <th>Organisation</th>
+            <th style="text-align:center;">Users</th>
+            <th>Score</th>
+            <th style="text-align:center;">Licence</th>
+            <th style="text-align:center;">Tenure</th>
+            <th style="text-align:center;">Training</th>
+            <th style="text-align:center;">Deal $</th>
+            <th style="text-align:center;">Activity</th>
+            <th style="text-align:center;">Sessions</th>
+            <th style="text-align:center;">Since</th>
+            <th style="text-align:right;">Revenue est.</th>
+          </tr></thead>
+          <tbody>${rowsHTML}</tbody>
+        </table>
+      </div>
+    </div>`;
+
+  // Score distribution histogram
+  const bands = [
+    { label:'0–19',   col:'#e05252', count: orgs.filter(o=>o.total<20).length },
+    { label:'20–39',  col:'#f08080', count: orgs.filter(o=>o.total>=20&&o.total<40).length },
+    { label:'40–59',  col:'#e6a817', count: orgs.filter(o=>o.total>=40&&o.total<60).length },
+    { label:'60–69',  col:'#a0c050', count: orgs.filter(o=>o.total>=60&&o.total<70).length },
+    { label:'70–84',  col:'#2a7a4b', count: orgs.filter(o=>o.total>=70&&o.total<85).length },
+    { label:'85–100', col:'#1a5c36', count: orgs.filter(o=>o.total>=85).length },
+  ];
+  makeChart('pd-health-dist', {
+    type:'bar',
+    data:{ labels: bands.map(b=>b.label), datasets:[{ label:'Orgs', data: bands.map(b=>b.count), backgroundColor: bands.map(b=>b.col), borderRadius:4 }] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false} },
+      scales:{ x:{ grid:{display:false}, ticks:axStyle }, y:{ grid:gridStyle, ticks:axStyle, beginAtZero:true } }
     }
   });
 }
