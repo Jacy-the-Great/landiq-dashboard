@@ -13,7 +13,7 @@
 
 const PH_HOST   = process.env.POSTHOG_HOST || 'https://us.posthog.com';
 const PH_KEY    = process.env.POSTHOG_API_KEY;
-const PH_PROJ   = process.env.POSTHOG_PROJECT_ID;
+const PH_PROJ   = process.env.POSTHOG_PROJECT_ID || '307005';
 const SB_URL    = process.env.SUPABASE_URL || 'https://ysdonnjezvoyrrizadik.supabase.co';
 const SB_KEY    = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
