@@ -19,8 +19,6 @@ DROP MATERIALIZED VIEW IF EXISTS posthog.mv_feature_adoption     CASCADE;
 
 DROP TABLE IF EXISTS posthog."Posthog Events" CASCADE;
 
--- Reclaim the freed space immediately.
-VACUUM FULL;
-
+-- Dropping the table returns its files to disk on its own (no VACUUM needed).
 -- Check the new size (should be ~20 MB):
--- SELECT pg_size_pretty(pg_database_size(current_database()));
+--   SELECT pg_size_pretty(pg_database_size(current_database()));
