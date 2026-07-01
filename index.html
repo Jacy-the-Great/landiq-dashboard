@@ -667,7 +667,7 @@ async function loadPostHogLive(forceRefresh = false) {
 
     // Which specific queries failed (for a precise warning, not a generic one)
     const failed = [
-      ['summary', summaryRes], ['weekly', weeklyRes], ['daily', dailyRes], ['DAU/MAU', dauMauRes],
+      ['summary', summaryRes], ['weekly', weeklyRes], ['daily', dailyRes], ['daily-vs-monthly', dauMauRes],
       ['features', featuresRes], ['new users', newUsersRes], ['retention', retentionRes],
       ['segments', segmentsRes], ['at-risk', atRiskRes], ['adoption', adoptionRes],
       ['completion', completionRes], ['power users', powerRes],
@@ -1167,7 +1167,7 @@ function renderExec(el) {
   // ── Pull headline numbers from every source ─────────────────────────────
   // Sales (Pipedrive)
   const paidPeople = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
-  const allWon = _pd_deals.filter(d => d['Deal - Status'] === 'won');
+  const allWon = _pd_deals.filter(d => d['Deal - Status'] === 'Won');
   const wonARR = allWon.reduce((s,d) => s + (parseFloat(d['Deal - Value'])||0), 0);
   const wonThisMonth = allWon.filter(d => {
     const dt = pdParseDate(d['Deal - Won time'] || d['Deal - Deal created']);
@@ -1239,7 +1239,7 @@ function renderExec(el) {
   if (phWeekly.active_users)
     bullets.push(`PostHog: <b>${fmtNum(phWeekly.active_users)}</b> active users last week${trend(phWeekly.active_users, phWeeklyPrev.active_users)}.`);
   if (dauMau.dau_mau_pct)
-    bullets.push(`DAU/MAU stickiness: <b>${fmtPct(dauMau.dau_mau_pct)}</b> (last 30 days).`);
+    bullets.push(`On a typical day, <b>${fmtPct(dauMau.dau_mau_pct)}</b> of monthly users are active (last 30 days).`);
   if (visitors)
     bullets.push(`Website visitors last week: <b>${fmtNum(visitors)}</b>${trend(visitors, visitorsPrev)}.`);
   if (trainedThisMonth > 0)
@@ -1307,7 +1307,7 @@ function renderExec(el) {
         <div class="box-title">Sales pipeline</div>
         ${openDeals.length ? `
           <table style="width:100%;font-size:12px;border-collapse:collapse">
-            ${['Follow Up','Demo Scheduled','Demo Booked','Trial in Progress','Negotiation','Contract Sent','Won'].map(s => {
+            ${['Contact Made/Discovery','Contact Made','Meeting Scheduled','Negotiations','Order Form Sent','Signed Order Form Returned','Invoice Sent'].map(s => {
               const n = openDeals.filter(d=>d['Deal - Stage']===s).length;
               if (!n) return '';
               return `<tr><td style="padding:3px 0;color:var(--tl)">${s}</td><td style="text-align:right;font-weight:600">${n}</td></tr>`;
@@ -2376,7 +2376,7 @@ function setActivitySub(sub, rerender = true, data) {
         '</tr>'
       ).join('');
       weeklyTableHTML = '<div class="tbl-scroll"><table>' +
-        '<thead><tr><th>Week</th><th style="text-align:right">Logins</th><th style="text-align:right">Active users</th><th style="text-align:right">New users</th><th style="text-align:right">DAU/MAU</th><th style="text-align:right">Avg session</th><th>Notes</th><th></th></tr></thead>' +
+        '<thead><tr><th>Week</th><th style="text-align:right">Logins</th><th style="text-align:right">Active users</th><th style="text-align:right">New users</th><th style="text-align:right">Daily ÷ monthly %</th><th style="text-align:right">Avg session</th><th>Notes</th><th></th></tr></thead>' +
         '<tbody>' + manualRows + '</tbody></table></div>';
     }
 
@@ -2394,7 +2394,7 @@ function setActivitySub(sub, rerender = true, data) {
         ${chartWrap2}
       </div>
 
-      ${hasDauMau ? `<div class="box"><div class="box-title">DAU / MAU ratio — 30 days</div>${chartWrap3}</div>` : ''}
+      ${hasDauMau ? `<div class="box"><div class="box-title">Daily users as a share of monthly users — 30 days</div>${chartWrap3}</div>` : ''}
 
       <div class="box">
         <div class="box-title">Weekly breakdown</div>
@@ -2414,7 +2414,7 @@ function setActivitySub(sub, rerender = true, data) {
             <div class="form-group"><label>New users (first login)</label><input type="number" id="ag-new"></div>
             <div class="form-group"><label>First login date</label><input type="date" id="ag-first"></div>
             <div class="form-group"><label>Last login date</label><input type="date" id="ag-last"></div>
-            <div class="form-group"><label>DAU/MAU ratio (%)</label><input type="number" id="ag-daumau" step=".1"></div>
+            <div class="form-group"><label>Daily users ÷ monthly users (%)</label><input type="number" id="ag-daumau" step=".1"></div>
             <div class="form-group"><label>Avg session (minutes)</label><input type="number" id="ag-session" step="1"></div>
             <div class="form-group"><label>Notes</label><input type="text" id="ag-notes"></div>
           </div>
@@ -2489,7 +2489,7 @@ function setActivitySub(sub, rerender = true, data) {
         data:{
           labels: dmData.map(r => (r.day||'').slice(5,10)),
           datasets:[
-            { label:'DAU/MAU %', data:dmData.map(r=>r.dau_mau_pct||0), borderColor:'#7b1fa2', backgroundColor:'rgba(123,31,162,.06)', fill:true, borderWidth:2, tension:.3, pointRadius:2 },
+            { label:'Daily ÷ monthly users %', data:dmData.map(r=>r.dau_mau_pct||0), borderColor:'#7b1fa2', backgroundColor:'rgba(123,31,162,.06)', fill:true, borderWidth:2, tension:.3, pointRadius:2 },
           ]
         },
         options:{ responsive:true, maintainAspectRatio:false,
@@ -3683,7 +3683,7 @@ function renderMarketing(el) {
       const dt = pdParseDate(d['Deal - Deal created']);
       if (!pdValidDate(dt) || dt < pubDate || dt > winEnd) return;
       if (d['Deal - Pipeline'] === 'Trial Pipeline') td++;
-      else if (d['Deal - Status'] === 'won') wd++;
+      else if (d['Deal - Status'] === 'Won') wd++;
       else od++;
     });
     const type = c.type || 'Other';
@@ -5084,7 +5084,7 @@ function renderPdRevenue(sc) {
         datasets: [
           { label: 'Actual new revenue', data: [...histData, ...projMonths.map(()=>null)], backgroundColor: '#2a7a4b', borderRadius: 3 },
           { label: 'Projected (run-rate)', data: [...last6.map(()=>null), ...projData], backgroundColor: 'rgba(42,122,75,0.25)', borderRadius: 3, borderWidth: 2, borderColor: '#2a7a4b', borderDash: [4,4] },
-          { label: 'Pipeline expected', data: [...last6.map(()=>null), projMonths.map(()=>null), forecast].flat(), type:'line', borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false },
+          { label: 'Expected from pipeline (÷6 mo)', data: [...last6.map(()=>null), ...projMonths.map(()=>forecast/6)], type:'line', borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false, spanGaps:false },
         ]
       },
       options: { responsive:true, maintainAspectRatio:false,
@@ -6959,7 +6959,7 @@ function renderPdHealth(sc) {
   // Add deal values
   const now = new Date();
   for (const d of deals) {
-    if (d['Deal - Status'] !== 'won') continue;
+    if (d['Deal - Status'] !== 'Won') continue;
     const org = (d['Person - Organisation'] || d['Deal - Organisation'] || '').trim();
     if (orgMap[org]) orgMap[org].dealValue += (parseFloat(d['Deal - Value']) || 0);
   }
