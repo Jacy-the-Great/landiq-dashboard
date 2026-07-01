@@ -205,7 +205,7 @@ LANGUAGE sql SECURITY DEFINER STABLE AS $$
   WHERE feature <> ''
   GROUP BY feature
   HAVING SUM(events) FILTER (WHERE event_name ILIKE '%start%') > 0
-  ORDER BY started DESC;
+  ORDER BY 2 DESC;
 $$;
 
 -- Refresh function no longer needed (external script fills the tables), but keep
