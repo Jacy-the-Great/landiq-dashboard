@@ -60,20 +60,46 @@ async function main() {
   console.log('Pulling summaries from PostHog…');
 
   console.log('• user lifecycle');
-  const lifecycle = await hogql(`
-    SELECT distinct_id,
+  // email: from PostHog person properties where set; else the distinct_id itself
+  // when it already looks like an email address. Used to link usage to customers.
+  const lifecycleCols = `
            min(toDate(timestamp))              AS first_seen,
            max(toDate(timestamp))              AS last_seen,
            count(distinct toDate(timestamp))   AS active_days,
            count()                             AS total_events,
            toStartOfWeek(min(timestamp), 1)    AS cohort_week,
-           toStartOfMonth(min(timestamp))      AS cohort_month
-    FROM events GROUP BY distinct_id LIMIT 1000000`);
-  await replaceTable('ph_lifecycle', 'distinct_id', lifecycle.map(r => ({
-    distinct_id: String(r.distinct_id), first_seen: r.first_seen, last_seen: r.last_seen,
-    active_days: r.active_days, total_events: r.total_events,
-    cohort_week: r.cohort_week, cohort_month: r.cohort_month,
-  })));
+           toStartOfMonth(min(timestamp))      AS cohort_month`;
+  let lifecycle;
+  try {
+    lifecycle = await hogql(`
+      SELECT distinct_id, ${lifecycleCols},
+             any(person.properties.email)      AS email
+      FROM events GROUP BY distinct_id LIMIT 1000000`);
+  } catch (e) {
+    console.warn('  person email join unavailable, falling back to distinct_id only:', e.message.slice(0, 120));
+    lifecycle = await hogql(`
+      SELECT distinct_id, ${lifecycleCols}, NULL AS email
+      FROM events GROUP BY distinct_id LIMIT 1000000`);
+  }
+  const lifecycleRows = lifecycle.map(r => {
+    const did = String(r.distinct_id);
+    const email = (r.email && String(r.email).includes('@')) ? String(r.email).toLowerCase()
+                : (did.includes('@') ? did.toLowerCase() : null);
+    return {
+      distinct_id: did, first_seen: r.first_seen, last_seen: r.last_seen,
+      active_days: r.active_days, total_events: r.total_events,
+      cohort_week: r.cohort_week, cohort_month: r.cohort_month,
+      email,
+    };
+  });
+  try {
+    await replaceTable('ph_lifecycle', 'distinct_id', lifecycleRows);
+  } catch (e) {
+    if (!String(e.message).includes('email')) throw e;
+    // email column not added yet (posthog_add_emails.sql not run) — sync without it
+    console.warn('  ph_lifecycle has no email column yet — run posthog_add_emails.sql to enable customer matching');
+    await replaceTable('ph_lifecycle', 'distinct_id', lifecycleRows.map(({ email, ...rest }) => rest));
+  }
 
   console.log('• daily');
   const daily = await hogql(`

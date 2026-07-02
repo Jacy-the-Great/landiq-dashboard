@@ -521,6 +521,7 @@ let _ph = {
   featureAdoption: [],   // [{ feature, users_who_tried, total_users, adoption_pct }]
   featureCompletion: [], // [{ feature, started, completed, completion_pct }]
   powerUsers: [],        // [{ distinct_id, first_seen, last_seen, active_days, total_events }]
+  emailActivity: [],     // [{ email, first_seen, last_seen, active_days, total_events }] — optional, needs posthog_add_emails.sql
 };
 
 async function fetchAllRows(table, columns) {
@@ -636,7 +637,7 @@ async function loadPostHogLive(forceRefresh = false) {
   _ph.error = null;
   try {
     const [summaryRes, weeklyRes, dailyRes, dauMauRes, featuresRes, newUsersRes, retentionRes,
-           segmentsRes, atRiskRes, adoptionRes, completionRes, powerRes] = await Promise.all([
+           segmentsRes, atRiskRes, adoptionRes, completionRes, powerRes, emailActRes] = await Promise.all([
       sb.rpc('ph_summary'),
       sb.rpc('ph_weekly_stats',        { weeks_back: 16 }),
       sb.rpc('ph_daily_active_users',  { days_back:  30 }),
@@ -645,10 +646,11 @@ async function loadPostHogLive(forceRefresh = false) {
       sb.rpc('ph_new_users',           { weeks_back: 16 }),
       sb.rpc('ph_retention_cohort',    { cohort_weeks_back: 12 }),
       sb.rpc('ph_user_segments'),
-      sb.rpc('ph_at_risk_users',       { min_active_days: 3, days_threshold: 14 }),
+      sb.rpc('ph_at_risk_users',       { min_active_days: 5, days_threshold: 30 }),
       sb.rpc('ph_feature_adoption'),
       sb.rpc('ph_feature_completion'),
       sb.rpc('ph_power_users',         { user_limit: 25 }),
+      sb.rpc('ph_email_activity'),   // per-email usage — absent until posthog_add_emails.sql is run
     ]);
     // Load whatever succeeded — one slow/failed query no longer blanks the whole tab.
     // (Supabase rpc() resolves with an { error } field rather than throwing.)
@@ -664,8 +666,10 @@ async function loadPostHogLive(forceRefresh = false) {
     _ph.featureAdoption   = adoptionRes.data        || [];
     _ph.featureCompletion = completionRes.data      || [];
     _ph.powerUsers        = powerRes.data           || [];
+    _ph.emailActivity     = emailActRes.data        || [];
 
-    // Which specific queries failed (for a precise warning, not a generic one)
+    // Which specific queries failed (for a precise warning, not a generic one).
+    // emailActivity is deliberately excluded — it's optional until posthog_add_emails.sql runs.
     const failed = [
       ['summary', summaryRes], ['weekly', weeklyRes], ['daily', dailyRes], ['daily-vs-monthly', dauMauRes],
       ['features', featuresRes], ['new users', newUsersRes], ['retention', retentionRes],
@@ -958,23 +962,34 @@ function renderHome(el) {
   const heroPct = Math.min(100, Math.round(pct(pdActivePaid, TARGET_USERS) || 0));
   const heroCol = heroPct >= 80 ? '#2a7a4b' : heroPct >= 50 ? '#2e8bc0' : '#c25a00';
 
-  // ── WHAT CHANGED (#4): flag big moves vs the previous period ──────────────
-  const _pm = new Date(_now.getFullYear(), _now.getMonth() - 1, 1);
+  // ── WHAT CHANGED (#4): flag big moves — completed periods only ─────────────
+  // Comparing a partial current month/week against a full prior one produces
+  // false "down" alerts, so all comparisons use the last COMPLETED period.
+  const _pm  = new Date(_now.getFullYear(), _now.getMonth() - 1, 1);  // last completed month
+  const _pm2 = new Date(_now.getFullYear(), _now.getMonth() - 2, 1);  // month before that
   const inMonth = (dstr, y, mo) => { const d = pdParseDate(dstr); return pdValidDate(d) && d.getFullYear() === y && d.getMonth() === mo; };
-  const wonLastMonth = _pd_deals.filter(d => d['Deal - Status'] === 'Won' && d['Deal - Pipeline'] === '2026 Sales' && inMonth(d['Deal - Won time'], _pm.getFullYear(), _pm.getMonth()));
-  const revLastMonth = wonLastMonth.reduce((s, d) => s + (parseFloat(d['Deal - Value']) || 0), 0);
+  const wonInMonth = (y, mo) => _pd_deals.filter(d => d['Deal - Status'] === 'Won' && d['Deal - Pipeline'] === '2026 Sales' && inMonth(d['Deal - Won time'], y, mo));
+  const wonLastMonth  = wonInMonth(_pm.getFullYear(),  _pm.getMonth());
+  const wonMonthPrior = wonInMonth(_pm2.getFullYear(), _pm2.getMonth());
+  const sumVal = deals => deals.reduce((s, d) => s + (parseFloat(d['Deal - Value']) || 0), 0);
+  const revLastMonth  = sumVal(wonLastMonth);
+  const revMonthPrior = sumVal(wonMonthPrior);
   const trialGrantedMonth = (y, mo) => _pd_people.filter(p => isTrialType(p['Person - Customer Type']) && inMonth(p['Person - Date Access Granted'], y, mo)).length;
-  const trialsThisMonth = trialGrantedMonth(_now.getFullYear(), _now.getMonth());
-  const trialsLastMonth = trialGrantedMonth(_pm.getFullYear(), _pm.getMonth());
-  const phW = _ph.weekly || [];
-  const auNow = phW.length ? Number(phW[phW.length-1].active_users) : null;
-  const auPrev = phW.length > 1 ? Number(phW[phW.length-2].active_users) : null;
+  const trialsLastMonth  = trialGrantedMonth(_pm.getFullYear(),  _pm.getMonth());
+  const trialsMonthPrior = trialGrantedMonth(_pm2.getFullYear(), _pm2.getMonth());
+  // Weekly active users: only weeks that have fully ended (week start + 7 days ≤ today)
+  const phWDone = (_ph.weekly || []).filter(w => {
+    const ws = new Date(w.week_start);
+    return !isNaN(ws) && (ws.getTime() + 7 * 86400000) <= _now.getTime();
+  });
+  const auNow  = phWDone.length     ? Number(phWDone[phWDone.length-1].active_users) : null;
+  const auPrev = phWDone.length > 1 ? Number(phWDone[phWDone.length-2].active_users) : null;
 
   const alertDefs = [
-    { label: 'Won deals this month', curr: pdWonThisMonth.length, prev: wonLastMonth.length },
-    { label: 'Revenue this month', curr: pdRevThisMonth, prev: revLastMonth, money: true },
-    { label: 'New trials this month', curr: trialsThisMonth, prev: trialsLastMonth },
-    { label: 'Weekly active users', curr: auNow, prev: auPrev },
+    { label: 'Won deals',  curr: wonLastMonth.length, prev: wonMonthPrior.length, period: 'month' },
+    { label: 'Revenue',    curr: revLastMonth, prev: revMonthPrior, money: true, period: 'month' },
+    { label: 'New trials', curr: trialsLastMonth, prev: trialsMonthPrior, period: 'month' },
+    { label: 'Weekly active users', curr: auNow, prev: auPrev, period: 'week' },
   ];
   const alerts = [];
   alertDefs.forEach(a => {
@@ -982,8 +997,8 @@ function renderHome(el) {
     const ch = Math.round((a.curr - a.prev) / a.prev * 100);
     if (Math.abs(ch) < 25) return;
     const up = ch > 0;
-    const val = a.money ? fmtCur(a.curr) : fmtNum(a.curr);
-    alerts.push({ up, txt: `${a.label} ${up ? 'up' : 'down'} ${Math.abs(ch)}% vs last ${a.label.includes('week') ? 'week' : 'month'} — now ${val}` });
+    const fmt = v => a.money ? fmtCur(v) : fmtNum(v);
+    alerts.push({ up, txt: `${a.label} ${up ? 'up' : 'down'} ${Math.abs(ch)}% in the last completed ${a.period} — ${fmt(a.curr)} vs ${fmt(a.prev)} the ${a.period} before` });
   });
 
   el.innerHTML = `
@@ -2274,13 +2289,19 @@ function renderActivity(el) {
         </div>
       </div>`;
   } else if (phLive) {
-    const refreshStr = _ph.refreshedAt ? _ph.refreshedAt.toLocaleTimeString() : '';
+    // Data freshness: newest day in the daily summaries = how current the data is.
+    // The nightly sync should keep this within ~1 day; older than 2 days = likely failed.
+    const lastDay = (_ph.daily || []).reduce((max, r) => (r.day && r.day > max ? r.day : max), '');
+    const daysBehind = lastDay ? Math.floor((new Date().setHours(0,0,0,0) - new Date(lastDay).getTime()) / 86400000) : null;
+    const staleWarn = daysBehind != null && daysBehind > 2;
     statusHTML = `
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
         <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:#2a7a4b;background:#e8f5ee;border:1px solid #b3dfc5;border-radius:20px;padding:3px 10px">
           <span style="width:6px;height:6px;background:#2a7a4b;border-radius:50%;display:inline-block"></span> Live · PostHog via Supabase
         </span>
-        <span style="font-size:11px;color:var(--tl)">Updated ${refreshStr}</span>
+        ${lastDay ? `<span style="font-size:11px;color:${staleWarn ? '#c0392b' : 'var(--tl)'};font-weight:${staleWarn ? '600' : '400'}">
+          ${staleWarn ? '⚠ ' : ''}Usage data through ${fmtDate(lastDay)}${staleWarn ? ` — ${daysBehind} days behind. The nightly sync may have failed; check GitHub → Actions → "PostHog summary sync".` : ' · refreshed nightly'}
+        </span>` : ''}
         <button id="ph-refresh-btn" onclick="refreshPostHog()" style="margin-left:auto;font-size:11px;padding:4px 10px;background:none;border:1px solid var(--bd);border-radius:6px;cursor:pointer;font-family:inherit;color:var(--tm)">↺ Refresh PostHog</button>
       </div>`;
   } else {
@@ -2311,8 +2332,8 @@ function renderActivity(el) {
           : '<span class="src-tag">Not available</span><br>Requires the PostHog SQL migration to be run in Supabase. Once enabled, pulls from the ph_summary() materialized view.'],
       ['Active users', phLive ? activeCount : null, null, null, 'seen in last 14 days',
         '<span class="src-tag">Live · PostHog</span><br>Users in the <b>"Active"</b> segment — seen at least once in the last 14 days. From <b>ph_user_segments()</b>.<br><div class="calc-row">ph_user_segments() → segment = "Active"</div>'],
-      ['At-risk users', phLive ? atRiskCount : null, null, null, 'active but gone quiet 14d+',
-        '<span class="src-tag">Live · PostHog</span><br>Users in the <b>"At-risk"</b> segment — previously active but not seen in the last 14+ days. From <b>ph_user_segments()</b>. These users have met the minimum activity threshold (3+ active days) but have gone quiet.<br><div class="calc-row">ph_user_segments() → segment = "At-risk"</div>'],
+      ['At-risk users', phLive ? atRiskCount : null, null, null, 'quiet for 14–30 days',
+        '<span class="src-tag">Live · PostHog</span><br>Users in the <b>"At-risk"</b> segment — last seen between <b>14 and 30 days ago</b> (quieter than that counts as Dormant). From <b>ph_user_segments()</b>. The at-risk <i>list</i> in Insights uses a stricter, more actionable filter: was active 5+ days, quiet 30–90 days.<br><div class="calc-row">ph_user_segments() → segment = "At-risk"</div>'],
     ])}
 
     <div class="sub-tabs">
@@ -2429,10 +2450,13 @@ function setActivitySub(sub, rerender = true, data) {
     // Chart 1: WAU line (live preferred)
     if (hasLive) {
       const wkData = [..._ph.weekly].slice(-16);
+      // Flag the current, still-in-progress week so its low count isn't read as a crash
+      const _wkNow = Date.now();
+      const isPartialWk = r => { const ws = new Date(r.week_start); return !isNaN(ws) && (ws.getTime() + 7*86400000) > _wkNow; };
       makeChart('act-giraffe-chart', {
         type: 'line',
         data: {
-          labels: wkData.map(r => (r.week_start||'').slice(5,10)),
+          labels: wkData.map(r => (r.week_start||'').slice(5,10) + (isPartialWk(r) ? ' (partial)' : '')),
           datasets: [
             { label: 'Active users', data: wkData.map(r => r.active_users||0),  borderColor:'#2e8bc0', backgroundColor:'rgba(46,139,192,.07)', borderWidth:2, fill:true,  tension:.3, pointRadius:3 },
             { label: 'Login users',  data: wkData.map(r => r.login_users||0),   borderColor:'#2a7a4b', borderWidth:2, fill:false, tension:.3, pointRadius:3 },
@@ -2813,7 +2837,7 @@ function setActivitySub(sub, rerender = true, data) {
       </div>
 
       ${(_ph.atRisk||[]).length > 0 ? `<div class="box">
-        <div class="box-title">At-risk users — active but quiet 14+ days (top 15)
+        <div class="box-title">At-risk users — was active 5+ days, quiet 30+ days (top 15)
           <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:8px">3+ lifetime active days · not seen in 14d+</span>
         </div>
         <div class="tbl-scroll"><table>
@@ -2980,9 +3004,48 @@ function setActivitySub(sub, rerender = true, data) {
           </table></div>` : '<div class="no-data">No adoption data.</div>'}
       </div>
 
+      ${(() => {
+        // Paying customers gone quiet — the actionable version of "at-risk".
+        // Needs email matching (posthog_add_emails.sql + a sync run).
+        const ea = {};
+        (_ph.emailActivity || []).forEach(r => { if (r.email) ea[r.email.toLowerCase()] = r; });
+        if (!Object.keys(ea).length) return '';
+        const nowQ = new Date();
+        const quiet = _pd_people
+          .filter(p => {
+            if (p['Person - Customer Type'] !== 'Paid Subscription') return false;
+            const rem = pdParseDate(p['Person - Date Access Removed']);
+            return !pdValidDate(rem) || rem > nowQ;
+          })
+          .map(p => {
+            const em = (p['Person - Email'] || p['Email'] || '').toLowerCase();
+            const act = em && ea[em];
+            if (!act || !act.last_seen) return null;
+            const days = Math.floor((nowQ - new Date(act.last_seen)) / 86400000);
+            return days >= 14 ? { name: p['Person - Name'] || em, org: p['Person - Organisation'] || '—', days, activeDays: act.active_days } : null;
+          })
+          .filter(Boolean)
+          .sort((a, b) => a.days - b.days)
+          .slice(0, 20);
+        return `<div class="box">
+          <div class="box-title">Paying customers gone quiet
+            <span style="font-size:10px;font-weight:400;color:var(--tl);margin-left:6px">active paid users not seen in 14+ days · most recently lapsed first — call these first</span>
+          </div>
+          ${quiet.length ? `<div class="tbl-scroll"><table>
+            <thead><tr><th>Name</th><th>Organisation</th><th style="text-align:right">Days quiet</th><th style="text-align:right">Lifetime active days</th></tr></thead>
+            <tbody>${quiet.map(q => `<tr>
+              <td style="font-size:12px">${q.name}</td>
+              <td style="font-size:12px;color:var(--tm)">${q.org}</td>
+              <td style="text-align:right;font-weight:600;color:${q.days<=30?'#c25a00':'#c0392b'}">${q.days}d</td>
+              <td style="text-align:right">${fmtNum(q.activeDays)}</td>
+            </tr>`).join('')}</tbody>
+          </table></div>` : '<div class="no-data">Every matched paying customer has been active in the last 14 days.</div>'}
+        </div>`;
+      })()}
+
       <div class="box">
         <div class="box-title">At-risk users
-          <span style="font-size:10px;font-weight:400;color:var(--tl);margin-left:6px">previously active · not seen in 14+ days</span>
+          <span style="font-size:10px;font-weight:400;color:var(--tl);margin-left:6px">was active 5+ days · not seen in 30–90 days</span>
         </div>
         ${atRiskRows ? `<div class="tbl-scroll"><table>
           <thead><tr><th>User ID</th><th style="text-align:right">First seen</th><th style="text-align:right">Last seen</th><th style="text-align:right">Active days</th><th style="text-align:right">Events</th></tr></thead>
@@ -6003,7 +6066,23 @@ function renderPdUsers(sc) {
     renewOrgMap[org].users++;
     if (due < renewOrgMap[org].due) renewOrgMap[org].due = due;
   });
-  const renewals = Object.values(renewOrgMap).sort((a, b) => a.due - b.due);
+  // Attach contract dollars: each org's largest won deal (matched by organisation
+  // name, falling back to the deal person's organisation) — same method as the
+  // Revenue tab's active-customer figure.
+  const _rnNorm = s => (s || '').trim().toLowerCase();
+  const _rnPersonOrg = {};
+  _pd_people.forEach(p => { const n = _rnNorm(p['Person - Name']); if (n) _rnPersonOrg[n] = _rnNorm(p['Person - Organisation']); });
+  const _rnValueByOrg = {};
+  _pd_deals.filter(d => d['Deal - Status'] === 'Won').forEach(d => {
+    const o = _rnNorm(d['Deal - Organisation']) || _rnPersonOrg[_rnNorm(d['Deal - Person'])] || '';
+    if (!o) return;
+    const v = parseFloat(d['Deal - Value']) || 0;
+    _rnValueByOrg[o] = Math.max(_rnValueByOrg[o] || 0, v);
+  });
+  Object.values(renewOrgMap).forEach(r => { r.value = _rnValueByOrg[_rnNorm(r.org)] || 0; });
+  // Biggest dollars first, then soonest due
+  const renewals = Object.values(renewOrgMap).sort((a, b) => (b.value - a.value) || (a.due - b.due));
+  const renewTotalValue = renewals.reduce((s, r) => s + r.value, 0);
   const daysUntil = d => Math.round((d - today) / 86400000);
 
   // ── BY COUNCIL / REGION (#13) ──────────────────────────────────────────────
@@ -6104,23 +6183,26 @@ function renderPdUsers(sc) {
     <div class="box">
       <div class="box-title">Renewals due in the next ${RENEW_WINDOW_DAYS} days ${infoBtn('Renewals coming up',
         `<p>Active paying organisations whose <b>next contract anniversary</b> falls within the next ${RENEW_WINDOW_DAYS} days. Assumes yearly contracts dated from <b>Date Access Granted</b>.</p>
+        <p><b>Contract value</b> is the organisation's largest won deal — the revenue at stake if they don't renew. Sorted biggest dollars first.</p>
         <div class="calc-row">next anniversary of Access Granted ≤ today + ${RENEW_WINDOW_DAYS} days · still active</div>
-        <span class="src-tag">Pipedrive People</span>`)}</div>
+        <span class="src-tag">Pipedrive People + Deals</span>`)}</div>
       ${renewals.length ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
         <thead><tr style="border-bottom:2px solid var(--bor)">
           <th style="text-align:left;padding:5px 8px">Organisation</th>
           <th style="text-align:center;padding:5px 8px">Users</th>
+          <th style="text-align:right;padding:5px 8px">Contract value</th>
           <th style="text-align:right;padding:5px 8px">Renewal due</th>
           <th style="text-align:right;padding:5px 8px">In</th>
         </tr></thead>
         <tbody>${renewals.map(r => { const du = daysUntil(r.due); const col = du <= 30 ? '#e05252' : du <= 60 ? '#c25a00' : '#2a7a4b'; return `<tr style="border-bottom:1px solid var(--bg2)">
           <td style="padding:5px 8px;font-weight:500">${r.org}</td>
           <td style="text-align:center;padding:5px 8px">${r.users}</td>
+          <td style="text-align:right;padding:5px 8px;font-weight:600">${r.value ? fmtCur(r.value) : '<span style="color:var(--tl);font-weight:400">no deal matched</span>'}</td>
           <td style="text-align:right;padding:5px 8px">${fmtDate(r.due).slice(0,11)}</td>
           <td style="text-align:right;padding:5px 8px;color:${col};font-weight:600">${du}d</td>
         </tr>`; }).join('')}</tbody>
       </table></div>
-      <div style="font-size:11px;color:var(--tl);padding:8px">${renewals.length} organisation(s) · ${renewals.reduce((s,r)=>s+r.users,0)} licence(s) up for renewal</div>`
+      <div style="font-size:11px;color:var(--tl);padding:8px">${renewals.length} organisation(s) · ${renewals.reduce((s,r)=>s+r.users,0)} licence(s) · ${fmtCur(renewTotalValue)} of contracted revenue up for renewal</div>`
       : '<div class="no-data">No renewals due in the next ' + RENEW_WINDOW_DAYS + ' days.</div>'}
     </div>
 
@@ -6975,21 +7057,39 @@ function renderPdHealth(sc) {
   const atRiskSet = new Set((ph.atRisk || []).map(u => u.distinct_id?.toLowerCase()));
   const powerSet  = new Set((ph.powerUsers   || []).map(u => u.distinct_id?.toLowerCase()));
 
+  // Full per-email usage map (best source) — available once posthog_add_emails.sql
+  // has been run and the sync has refilled the summaries.
+  const emailAct = {};   // email → { last_seen: Date, active_days }
+  (ph.emailActivity || []).forEach(r => {
+    if (!r.email) return;
+    const ls = new Date(r.last_seen);
+    emailAct[r.email.toLowerCase()] = { last_seen: isNaN(ls) ? null : ls, active_days: Number(r.active_days) || 0 };
+  });
+  const hasEmailAct = Object.keys(emailAct).length > 0;
+
   // ── Usage-match reliability check (#6) ──────────────────────────────────
-  // We only have IDs for at-risk + power users (not the full product-usage list),
-  // so the most honest signal is whether those IDs even look like email addresses.
-  const knownPhIds = [...new Set([...atRiskSet, ...powerSet])].filter(Boolean);
-  const phIdsLookLikeEmail = knownPhIds.filter(id => id.includes('@')).length;
-  const phEmailShare = knownPhIds.length ? Math.round(phIdsLookLikeEmail / knownPhIds.length * 100) : null;
-  // Of the customer emails we hold, how many match a known product-usage ID
   const allCustEmails = [...new Set(paidPeople.map(p => (p['Person - Email'] || p['Email'] || '').toLowerCase()).filter(Boolean))];
-  const custEmailsMatched = allCustEmails.filter(e => atRiskSet.has(e) || powerSet.has(e)).length;
-  const matchReliable = phEmailShare != null && phEmailShare >= 50;
-  const matchVerdict = phEmailShare == null
-    ? { col:'var(--tl)', txt:'No product-usage IDs loaded yet — load the Activity data to check.' }
-    : matchReliable
-      ? { col:'var(--gr)', txt:`Looks reliable — ${phEmailShare}% of product-usage IDs are email addresses, so the activity column below can be trusted.` }
-      : { col:'var(--re)', txt:`Unreliable — only ${phEmailShare}% of product-usage IDs are email addresses (the rest are internal IDs that can't be matched to a customer). Treat the activity column below as mostly "unknown", and don't read much into the usage part of the score.` };
+  let matchVerdict, custEmailsMatched, knownPhIds = [];
+  if (hasEmailAct) {
+    // Direct measurement: how many customer emails appear in the usage data
+    custEmailsMatched = allCustEmails.filter(e => emailAct[e]).length;
+    const sharePct = allCustEmails.length ? Math.round(custEmailsMatched / allCustEmails.length * 100) : null;
+    knownPhIds = Object.keys(emailAct);
+    matchVerdict = sharePct == null
+      ? { col:'var(--tl)', txt:'No customer emails found in the sales records — export the People CSV with the email column.' }
+      : sharePct >= 40
+        ? { col:'var(--gr)', txt:`${sharePct}% of paying customers matched to their product usage (${custEmailsMatched} of ${allCustEmails.length}). The activity column below is measured, not guessed.` }
+        : { col:'var(--wa)', txt:`Only ${sharePct}% of paying customers matched to usage data (${custEmailsMatched} of ${allCustEmails.length}) — many product accounts don't use their work email. Matched orgs are measured; unmatched orgs show "unknown".` };
+  } else {
+    // Fallback: only at-risk + power user IDs are available — check if they look like emails
+    knownPhIds = [...new Set([...atRiskSet, ...powerSet])].filter(Boolean);
+    const phIdsLookLikeEmail = knownPhIds.filter(id => id.includes('@')).length;
+    const phEmailShare = knownPhIds.length ? Math.round(phIdsLookLikeEmail / knownPhIds.length * 100) : null;
+    custEmailsMatched = allCustEmails.filter(e => atRiskSet.has(e) || powerSet.has(e)).length;
+    matchVerdict = phEmailShare == null
+      ? { col:'var(--tl)', txt:'No product-usage IDs loaded yet — load the Activity data to check.' }
+      : { col:'var(--wa)', txt:`Approximate matching only. Run posthog_add_emails.sql then re-run the sync to enable full email matching (currently ${phEmailShare}% of the limited ID sample look like emails).` };
+  }
 
   // ── Score each org ─────────────────────────────────────────────────────
   // Scoring dimensions (100 pts total):
@@ -7019,15 +7119,33 @@ function renderPdHealth(sc) {
     // Deal value
     const scoreVal = m.dealValue >= 20000 ? 15 : m.dealValue >= 5000 ? 10 : m.dealValue > 0 ? 5 : 0;
 
-    // PostHog usage — match emails from org's people against posthog IDs
+    // Product usage — measured per org where email matching is available
     const orgEmails = m.people.map(p => (p['Person - Email'] || p['Email'] || '').toLowerCase()).filter(Boolean);
-    const hasPower   = orgEmails.some(e => powerSet.has(e));
-    const hasAtRisk  = orgEmails.some(e => atRiskSet.has(e));
-    const scorePH = hasPower ? 20 : hasAtRisk ? 0 : 12;  // unknown → partial credit
+    let scorePH, lastUsed = null;
+    if (hasEmailAct) {
+      // Most recent activity across the org's matched users
+      const acts = orgEmails.map(e => emailAct[e]).filter(Boolean);
+      if (acts.length) {
+        lastUsed = acts.reduce((mx, a) => (a.last_seen && (!mx || a.last_seen > mx) ? a.last_seen : mx), null);
+        const daysQuiet = lastUsed ? Math.floor((now - lastUsed) / 86400000) : null;
+        scorePH = daysQuiet == null ? 10
+                : daysQuiet <= 14 ? 20      // used in the last fortnight
+                : daysQuiet <= 30 ? 14      // used in the last month
+                : daysQuiet <= 90 ? 6       // going quiet
+                : 2;                        // effectively dormant
+      } else {
+        scorePH = 10;                       // no matched users → unknown
+      }
+    } else {
+      // Fallback: only power/at-risk ID lists available
+      const hasPower  = orgEmails.some(e => powerSet.has(e));
+      const hasAtRisk = orgEmails.some(e => atRiskSet.has(e));
+      scorePH = hasPower ? 20 : hasAtRisk ? 0 : 12;
+    }
 
     const total = scoreSize + scoreTenure + scoreTrain + scoreVal + scorePH;
 
-    orgs.push({ org, n, total, scoreSize, scoreTenure, scoreTrain, scoreVal, scorePH,
+    orgs.push({ org, n, total, scoreSize, scoreTenure, scoreTrain, scoreVal, scorePH, lastUsed,
       accessDate: m.accessDate, dealValue: m.dealValue, tCount });
   }
 
@@ -7063,7 +7181,7 @@ function renderPdHealth(sc) {
       <td style="text-align:center;font-size:11px;color:${o.scoreTenure>=15?'#2a7a4b':o.scoreTenure>=8?'#555':'#e05252'}">${o.scoreTenure}/20</td>
       <td style="text-align:center;font-size:11px;color:${o.scoreTrain>=15?'#2a7a4b':o.scoreTrain>=10?'#555':'#e05252'}">${o.scoreTrain}/20</td>
       <td style="text-align:center;font-size:11px;color:${o.scoreVal>=10?'#2a7a4b':o.scoreVal>=5?'#555':'#e05252'}">${o.scoreVal}/15</td>
-      <td style="text-align:center;font-size:11px;color:${o.scorePH>=15?'#2a7a4b':o.scorePH>=10?'#555':'#e05252'}">${o.scorePH}/20</td>
+      <td style="text-align:center;font-size:11px;color:${o.scorePH>=15?'#2a7a4b':o.scorePH>=10?'#555':'#e05252'}">${o.scorePH}/20${o.lastUsed?`<br><span style="color:var(--tl);font-size:10px">${fmtDate(o.lastUsed).slice(0,6)}</span>`:''}</td>
       <td style="text-align:center;font-size:11px;">${o.tCount || '—'}</td>
       <td style="text-align:center;font-size:11px;">${o.accessDate ? fmtDate(o.accessDate).slice(0,6) : '—'}</td>
       <td style="text-align:right;font-size:11px;">${o.dealValue ? fmtCur(o.dealValue) : '—'}</td>
