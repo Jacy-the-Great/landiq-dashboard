@@ -4926,7 +4926,16 @@ function setPdSub(sub, rerender = true) {
 }
 
 function renderPdImport(sc) {
-  const importedStr = _pd_deals_imported_at ? ' · ' + fmtDate(_pd_deals_imported_at) : '';
+  // Per-source import status — deals and people each show their OWN date + age,
+  // coloured green/amber/red by staleness (never the other file's date).
+  const impStatus = (count, noun, ts) => {
+    const days = ts ? Math.floor((Date.now() - new Date(ts).getTime()) / 86400000) : null;
+    const col = days == null ? 'var(--tl)' : days > 14 ? '#c0392b' : days > 7 ? '#c25a00' : 'var(--gr)';
+    const mark = (days != null && days > 7) ? '⚠' : '✓';
+    const date = ts ? fmtDate(ts) : 'date unknown';
+    const age = days == null ? '' : days === 0 ? ' (today)' : ` · ${days} day${days > 1 ? 's' : ''} ago`;
+    return `<div style="font-size:12px;color:${col};margin-bottom:12px">${mark} ${count.toLocaleString()} ${noun} · ${date}${age}</div>`;
+  };
   sc.innerHTML = `
     <div class="box">
       <div class="box-title">Import Pipedrive data</div>
@@ -4935,7 +4944,7 @@ function renderPdImport(sc) {
         <div style="border:2px dashed var(--bd);border-radius:10px;padding:24px;text-align:center">
           <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:8px">Deals CSV</div>
           ${_pd_deals.length
-            ? `<div style="font-size:12px;color:var(--gr);margin-bottom:12px">✓ ${_pd_deals.length.toLocaleString()} deals${importedStr}</div>`
+            ? impStatus(_pd_deals.length, 'deals', _pd_deals_imported_at)
             : `<div style="font-size:12px;color:var(--tl);margin-bottom:12px">No data yet</div>`}
           <label style="cursor:pointer">
             <span class="btn-save" style="display:inline-block">${_pd_deals.length ? 'Re-import deals' : 'Choose deals CSV'}</span>
@@ -4945,7 +4954,7 @@ function renderPdImport(sc) {
         <div style="border:2px dashed var(--bd);border-radius:10px;padding:24px;text-align:center">
           <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:8px">People CSV</div>
           ${_pd_people.length
-            ? `<div style="font-size:12px;color:var(--gr);margin-bottom:12px">✓ ${_pd_people.length.toLocaleString()} people${importedStr}</div>`
+            ? impStatus(_pd_people.length, 'people', _pd_people_imported_at)
             : `<div style="font-size:12px;color:var(--tl);margin-bottom:12px">No data yet</div>`}
           <label style="cursor:pointer">
             <span class="btn-save" style="display:inline-block">${_pd_people.length ? 'Re-import people' : 'Choose people CSV'}</span>
