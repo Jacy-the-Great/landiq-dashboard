@@ -583,7 +583,7 @@ async function loadAll() {
       _cache[row.key] = row.value || [];
       lsWrite(row.key, row.value || []); // keep localStorage in sync
     });
-    _pd_deals  = dealsRows.map(r => r.raw);
+    _pd_deals  = pdNormaliseDeals(dealsRows.map(r => r.raw));
     _pd_people = pdNormalisePeople(peopleRows.map(r => r.raw));
     if (dealsRows.length)  _pd_deals_imported_at  = dealsRows[0].imported_at;
     if (peopleRows.length) _pd_people_imported_at = peopleRows[0].imported_at;
@@ -4736,6 +4736,45 @@ function pdNormalisePeople(rows) {
   });
 }
 
+// Deals equivalent — maps varying export headers to canonical 'Deal - X' keys AND
+// cleans currency-formatted values ("A$24,000" → 24000) so parseFloat works.
+// Runs on every load so it also repairs already-uploaded data with no re-upload.
+function pdNormaliseDeals(rows) {
+  if (!rows.length) return rows;
+  const d0 = rows[0];
+  const keys = Object.keys(d0);
+  const find = (...needles) => keys.find(k => needles.some(n => k.toLowerCase() === n.toLowerCase()))
+    || keys.find(k => needles.some(n => k.toLowerCase().includes(n.toLowerCase())));
+  // Only build a header map if the canonical keys aren't already present.
+  const needMap = !('Deal - Status' in d0);
+  const map = needMap ? {
+    'Deal - Title':          find('Deal - Title', 'Title'),
+    'Deal - Value':          find('Deal - Value', 'Value', 'Deal value'),
+    'Deal - Pipeline':       find('Deal - Pipeline', 'Pipeline'),
+    'Deal - Stage':          find('Deal - Stage', 'Stage'),
+    'Deal - Status':         find('Deal - Status', 'Status'),
+    'Deal - Won time':       find('Deal - Won time', 'Won time', 'Won date'),
+    'Deal - Lost time':      find('Deal - Lost time', 'Lost time', 'Lost date'),
+    'Deal - Deal created':   find('Deal - Deal created', 'Deal created', 'Created', 'Add time'),
+    'Deal - Category':       find('Deal - Category', 'Category', 'Label'),
+    'Deal - Owner':          find('Deal - Owner', 'Owner', 'Deal owner'),
+    'Deal - Source channel': find('Deal - Source channel', 'Source channel', 'Source'),
+    'Deal - Lost reason':    find('Deal - Lost reason', 'Lost reason'),
+    'Deal - Organisation':   find('Deal - Organisation', 'Organisation', 'Organization', 'Company'),
+    'Deal - Person':         find('Deal - Person', 'Contact person', 'Person', 'Contact'),
+  } : {};
+  const cleanNum = v => (v == null || v === '') ? v : String(v).replace(/[^0-9.\-]/g, '');
+  return rows.map(d => {
+    const n = {...d};
+    for (const [canonical, src] of Object.entries(map)) {
+      if (src && !(canonical in d)) n[canonical] = d[src] ?? '';
+    }
+    // Always sanitise the value (handles "A$24,000", "$8,800", "1,234.5", etc.)
+    if (n['Deal - Value'] != null) n['Deal - Value'] = cleanNum(n['Deal - Value']);
+    return n;
+  });
+}
+
 // ── DATE RANGE HELPERS ───────────────────
 function pdGetRange() {
   const r = activeSub.pd_range || 'all';
@@ -4945,7 +4984,7 @@ async function handleDealsImport(input) {
         const { error } = await sb.from('liq_pipedrive_deals').insert(rows.slice(i, i + batchSize).map(r => ({ raw: r })));
         if (error) { toast('Upload error: ' + error.message); return; }
       }
-      _pd_deals = rows;
+      _pd_deals = pdNormaliseDeals(rows);
       _pd_deals_imported_at = new Date().toISOString();
       toast('✓ Imported ' + rows.length + ' deals');
       renderPipedrive();
