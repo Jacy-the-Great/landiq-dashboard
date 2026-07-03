@@ -585,8 +585,11 @@ async function loadAll() {
     });
     _pd_deals  = pdNormaliseDeals(dealsRows.map(r => r.raw));
     _pd_people = pdNormalisePeople(peopleRows.map(r => r.raw));
-    if (dealsRows.length)  _pd_deals_imported_at  = dealsRows[0].imported_at;
-    if (peopleRows.length) _pd_people_imported_at = peopleRows[0].imported_at;
+    // Use the LATEST imported_at across rows (not an arbitrary row), so the
+    // displayed date is the true most-recent write for each table.
+    const maxTs = rows => rows.reduce((mx, r) => (r.imported_at && r.imported_at > mx) ? r.imported_at : mx, '') || null;
+    if (dealsRows.length)  _pd_deals_imported_at  = maxTs(dealsRows);
+    if (peopleRows.length) _pd_people_imported_at = maxTs(peopleRows);
 
     // ── Auto-restore: if main table is missing keys, try Supabase backup table first ──
     const missingKeys = Object.values(KEYS).filter(k => !_cache[k] || _cache[k].length === 0);
@@ -864,16 +867,29 @@ function startFlagObserver() {
 }
 
 // ── Data-source freshness banner (automatic — no manual flagging) ────────────
+// Deals and People are uploaded SEPARATELY, so each is tracked independently —
+// a fresh deals upload must never make the People data look current.
 function pdFreshnessHTML() {
-  const ts = _pd_deals_imported_at || _pd_people_imported_at;
-  if (!ts) return '<div class="freshness stale">⚠ No Pipedrive data imported yet — upload your Deals and People CSVs on the Import tab.</div>';
-  const d = new Date(ts);
-  const days = Math.floor((Date.now() - d.getTime()) / 86400000);
-  const cls = days > 14 ? 'stale' : days > 7 ? 'warn' : 'ok';
-  const msg = days > 7
-    ? `<span><b>⚠ Pipedrive data is from ${fmtDate(d)} — ${days} days old.</b> Every number on this tab (deal counts, revenue, subscribers) reflects that snapshot, <b>not today</b>. Re-upload the latest Deals &amp; People CSVs on the Import tab to bring it current.</span>`
-    : `<span>● Pipedrive data current as of <b>${fmtDate(d)}</b> (${days === 0 ? 'today' : days + ' day' + (days > 1 ? 's' : '') + ' ago'}).</span>`;
-  return `<div class="freshness ${cls}">${msg}</div>`;
+  if (!_pd_deals_imported_at && !_pd_people_imported_at)
+    return '<div class="freshness stale">⚠ No Pipedrive data imported yet — upload your Deals and People CSVs on the Import tab.</div>';
+  function part(label, ts) {
+    if (!ts) return { cls: 'stale', html: `⚠ <b>${label}:</b> never imported` };
+    const d = new Date(ts);
+    const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+    const cls = days > 14 ? 'stale' : days > 7 ? 'warn' : 'ok';
+    const age = days === 0 ? 'today' : days + ' day' + (days > 1 ? 's' : '') + ' ago';
+    return { cls, html: `${cls === 'ok' ? '●' : '⚠'} <b>${label}:</b> ${fmtDate(d)} (${age})` };
+  }
+  const dl = part('Deals', _pd_deals_imported_at);
+  const pl = part('People', _pd_people_imported_at);
+  const rank = { ok: 0, warn: 1, stale: 2 };
+  const worst = rank[dl.cls] >= rank[pl.cls] ? dl.cls : pl.cls;
+  const note = (dl.cls !== 'ok' || pl.cls !== 'ok')
+    ? `<div style="margin-top:5px;font-size:11.5px;opacity:.9">Deals and People are separate uploads — re-upload whichever is old on the Import tab. Any figure that combines both (subscribers, churn, health scores) is only as current as the <b>older</b> of the two.</div>`
+    : '';
+  return `<div class="freshness ${worst}"><div style="flex:1">
+    <span>${dl.html}</span> &nbsp;&nbsp;·&nbsp;&nbsp; <span>${pl.html}</span>${note}
+  </div></div>`;
 }
 
 function handleImportFile(input) {
