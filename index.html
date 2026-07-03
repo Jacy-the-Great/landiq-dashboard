@@ -972,6 +972,7 @@ const TABS = [
   { id: 'home',      label: 'Home' },
   { id: 'exec',      label: '📋 Exec Brief' },
   { id: 'pipedrive', label: 'Sales' },
+  { id: 'team',      label: 'Team' },
   { id: 'marketing', label: 'Marketing' },
   { id: 'tracker',   label: 'Weekly Tracker' },
   { id: 'training',  label: 'Training' },
@@ -997,7 +998,7 @@ function switchTab(id) {
 function renderTab(id) {
   const mc = document.getElementById('main-content');
   destroyAllCharts();
-  const renderers = { home: renderHome, exec: renderExec, pipedrive: renderPipedrive, training: renderTraining, marketing: renderMarketing, tracker: renderWeeklyTracker, activity: renderActivity };
+  const renderers = { home: renderHome, exec: renderExec, pipedrive: renderPipedrive, team: renderTeam, training: renderTraining, marketing: renderMarketing, tracker: renderWeeklyTracker, activity: renderActivity };
   if (renderers[id]) renderers[id](mc);
   injectFlags(mc);
 }
@@ -4950,6 +4951,158 @@ function pdRangeToggleHTML() {
       ${monthOpts}
     </select>
   </div>`;
+}
+
+// ── TEAM / KPI TAB (Option A: per-rep sales scorecard from Pipedrive) ─────────
+function loadTeamTargets() {
+  try { return { won: 5, revenue: 50000, winrate: 50, ...JSON.parse(localStorage.getItem('liq_team_targets') || '{}') }; }
+  catch { return { won: 5, revenue: 50000, winrate: 50 }; }
+}
+window.saveTeamTarget = (k, v) => { const t = loadTeamTargets(); t[k] = parseFloat(String(v).replace(/[^0-9.]/g, '')) || 0; localStorage.setItem('liq_team_targets', JSON.stringify(t)); renderTeam(); };
+window.setTeamGran    = g => { activeSub.team_gran = g; activeSub.team_period = null; renderTeam(); };
+window.setTeamPeriod  = p => { activeSub.team_period = p; renderTeam(); };
+window.setTeamMetric  = m => { activeSub.team_metric = m; renderTeam(); };
+
+function teamPeriodKey(d, gran) {
+  return gran === 'quarter'
+    ? d.getFullYear() + '-Q' + (Math.floor(d.getMonth() / 3) + 1)
+    : d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+function teamPeriodLabel(key, gran) {
+  if (gran === 'quarter') { const [y, q] = key.split('-Q'); return 'Q' + q + ' ' + y; }
+  const [y, m] = key.split('-'); return new Date(+y, +m - 1, 1).toLocaleDateString('en-AU', { month: 'short', year: 'numeric' });
+}
+function teamRecentPeriods(gran, count) {
+  const now = new Date(); const out = [];
+  if (gran === 'quarter') {
+    let y = now.getFullYear(), q = Math.floor(now.getMonth() / 3) + 1;
+    for (let i = 0; i < count; i++) { out.unshift(y + '-Q' + q); q--; if (q < 1) { q = 4; y--; } }
+  } else {
+    for (let i = count - 1; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); out.push(teamPeriodKey(d, 'month')); }
+  }
+  return out;
+}
+function teamInPeriod(dateStr, period, gran) {
+  const d = pdParseDate(dateStr); return pdValidDate(d) && teamPeriodKey(d, gran) === period;
+}
+
+function renderTeam(el) {
+  el = el || document.getElementById('main-content');
+  const gran = activeSub.team_gran || 'month';
+  const periods = teamRecentPeriods(gran, 6);
+  const curPeriod = (activeSub.team_period && periods.includes(activeSub.team_period)) ? activeSub.team_period : periods[periods.length - 1];
+  const t = loadTeamTargets();
+  const metric = activeSub.team_metric || 'won';
+  const pipeLabel = _pdSalesPipeline || 'All pipelines';
+  const deals = _pdSalesPipeline ? _pd_deals.filter(d => d['Deal - Pipeline'] === _pdSalesPipeline) : _pd_deals;
+  const owners = [...new Set(deals.map(d => (d['Deal - Owner'] || '').trim()).filter(Boolean))].sort();
+
+  function stats(owner, period) {
+    const od = deals.filter(d => (d['Deal - Owner'] || '').trim() === owner);
+    const won  = od.filter(d => d['Deal - Status'] === 'Won'  && teamInPeriod(d['Deal - Won time'],  period, gran));
+    const lost = od.filter(d => d['Deal - Status'] === 'Lost' && teamInPeriod(d['Deal - Lost time'], period, gran));
+    const revenue = won.reduce((s, d) => s + (parseFloat(d['Deal - Value']) || 0), 0);
+    const winrate = (won.length + lost.length) ? won.length / (won.length + lost.length) * 100 : null;
+    const cyc = won.map(d => { const c = pdParseDate(d['Deal - Deal created']), w = pdParseDate(d['Deal - Won time']); return (pdValidDate(c) && pdValidDate(w)) ? Math.round((w - c) / 86400000) : null; }).filter(v => v != null);
+    return { won: won.length, lost: lost.length, revenue, winrate, avgDeal: won.length ? revenue / won.length : null, avgCycle: cyc.length ? Math.round(cyc.reduce((a, b) => a + b, 0) / cyc.length) : null };
+  }
+
+  const isCurrent = curPeriod === periods[periods.length - 1];
+  const rows = owners.map(o => ({ owner: o, s: stats(o, curPeriod) }));
+  const totWon = rows.reduce((a, r) => a + r.s.won, 0);
+  const totLost = rows.reduce((a, r) => a + r.s.lost, 0);
+  const totRev = rows.reduce((a, r) => a + r.s.revenue, 0);
+  const cellCol = (val, target) => target > 0 ? (val >= target ? '#2a7a4b' : val >= target * 0.7 ? '#c25a00' : '#c0392b') : 'var(--tx)';
+
+  el.innerHTML = `
+    <div class="section-header">
+      <div>
+        <div class="section-title">Team performance</div>
+        <div class="section-sub">Per-rep sales KPIs · live from Pipedrive · ${pipeLabel}</div>
+      </div>
+    </div>
+    ${!_pd_deals.length ? '<div class="freshness stale">⚠ No Pipedrive deals loaded — import them on the Sales → Import tab.</div>' : pdFreshnessHTML()}
+
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:14px">
+      <div class="range-toggle">
+        <button class="range-btn${gran==='month'?' active':''}" onclick="setTeamGran('month')">Monthly</button>
+        <button class="range-btn${gran==='quarter'?' active':''}" onclick="setTeamGran('quarter')">Quarterly</button>
+      </div>
+      <select onchange="setTeamPeriod(this.value)" title="Choose which ${gran} to view"
+        style="font-size:12px;padding:5px 8px;border-radius:6px;border:1.5px solid var(--acc);background:var(--acc);color:#fff;cursor:pointer;font-family:inherit">
+        ${periods.slice().reverse().map(p => `<option value="${p}"${p===curPeriod?' selected':''}>${teamPeriodLabel(p, gran)}${p===periods[periods.length-1]?' · current':''}</option>`).join('')}
+      </select>
+    </div>
+
+    <div class="box" style="margin-bottom:14px">
+      <div class="box-title">Targets — per rep, per ${gran==='quarter'?'quarter':'month'}</div>
+      <div style="display:flex;gap:22px;flex-wrap:wrap;font-size:13px;align-items:center">
+        <label>Won deals <input type="number" value="${t.won}" onchange="saveTeamTarget('won',this.value)" style="width:70px;margin-left:5px;padding:4px 6px;border:1px solid var(--bd);border-radius:6px"></label>
+        <label>Revenue $ <input type="number" value="${t.revenue}" onchange="saveTeamTarget('revenue',this.value)" style="width:110px;margin-left:5px;padding:4px 6px;border:1px solid var(--bd);border-radius:6px"></label>
+        <label>Win rate % <input type="number" value="${t.winrate}" onchange="saveTeamTarget('winrate',this.value)" style="width:70px;margin-left:5px;padding:4px 6px;border:1px solid var(--bd);border-radius:6px"></label>
+        <span style="color:var(--tl);font-size:11px">Applied to each rep · saved on this device</span>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="box-title">Scorecard — ${teamPeriodLabel(curPeriod, gran)}${isCurrent?' <span style="color:var(--tl);font-weight:400">(in progress)</span>':''}</div>
+      ${owners.length ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">
+        <thead><tr style="border-bottom:2px solid var(--bor)">
+          <th style="text-align:left;padding:7px 8px">Rep</th>
+          <th style="text-align:right;padding:7px 8px">Won</th>
+          <th style="text-align:right;padding:7px 8px">Revenue</th>
+          <th style="text-align:right;padding:7px 8px">Win rate</th>
+          <th style="text-align:right;padding:7px 8px">Avg deal</th>
+          <th style="text-align:right;padding:7px 8px">Avg cycle</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r => `<tr style="border-bottom:1px solid var(--bg2)">
+            <td style="padding:7px 8px;font-weight:500">${r.owner}</td>
+            <td style="text-align:right;padding:7px 8px;font-weight:600;color:${cellCol(r.s.won, t.won)}">${r.s.won}</td>
+            <td style="text-align:right;padding:7px 8px;font-weight:600;color:${cellCol(r.s.revenue, t.revenue)}">${r.s.revenue?fmtCur(r.s.revenue):'—'}</td>
+            <td style="text-align:right;padding:7px 8px;color:${r.s.winrate!=null?cellCol(r.s.winrate,t.winrate):'var(--tl)'}">${r.s.winrate!=null?fmtPct(r.s.winrate):'—'}</td>
+            <td style="text-align:right;padding:7px 8px">${r.s.avgDeal?fmtCur(r.s.avgDeal):'—'}</td>
+            <td style="text-align:right;padding:7px 8px">${r.s.avgCycle!=null?r.s.avgCycle+'d':'—'}</td>
+          </tr>`).join('')}
+          <tr style="border-top:2px solid var(--bor);font-weight:700">
+            <td style="padding:7px 8px">Team total</td>
+            <td style="text-align:right;padding:7px 8px">${totWon}</td>
+            <td style="text-align:right;padding:7px 8px">${totRev?fmtCur(totRev):'—'}</td>
+            <td style="text-align:right;padding:7px 8px">${(totWon+totLost)?fmtPct(totWon/(totWon+totLost)*100):'—'}</td>
+            <td colspan="2"></td>
+          </tr>
+        </tbody></table></div>
+        <div style="font-size:11px;color:var(--tl);margin-top:8px">Green = at/above target · amber = within 30% · red = below.${isCurrent?' This period is still in progress, so it will build through the '+(gran==='quarter'?'quarter':'month')+'.':''}</div>`
+      : '<div class="no-data">No deal owners found — make sure your Deals export includes the <b>Owner</b> column.</div>'}
+    </div>
+
+    <div class="box">
+      <div class="box-title">Trend — ${metric==='revenue'?'revenue':'won deals'} per rep · last ${periods.length} ${gran==='quarter'?'quarters':'months'}
+        <span style="margin-left:auto;display:inline-flex;gap:4px">
+          <button class="range-btn${metric==='won'?' active':''}" onclick="setTeamMetric('won')">Won</button>
+          <button class="range-btn${metric==='revenue'?' active':''}" onclick="setTeamMetric('revenue')">Revenue</button>
+        </span>
+      </div>
+      ${owners.length?`<div class="chart-wrap" style="height:300px"><canvas id="team-trend"></canvas></div>`:'<div class="no-data">No data.</div>'}
+    </div>`;
+
+  if (owners.length) {
+    const palette = ['#2e8bc0','#2a7a4b','#c25a00','#7b1fa2','#c0392b','#1a3c5e','#e6a817','#00796b','#d4537e','#3949ab'];
+    const datasets = owners.map((o, i) => ({
+      label: o,
+      data: periods.map(p => { const s = stats(o, p); return metric === 'revenue' ? s.revenue : s.won; }),
+      borderColor: palette[i % palette.length], backgroundColor: palette[i % palette.length],
+      borderWidth: 2, tension: .3, pointRadius: 3, fill: false,
+    }));
+    makeChart('team-trend', {
+      type: 'line',
+      data: { labels: periods.map(p => teamPeriodLabel(p, gran)), datasets },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+        scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: { ...axStyle, callback: v => metric === 'revenue' ? '$' + (v / 1000).toFixed(0) + 'k' : v }, beginAtZero: true } }
+      }
+    });
+  }
 }
 
 function renderPipedrive(el) {
