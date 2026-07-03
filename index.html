@@ -5201,13 +5201,13 @@ function renderPdRevenue(sc) {
     <div class="cards" style="margin-bottom:18px">
       <div class="card">
         <div class="card-label" style="display:flex;align-items:center;gap:0">Total contracted revenue (all time)${infoBtn('Total contracted revenue','<span class="src-tag">Pipedrive · Won Deals</span><br>Sum of <b>Deal Value</b> across all won deals, ever. Total revenue ever signed — not adjusted for customers who later left.<br><div class="calc-row">SUM(Deal Value) where Status = "Won"</div>')}</div>
-        <div class="card-value">${fmtCur(totalBooked)}</div>
-        <div class="card-sub">vs $${(TARGET_ARR/1e6).toFixed(1)}M target · ${fmtPct(arrGapPct)} there</div>
+        <div class="card-value" style="cursor:help" title="Exact: ${fmtDollar(totalBooked)}  (sum of ${wonDeals.length} won deals)">${fmtCur(totalBooked)}</div>
+        <div class="card-sub">vs $${(TARGET_ARR/1e6).toFixed(1)}M target · ${fmtPct(arrGapPct)} there · hover for exact $</div>
       </div>
       <div class="card">
         <div class="card-label" style="display:flex;align-items:center;gap:0">Active customer revenue (gross)${infoBtn('Active customer revenue (gross)','<span class="src-tag">Pipedrive · People + Deals</span><br>Real sum of the actual contract value of every organisation that still has at least one active paying person. Linked by organisation name; counts each org\'s largest won deal once to avoid double-counting seats.<br><div class="calc-row">SUM(largest won Deal Value per still-active organisation)</div>This is gross signed revenue from current customers — not adjusted for partial-year or discounts.')}</div>
         ${estActiveARR != null
-          ? `<div class="card-value">${fmtCur(estActiveARR)}</div><div class="card-sub">${matchedActiveOrgs} active orgs matched to a deal</div>`
+          ? `<div class="card-value" style="cursor:help" title="Exact: ${fmtDollar(estActiveARR)}">${fmtCur(estActiveARR)}</div><div class="card-sub">${matchedActiveOrgs} active orgs matched to a deal</div>`
           : `<div class="card-nodata">import people CSV</div>`}
       </div>
       <div class="card">
@@ -5224,7 +5224,7 @@ function renderPdRevenue(sc) {
       </div>
       <div class="card">
         <div class="card-label" style="display:flex;align-items:center;gap:0">Gap to $2.4M target${infoBtn('Gap to $2.4M target','<span class="src-tag">Calculated</span><br>Difference between the $2.4M yearly revenue target and total contracted revenue. How much more needs to be signed to hit the annual goal.<br><div class="calc-row">$2.4M − total contracted revenue</div>')}</div>
-        <div class="card-value" style="color:${arrGap > 0 ? 'var(--re)' : 'var(--gr)'}">${arrGap > 0 ? '−' : '+'}${fmtCur(Math.abs(arrGap))}</div>
+        <div class="card-value" style="cursor:help;color:${arrGap > 0 ? 'var(--re)' : 'var(--gr)'}" title="Exact: ${fmtDollar(Math.abs(arrGap))}">${arrGap > 0 ? '−' : '+'}${fmtCur(Math.abs(arrGap))}</div>
         <div class="card-sub">${arrGap > 0 ? 'still needed' : 'target exceeded'}</div>
       </div>
     </div>
