@@ -5046,7 +5046,10 @@ function renderPdImport(sc) {
   sc.innerHTML = `
     <div class="box">
       <div class="box-title">Import Pipedrive data</div>
-      <p style="font-size:13px;color:var(--tm);margin-bottom:16px">Export CSVs from Pipedrive → ··· → Export → CSV. Import Deals and People separately. Re-importing replaces all existing data.</p>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+        <p style="font-size:13px;color:var(--tm);margin:0;flex:1;min-width:220px">Export CSVs from Pipedrive → ⋯ → Export filter results → CSV. Import Deals and People separately. Re-importing replaces all existing data.</p>
+        <button onclick="showExportGuide()" class="btn-save" style="display:inline-block;white-space:nowrap">📖 How to export correctly</button>
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
         <div style="border:2px dashed var(--bd);border-radius:10px;padding:24px;text-align:center">
           <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:8px">Deals CSV</div>
@@ -7611,6 +7614,61 @@ function showInfo(title, body) {
 }
 function closeInfo() {
   document.getElementById('info-overlay').classList.remove('open');
+}
+
+// ── Pipedrive export guide (infographic modal) ───────────────────────────────
+function showExportGuide() {
+  let ov = document.getElementById('export-guide-overlay');
+  if (ov) { ov.style.display = 'flex'; return; }
+  ov = document.createElement('div');
+  ov.id = 'export-guide-overlay';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(20,30,40,.55);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto';
+  ov.onclick = e => { if (e.target === ov) ov.style.display = 'none'; };
+  const step = (n, html) => `<div style="display:flex;gap:10px;margin-bottom:11px;align-items:flex-start">
+    <span style="flex-shrink:0;width:22px;height:22px;border-radius:50%;background:var(--navy);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center">${n}</span>
+    <span style="font-size:13px;line-height:1.5;color:var(--tx)">${html}</span></div>`;
+  const col = (title, colour, steps) => `<div style="flex:1;min-width:260px;background:var(--bg2);border-radius:10px;padding:16px 18px">
+    <div style="font-size:14px;font-weight:700;color:${colour};margin-bottom:12px;display:flex;align-items:center;gap:7px">${title}</div>${steps}</div>`;
+  ov.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:780px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.3);position:relative;overflow:hidden">
+    <div style="background:var(--navy);color:#fff;padding:18px 24px">
+      <button onclick="document.getElementById('export-guide-overlay').style.display='none'" style="position:absolute;top:14px;right:16px;background:none;border:none;color:#fff;font-size:18px;cursor:pointer;line-height:1">✕</button>
+      <div style="font-size:17px;font-weight:700">How to export from Pipedrive</div>
+      <div style="font-size:12.5px;opacity:.85;margin-top:3px">Two CSVs — Deals and People. Export each the same way; the People one <b>must</b> include the custom fields.</div>
+    </div>
+    <div style="padding:22px 24px">
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        ${col('💰 Deals CSV', 'var(--navy)', [
+          step(1, '<b>Deals</b> (left sidebar) → switch to <b>List view</b> (the rows icon, not the kanban board).'),
+          step(2, 'Set the filter to <b>“All deals”</b> and owner to <b>“Everyone”</b> — so you get won <i>and</i> lost <i>and</i> open, for everyone.'),
+          step(3, 'Click the <b>columns / gear icon</b> and switch on: Value, Status, Stage, Pipeline, Won time, Deal created, Owner, Source, Organisation.'),
+          step(4, 'Tick the <b>checkbox in the header row</b> to select all (click “Select all NN” if it appears).'),
+          step(5, 'Click <b>“⋯” → Export filter results → CSV</b>. If asked, choose <b>All columns</b>.'),
+          step(6, 'Back here → <b>Re-import deals</b>.'),
+        ].join(''))}
+        ${col('👥 People CSV', '#2a7a4b', [
+          step(1, '<b>Contacts → People</b> → <b>List view</b>.'),
+          step(2, 'Filter <b>“All people”</b>, owner <b>“Everyone”</b>.'),
+          step(3, '<b style="color:#c0392b">The important bit:</b> click the <b>columns / gear icon</b> and switch ON these custom fields:'),
+          `<div style="margin:0 0 11px 32px;font-size:12.5px;line-height:1.9">
+            <span style="background:#fdeeee;color:#b0342b;border-radius:4px;padding:1px 7px;font-weight:600">Customer Type</span>
+            <span style="background:#fdeeee;color:#b0342b;border-radius:4px;padding:1px 7px;font-weight:600">Previous Customer Type</span>
+            <span style="background:#fdeeee;color:#b0342b;border-radius:4px;padding:1px 7px;font-weight:600">Date Access Granted</span>
+            <span style="background:#fdeeee;color:#b0342b;border-radius:4px;padding:1px 7px;font-weight:600">Date Access Removed</span>
+            <span style="color:var(--tl)">+ Organisation, Email</span>
+          </div>`,
+          step(4, 'Select all → <b>“⋯” → Export filter results → CSV → All columns</b>.'),
+          step(5, 'Back here → <b>Re-import people</b>.'),
+        ].join(''))}
+      </div>
+      <div style="margin-top:16px;background:#fdf6e9;border:1px solid #f0d9a8;border-radius:8px;padding:12px 15px;font-size:12.5px;color:#8a5a00;line-height:1.5">
+        <b>Why the People custom fields matter:</b> Customer Type, the access dates and previous type are what <b>every</b> subscriber, trial, churn, renewal and health number is built on. If they’re not ticked on before exporting, those metrics show zero — and the <b>Field check</b> below will flag them red.
+      </div>
+      <div style="margin-top:14px;text-align:right">
+        <button onclick="document.getElementById('export-guide-overlay').style.display='none'" class="btn-save" style="display:inline-block">Got it</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
 }
 </script>
 
