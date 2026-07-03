@@ -4791,6 +4791,70 @@ function pdNormaliseDeals(rows) {
   });
 }
 
+// ── REQUIRED-FIELD VALIDATION ────────────────────────────────────────────────
+// The dashboard declares the fields each indicator depends on, then checks every
+// import for them — so a Pipedrive export that dropped a column (e.g. the People
+// export without Customer Type) is caught and flagged instead of silently
+// zeroing metrics.
+const PD_FIELDS = {
+  deals: [
+    { key: 'Deal - Status',         label: 'Status (won/lost/open)', req: true,  used: 'Won/lost counts, win rate, revenue' },
+    { key: 'Deal - Value',          label: 'Value ($)',              req: true,  used: 'All revenue figures' },
+    { key: 'Deal - Pipeline',       label: 'Pipeline',               req: true,  used: '2026 Sales filtering' },
+    { key: 'Deal - Stage',          label: 'Stage',                  req: true,  used: 'Funnels, OPTI-MAX, stage snapshot' },
+    { key: 'Deal - Won time',       label: 'Won time',               req: true,  used: 'Revenue by month, sales cycle' },
+    { key: 'Deal - Deal created',   label: 'Deal created',           req: false, used: 'Sales cycle length' },
+    { key: 'Deal - Organisation',   label: 'Organisation',           req: false, used: 'Revenue by organisation' },
+    { key: 'Deal - Lost time',      label: 'Lost time',              req: false, used: 'Lost-by-month' },
+    { key: 'Deal - Owner',          label: 'Owner',                  req: false, used: 'Deals by owner' },
+    { key: 'Deal - Source channel', label: 'Source channel',         req: false, used: 'Source performance, win/loss' },
+    { key: 'Deal - Lost reason',    label: 'Lost reason',            req: false, used: 'Win/loss analysis' },
+  ],
+  people: [
+    { key: 'Person - Customer Type',          label: 'Customer Type',          req: true,  used: 'Subscribers, trials, churn — everything' },
+    { key: 'Person - Date Access Granted',    label: 'Date Access Granted',    req: true,  used: 'Tenure, renewals, trained, active' },
+    { key: 'Person - Date Access Removed',    label: 'Date Access Removed',    req: true,  used: 'Active vs churned detection' },
+    { key: 'Person - Organisation',           label: 'Organisation',           req: true,  used: 'Org grouping, councils, health' },
+    { key: 'Person - Previous Customer Type', label: 'Previous Customer Type', req: false, used: 'Churn + trial→paid conversion' },
+    { key: 'Person - Email',                  label: 'Email',                  req: false, used: 'Linking usage to customers' },
+  ],
+};
+
+// For each declared field: is the column present, and what % of rows are filled?
+function pdFieldReport(rows, kind) {
+  const fields = PD_FIELDS[kind] || [];
+  const n = rows.length;
+  return fields.map(f => {
+    const filled = n ? rows.reduce((c, r) => c + ((r[f.key] != null && String(r[f.key]).trim() !== '') ? 1 : 0), 0) : 0;
+    const pct = n ? Math.round(filled / n * 100) : 0;
+    const status = filled === 0 ? 'missing' : pct < 40 ? 'partial' : 'ok';
+    return { ...f, filled, n, pct, status };
+  });
+}
+
+// A red banner listing any REQUIRED field that's missing/empty across loaded data.
+function pdFieldWarningHTML() {
+  const probs = [];
+  if (_pd_deals.length)  pdFieldReport(_pd_deals, 'deals').forEach(f => { if (f.req && f.status === 'missing') probs.push('Deals → <b>' + f.label + '</b>'); });
+  if (_pd_people.length) pdFieldReport(_pd_people, 'people').forEach(f => { if (f.req && f.status === 'missing') probs.push('People → <b>' + f.label + '</b>'); });
+  if (!probs.length) return '';
+  return `<div class="freshness stale"><span>⚠ <b>Missing required field${probs.length > 1 ? 's' : ''}:</b> ${probs.join(' · ')}. Any metric built on ${probs.length > 1 ? 'these' : 'this'} will be blank or wrong — re-export from Pipedrive with the column${probs.length > 1 ? 's' : ''} included (see the Import tab checklist).</span></div>`;
+}
+
+// Per-file field checklist for the Import tab.
+function pdFieldChecklistHTML(rows, kind) {
+  if (!rows.length) return '';
+  const rep = pdFieldReport(rows, kind);
+  const mark = s => s === 'ok' ? '<span style="color:var(--gr)">✓</span>' : s === 'partial' ? '<span style="color:#c25a00">◐</span>' : '<span style="color:#c0392b">✗</span>';
+  return `<div style="text-align:left;margin-top:14px;border-top:1px solid var(--bd);padding-top:10px">
+    <div style="font-weight:600;color:var(--navy);margin-bottom:6px;font-size:11px">Field check</div>
+    ${rep.map(f => `<div title="${f.used}" style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;font-size:11px;color:${(f.status === 'missing' && f.req) ? '#c0392b' : 'var(--tm)'}">
+      <span>${mark(f.status)} ${f.label}${f.req ? '' : ' <span style="color:var(--tl)">· optional</span>'}</span>
+      <span style="color:var(--tl);white-space:nowrap">${f.status === 'missing' ? (f.req ? 'MISSING' : 'not present') : f.pct + '% filled'}</span>
+    </div>`).join('')}
+  </div>`;
+}
+
 // ── DATE RANGE HELPERS ───────────────────
 function pdGetRange() {
   const r = activeSub.pd_range || 'all';
@@ -4931,6 +4995,7 @@ function renderPipedrive(el) {
       ${pdRangeToggleHTML()}
     </div>
     ${pdFreshnessHTML()}
+    ${pdFieldWarningHTML()}
     ${cardsHTML([
       ['Won deals (' + plLabel + ')', wonDeals.length || null, null, null, range.label,
         '<span class="src-tag">Pipedrive · ' + plLabel + '</span><br>Deals with <b>Status = Won</b> and <b>Won time</b> within the selected date range.<br><div class="calc-row">Pipeline = "' + plLabel + '" AND Status = "Won" AND Won time in range</div>Currently showing: <b>' + range.label + '</b>'],
@@ -4992,6 +5057,7 @@ function renderPdImport(sc) {
             <span class="btn-save" style="display:inline-block">${_pd_deals.length ? 'Re-import deals' : 'Choose deals CSV'}</span>
             <input type="file" accept=".csv" style="display:none" onchange="handleDealsImport(this)">
           </label>
+          ${pdFieldChecklistHTML(_pd_deals, 'deals')}
         </div>
         <div style="border:2px dashed var(--bd);border-radius:10px;padding:24px;text-align:center">
           <div style="font-size:13px;font-weight:600;color:var(--navy);margin-bottom:8px">People CSV</div>
@@ -5002,6 +5068,7 @@ function renderPdImport(sc) {
             <span class="btn-save" style="display:inline-block">${_pd_people.length ? 'Re-import people' : 'Choose people CSV'}</span>
             <input type="file" accept=".csv" style="display:none" onchange="handlePeopleImport(this)">
           </label>
+          ${pdFieldChecklistHTML(_pd_people, 'people')}
         </div>
       </div>
     </div>
@@ -5044,6 +5111,8 @@ async function handleDealsImport(input) {
       const rows = results.data;
       const warns = pdValidateImport(rows, 'deals');
       if (warns.length) toast('⚠ Data check: ' + warns.join(' · '), 7000);
+      const missReq = pdFieldReport(pdNormaliseDeals(rows), 'deals').filter(f => f.req && f.status === 'missing');
+      if (missReq.length) toast('⚠ Missing required column(s): ' + missReq.map(f => f.label).join(', ') + ' — re-export with these fields or some metrics will be blank.', 9000);
       toast('Uploading ' + rows.length + ' deals…');
       await sb.from('liq_pipedrive_deals').delete().gte('imported_at', '1970-01-01T00:00:00Z');
       const batchSize = 100;
@@ -5070,6 +5139,8 @@ async function handlePeopleImport(input) {
       const rows = results.data;
       const warns = pdValidateImport(rows, 'people');
       if (warns.length) toast('⚠ Data check: ' + warns.join(' · '), 7000);
+      const missReqP = pdFieldReport(pdNormalisePeople(rows), 'people').filter(f => f.req && f.status === 'missing');
+      if (missReqP.length) toast('⚠ Missing required column(s): ' + missReqP.map(f => f.label).join(', ') + ' — re-export with these fields or subscriber/churn metrics will be blank.', 9000);
       toast('Uploading ' + rows.length + ' people…');
       await sb.from('liq_pipedrive_people').delete().gte('imported_at', '1970-01-01T00:00:00Z');
       const batchSize = 100;
