@@ -213,6 +213,21 @@ tr:hover td{background:#fafcfe}
   .chart-wrap { max-height:180px!important; }
   #main-content { padding:0!important; }
 }
+/* ── Metric trust flags ── */
+.flag-dot{display:none;width:9px;height:9px;border-radius:50%;margin-left:6px;vertical-align:middle;box-sizing:border-box;border:1.5px solid transparent;flex-shrink:0}
+.flag-dot.green{display:inline-block;background:#2a7a4b}
+.flag-dot.yellow{display:inline-block;background:#e6a817}
+.flag-dot.red{display:inline-block;background:#e05252}
+body.review-mode .flag-dot{display:inline-block;cursor:pointer;background:transparent;border-color:#c4c4c4}
+body.review-mode .flag-dot.green{background:#2a7a4b;border-color:#2a7a4b}
+body.review-mode .flag-dot.yellow{background:#e6a817;border-color:#e6a817}
+body.review-mode .flag-dot.red{background:#e05252;border-color:#e05252}
+body.review-mode .flag-dot:hover{transform:scale(1.35)}
+/* ── Data-source freshness banner ── */
+.freshness{display:flex;align-items:center;gap:8px;font-size:12.5px;line-height:1.5;padding:9px 13px;border-radius:8px;margin-bottom:14px;border:1px solid}
+.freshness.ok{background:#eef7f1;border-color:#b3dfc5;color:#1f6740}
+.freshness.warn{background:#fdf6e9;border-color:#f0d9a8;color:#8a5a00}
+.freshness.stale{background:#fdeeee;border-color:#f2c2c2;color:#b0342b}
 </style>
 </head>
 <body>
@@ -260,6 +275,7 @@ tr:hover td{background:#fafcfe}
     </div>
     <div class="h-actions">
       <span id="header-user" style="font-size:11px;color:var(--tl);margin-right:4px"></span>
+      <button class="h-link" id="review-toggle" onclick="toggleReviewMode()" title="Show trust flags and click any dot to rate a metric green / yellow / red">⚑ Review mode</button>
       <button class="h-link" onclick="exportData()">⬇ Export</button>
       <button class="h-link" onclick="document.getElementById('import-file').click()">⬆ Import</button>
       <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(this)">
@@ -269,6 +285,7 @@ tr:hover td{background:#fafcfe}
   </header>
 
   <nav id="main-nav"></nav>
+  <div id="flag-legend" style="font-size:11px;color:var(--tl);padding:0 24px;height:0;overflow:hidden;transition:height .15s"></div>
   <main id="main-content"></main>
 </div>
 
@@ -750,6 +767,115 @@ function importBackup(json) {
   } catch { toast('Import failed: invalid JSON.'); }
 }
 
+// ─────────────────────────────────────────
+// METRIC TRUST FLAGS  (green = trusted · yellow = check · red = known error)
+// Stored in Supabase so the flags are the same for everyone who opens the board.
+// Hidden by default; a header "Review mode" toggle reveals + lets you set them.
+// ─────────────────────────────────────────
+let _metricFlags = {};
+let _reviewMode  = false;
+
+function flagKey(text) {
+  return activeTab + '|' + text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 48);
+}
+
+async function loadMetricFlags() {
+  try { _metricFlags = JSON.parse(localStorage.getItem('liq_metric_flags') || '{}'); } catch { _metricFlags = {}; }
+  try {
+    const { data } = await sb.from('dashboard_data').select('value').eq('key', 'metric_flags').maybeSingle();
+    if (data && data.value && typeof data.value === 'object') {
+      _metricFlags = data.value;
+      localStorage.setItem('liq_metric_flags', JSON.stringify(_metricFlags));
+    }
+  } catch (e) { /* offline — keep local copy */ }
+}
+
+function saveMetricFlags() {
+  localStorage.setItem('liq_metric_flags', JSON.stringify(_metricFlags));
+  sb.from('dashboard_data').upsert({ key: 'metric_flags', value: _metricFlags, updated_at: new Date().toISOString() })
+    .then(({ error }) => { if (error) console.warn('flag save failed:', error.message); });
+}
+
+function _flagLabelText(el) {
+  const c = el.cloneNode(true);
+  c.querySelectorAll('button, .info-btn, .flag-dot').forEach(n => n.remove());
+  return c.textContent.replace(/\s+/g, ' ').trim();
+}
+
+// Adds a trust dot to every metric label/title. Idempotent — safe to call on
+// every DOM change (a MutationObserver does exactly that, to catch sub-tabs).
+function injectFlags(root) {
+  root = root || document.getElementById('main-content');
+  if (!root) return;
+  root.querySelectorAll('.card-label, .box-title').forEach(el => {
+    if (el.querySelector(':scope > .flag-dot')) return;
+    const txt = _flagLabelText(el);
+    if (!txt || txt.length < 3) return;
+    const key = flagKey(txt);
+    const status = _metricFlags[key] || '';
+    const dot = document.createElement('span');
+    dot.className = 'flag-dot' + (status ? ' ' + status : '');
+    dot.dataset.fk = key;
+    dot.title = status ? `Trust: ${status} — click to change` : 'Unrated — click to set trust';
+    el.appendChild(dot);
+  });
+}
+
+document.addEventListener('click', e => {
+  const dot = e.target.closest ? e.target.closest('.flag-dot') : null;
+  if (!dot || !_reviewMode) return;
+  e.stopPropagation();
+  const order = ['', 'green', 'yellow', 'red'];
+  const cur = _metricFlags[dot.dataset.fk] || '';
+  const next = order[(order.indexOf(cur) + 1) % order.length];
+  if (next) _metricFlags[dot.dataset.fk] = next; else delete _metricFlags[dot.dataset.fk];
+  dot.className = 'flag-dot' + (next ? ' ' + next : '');
+  dot.title = next ? `Trust: ${next} — click to change` : 'Unrated — click to set trust';
+  saveMetricFlags();
+  updateFlagLegend();
+});
+
+function toggleReviewMode() {
+  _reviewMode = !_reviewMode;
+  document.body.classList.toggle('review-mode', _reviewMode);
+  const btn = document.getElementById('review-toggle');
+  if (btn) { btn.textContent = _reviewMode ? '✓ Review mode on' : '⚑ Review mode'; btn.style.color = _reviewMode ? '#2a7a4b' : ''; }
+  const leg = document.getElementById('flag-legend');
+  if (leg) leg.style.height = _reviewMode ? '22px' : '0';
+  updateFlagLegend();
+}
+
+function updateFlagLegend() {
+  const el = document.getElementById('flag-legend');
+  if (!el) return;
+  if (!_reviewMode) { el.innerHTML = ''; return; }
+  const v = Object.values(_metricFlags);
+  const g = v.filter(x => x === 'green').length, y = v.filter(x => x === 'yellow').length, r = v.filter(x => x === 'red').length;
+  el.innerHTML = `<span style="padding:3px 0;display:inline-block">Click any dot to rate: `
+    + `<span style="color:#1f6740;font-weight:600">● ${g} trusted</span> · `
+    + `<span style="color:#8a5a00;font-weight:600">● ${y} check</span> · `
+    + `<span style="color:#b0342b;font-weight:600">● ${r} known error</span></span>`;
+}
+
+function startFlagObserver() {
+  const mc = document.getElementById('main-content');
+  if (!mc || !window.MutationObserver) return;
+  new MutationObserver(() => injectFlags(mc)).observe(mc, { childList: true, subtree: true });
+}
+
+// ── Data-source freshness banner (automatic — no manual flagging) ────────────
+function pdFreshnessHTML() {
+  const ts = _pd_deals_imported_at || _pd_people_imported_at;
+  if (!ts) return '<div class="freshness stale">⚠ No Pipedrive data imported yet — upload your Deals and People CSVs on the Import tab.</div>';
+  const d = new Date(ts);
+  const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+  const cls = days > 14 ? 'stale' : days > 7 ? 'warn' : 'ok';
+  const msg = days > 7
+    ? `<span><b>⚠ Pipedrive data is from ${fmtDate(d)} — ${days} days old.</b> Every number on this tab (deal counts, revenue, subscribers) reflects that snapshot, <b>not today</b>. Re-upload the latest Deals &amp; People CSVs on the Import tab to bring it current.</span>`
+    : `<span>● Pipedrive data current as of <b>${fmtDate(d)}</b> (${days === 0 ? 'today' : days + ' day' + (days > 1 ? 's' : '') + ' ago'}).</span>`;
+  return `<div class="freshness ${cls}">${msg}</div>`;
+}
+
 function handleImportFile(input) {
   const file = input.files[0];
   if (!file) return;
@@ -857,6 +983,7 @@ function renderTab(id) {
   destroyAllCharts();
   const renderers = { home: renderHome, exec: renderExec, pipedrive: renderPipedrive, training: renderTraining, marketing: renderMarketing, tracker: renderWeeklyTracker, activity: renderActivity };
   if (renderers[id]) renderers[id](mc);
+  injectFlags(mc);
 }
 
 function destroyAllCharts() {
@@ -4706,6 +4833,7 @@ function renderPipedrive(el) {
       </div>
       ${pdRangeToggleHTML()}
     </div>
+    ${pdFreshnessHTML()}
     ${cardsHTML([
       ['Won deals (' + plLabel + ')', wonDeals.length || null, null, null, range.label,
         '<span class="src-tag">Pipedrive · ' + plLabel + '</span><br>Deals with <b>Status = Won</b> and <b>Won time</b> within the selected date range.<br><div class="calc-row">Pipeline = "' + plLabel + '" AND Status = "Won" AND Won time in range</div>Currently showing: <b>' + range.label + '</b>'],
@@ -7272,8 +7400,10 @@ function updateDbStatusPill() {
 
 async function init() {
   await loadAll();
+  await loadMetricFlags();
   updateDbStatusPill();
   buildNav();
+  startFlagObserver();
   renderTab('home');
   // Load PostHog live data in background (non-blocking)
   loadPostHogLive().then(() => {
