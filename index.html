@@ -912,6 +912,8 @@ function confirmClear() {
 // HELPERS
 // ─────────────────────────────────────────
 const fmtDate = d => d ? new Date(d).toLocaleDateString('en-AU', { day:'2-digit', month:'short', year:'numeric' }) : ':';
+// Chart axis labels: '16 Mar' — readable at a glance (vs raw '03-16')
+const shortDate = s => { const d = new Date(s); return isNaN(d) ? (s || '') : d.toLocaleDateString('en-AU', { day:'numeric', month:'short' }); };
 const fmtNum  = n => n != null ? Number(n).toLocaleString() : ':';
 const fmtPct  = n => n != null ? Number(n).toFixed(1) + '%' : ':';
 const fmtDollar = n => n != null ? '$' + Number(n).toLocaleString() : ':';
@@ -2391,7 +2393,7 @@ function saveWebsiteDaily() {
 // ─────────────────────────────────────────
 function renderActivity(el) {
   el = el || document.getElementById('main-content');
-  const sub = activeSub.activity_sub || 'giraffe';
+  const sub = (activeSub.activity_sub === 'labs' ? 'giraffe' : activeSub.activity_sub) || 'giraffe';
 
   const giraffe = load('activity_giraffe');
   const sdk     = load('activity_sdk');
@@ -2481,9 +2483,9 @@ function renderActivity(el) {
     ])}
 
     <div class="sub-tabs">
-      ${['giraffe','sdk','labs','retention','insights'].map(s =>
+      ${['giraffe','sdk','retention','insights'].map(s =>
         `<button class="sub-tab${sub===s?' active':''}" onclick="setActivitySub('${s}')">${
-          {giraffe:'Giraffe',sdk:'SDK / Features',labs:'Land iQ Labs',retention:'Retention',insights:'Insights'}[s]
+          {giraffe:'Giraffe',sdk:'SDK / Features',retention:'Retention',insights:'Insights'}[s]
         }</button>`
       ).join('')}
     </div>
@@ -2600,7 +2602,7 @@ function setActivitySub(sub, rerender = true, data) {
       makeChart('act-giraffe-chart', {
         type: 'line',
         data: {
-          labels: wkData.map(r => (r.week_start||'').slice(5,10) + (isPartialWk(r) ? ' (partial)' : '')),
+          labels: wkData.map(r => shortDate(r.week_start) + (isPartialWk(r) ? ' (partial)' : '')),
           datasets: [
             { label: 'Active users', data: wkData.map(r => r.active_users||0),  borderColor:'#2e8bc0', backgroundColor:'rgba(46,139,192,.07)', borderWidth:2, fill:true,  tension:.3, pointRadius:3 },
             { label: 'Login users',  data: wkData.map(r => r.login_users||0),   borderColor:'#2a7a4b', borderWidth:2, fill:false, tension:.3, pointRadius:3 },
@@ -2637,7 +2639,7 @@ function setActivitySub(sub, rerender = true, data) {
       makeChart('act-dau-chart', {
         type:'bar',
         data:{
-          labels: dData.map(r => (r.day||'').slice(5,10)),
+          labels: dData.map(r => shortDate(r.day)),
           datasets:[
             { label:'Daily active users', data:dData.map(r=>r.active_users||0), backgroundColor:'rgba(46,139,192,.6)', borderRadius:2, barThickness:'flex' },
           ]
@@ -2655,7 +2657,7 @@ function setActivitySub(sub, rerender = true, data) {
       makeChart('act-daumau-chart', {
         type:'line',
         data:{
-          labels: dmData.map(r => (r.day||'').slice(5,10)),
+          labels: dmData.map(r => shortDate(r.day)),
           datasets:[
             { label:'Daily ÷ monthly users %', data:dmData.map(r=>r.dau_mau_pct||0), borderColor:'#7b1fa2', backgroundColor:'rgba(123,31,162,.06)', fill:true, borderWidth:2, tension:.3, pointRadius:2 },
           ]
@@ -2904,7 +2906,7 @@ function setActivitySub(sub, rerender = true, data) {
         return `<td style="text-align:center;background:${bg};color:${col};font-weight:${bold?700:500};border-radius:4px;padding:5px 8px;font-size:12px">${v!=null?v+'%':'—'}</td>`;
       };
       return `<tr>
-        <td style="font-size:11px;color:var(--tm);padding:4px 8px;white-space:nowrap">${(r.cohort_week||'').slice(0,10)}</td>
+        <td style="font-size:11px;color:var(--tm);padding:4px 8px;white-space:nowrap">${shortDate(r.cohort_week)}</td>
         <td style="text-align:center;font-weight:700;font-size:12px;padding:4px 8px">${fmtNum(r.cohort_size)}</td>
         ${cell(100, true)}
         ${cell(p('retained_w1'), false)}
@@ -2996,7 +2998,7 @@ function setActivitySub(sub, rerender = true, data) {
       makeChart('act-newusers-chart', {
         type:'bar',
         data:{
-          labels: nuData.map(r => (r.week_start||'').slice(5,10)),
+          labels: nuData.map(r => shortDate(r.week_start)),
           datasets:[{ label:'New users', data:nuData.map(r=>r.new_users||0), backgroundColor:'rgba(46,139,192,.7)', borderRadius:3 }]
         },
         options:{ responsive:true, maintainAspectRatio:false,
@@ -3010,7 +3012,7 @@ function setActivitySub(sub, rerender = true, data) {
       const cohorts = _ph.retention.slice(-6);
       const palette = ['#2e8bc0','#2a7a4b','#c25a00','#7b1fa2','#c0392b','#f39c12'];
       const datasets = cohorts.map((r, i) => ({
-        label: (r.cohort_week||'').slice(0,10),
+        label: shortDate(r.cohort_week),
         data: [100,
           r.cohort_size>0 ? Math.round(r.retained_w1/r.cohort_size*100) : 0,
           r.cohort_size>0 ? Math.round(r.retained_w2/r.cohort_size*100) : 0,
