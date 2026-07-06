@@ -972,6 +972,7 @@ function delRow(key, id, dateKey = 'week') {
 // ─────────────────────────────────────────
 const TABS = [
   { id: 'home',      label: 'Home' },
+  { id: 'workstreams', label: '🎯 Workstreams' },
   { id: 'exec',      label: '📋 Exec Brief' },
   { id: 'pipedrive', label: 'Sales' },
   { id: 'team',      label: 'Team' },
@@ -1000,7 +1001,7 @@ function switchTab(id) {
 function renderTab(id) {
   const mc = document.getElementById('main-content');
   destroyAllCharts();
-  const renderers = { home: renderHome, exec: renderExec, pipedrive: renderPipedrive, team: renderTeam, training: renderTraining, marketing: renderMarketing, tracker: renderWeeklyTracker, activity: renderActivity };
+  const renderers = { home: renderHome, workstreams: renderWorkstreams, exec: renderExec, pipedrive: renderPipedrive, team: renderTeam, training: renderTraining, marketing: renderMarketing, tracker: renderWeeklyTracker, activity: renderActivity };
   if (renderers[id]) renderers[id](mc);
   injectFlags(mc);
 }
@@ -4953,6 +4954,360 @@ function pdRangeToggleHTML() {
       ${monthOpts}
     </select>
   </div>`;
+}
+
+// ── WORKSTREAMS KPI BOARD (from Land_iQ_Workstreams.xlsx) ─────────────────────
+// The team's main reference screen. KPI types:
+//   auto      — computed live from Pipedrive / PostHog / tracker (LIVE badge)
+//   manual    — number entered on the board, per quarter, stamped who+when
+//   milestone — status chip: not started / in progress / done
+const WORKSTREAMS = [
+  { section: 'Customer & Marketing', items: [
+    { id:'brand', name:'Brand & Strategic Comms', owner:'Jacy Macnee', outcome:'Consistent NSW Gov brand · strong market positioning', kpis:[
+      { id:'brand_exempt',   label:'Brand exemption approval',               type:'milestone' },
+      { id:'brand_guides',   label:'Brand guidelines adopted across assets', type:'manual', unit:'%' },
+      { id:'awareness',      label:'Prompted awareness (target agencies)',   type:'manual', unit:'%' },
+      { id:'media_reach',    label:'LinkedIn reach (media mentions manual)', type:'auto', auto:'linkedin_reach', drill:'marketing' },
+      { id:'thought_lead',   label:'Thought leadership / events delivered',  type:'manual', unit:'count' },
+    ]},
+    { id:'csr', name:'Customer Success & Retention', owner:'Christina Sun / Alex Khershberg', outcome:'Customers satisfied · retained & renewed', kpis:[
+      { id:'renewal_rate',   label:'Renewal rate',                           type:'manual', unit:'%' },
+      { id:'seat_churn',     label:'Seat churn',                             type:'auto', auto:'seat_churn', drill:'pipedrive' },
+      { id:'active_usage',   label:'Active usage (% of licensed seats)',     type:'auto', auto:'active_usage', drill:'activity' },
+      { id:'resp_days',      label:'Median days to respond to queries',      type:'manual', unit:'days', lowerBetter:true },
+      { id:'csat',           label:'CSAT / NPS',                             type:'manual', unit:'score' },
+    ]},
+    { id:'lifecycle', name:'Lifecycle & Campaign Comms', owner:'Christina Sun / Alex Khershberg', outcome:'Users guided through onboarding, renewal & conversion', kpis:[
+      { id:'cadence',        label:'Lifecycle comms cadence met',            type:'milestone' },
+      { id:'campaign_reach', label:'Campaign reach / engagement',            type:'manual', unit:'count' },
+      { id:'email_rates',    label:'Email open / click rate',                type:'auto', auto:'email_rates', drill:'marketing' },
+      { id:'onb_active',     label:'Onboarding-to-active conversion',        type:'auto', auto:'onboarding_active', drill:'training' },
+    ]},
+    { id:'training', name:'Training & Enablement', owner:'Rennie So', outcome:'Users trained & equipped to get value', kpis:[
+      { id:'users_trained',  label:'Users trained',                          type:'auto', auto:'users_trained', drill:'training' },
+      { id:'guide_cover',    label:'Guide / template coverage',              type:'manual', unit:'count' },
+      { id:'train_sat',      label:'Training satisfaction',                  type:'manual', unit:'score' },
+      { id:'ai_support',     label:'AI chat support systems',                type:'milestone' },
+    ]},
+  ]},
+  { section: 'Growth & Commercial', items: [
+    { id:'advisory', name:'Advisory Revenue', owner:'Mark Elakawi', outcome:'Fee-for-service advisory work won & delivered', kpis:[
+      { id:'adv_rev',        label:'Advisory revenue ($/qtr)',               type:'auto', auto:'advisory_rev', drill:'pipedrive', manualFallback:true, unit:'$' },
+      { id:'adv_pipe',       label:'Advisory pipeline ($)',                  type:'auto', auto:'advisory_pipe', drill:'pipedrive', manualFallback:true, unit:'$' },
+      { id:'adv_signed',     label:'Engagements signed',                     type:'auto', auto:'advisory_signed', drill:'pipedrive', manualFallback:true, unit:'count' },
+      { id:'adv_util',       label:'Delivery / utilisation',                 type:'manual', unit:'%' },
+    ]},
+    { id:'vendor', name:'Commercial & Vendor', owner:'Bernie No', outcome:'WSP spend managed · pricing tiers for GTM flexibility', kpis:[
+      { id:'wsp_var',        label:'WSP spend vs budget (variance)',         type:'manual', unit:'%', lowerBetter:true },
+      { id:'wsp_ontime',     label:'Delivery vs commitment (on time)',       type:'manual', unit:'%' },
+      { id:'ip_gov',         label:'IP / governance items for 3.0',          type:'milestone' },
+      { id:'pricing_tiers',  label:'Pricing tiers resolved & launched',      type:'milestone' },
+      { id:'other_juris',    label:'Licensing in other jurisdictions',       type:'milestone' },
+    ]},
+    { id:'sales', name:'License Sales & Growth', owner:'Jacy Macnee', outcome:'New leads converted into paid licenses · user base grows', kpis:[
+      { id:'new_leads',      label:'New leads generated',                    type:'auto', auto:'new_leads', drill:'pipedrive' },
+      { id:'lead_conv',      label:'Lead-to-paid conversion',                type:'auto', auto:'lead_conversion', drill:'pipedrive' },
+      { id:'net_seats',      label:'Net new paid seats',                     type:'auto', auto:'net_new_seats', drill:'pipedrive' },
+      { id:'lic_rev',        label:'License revenue ($/qtr)',                type:'auto', auto:'license_revenue', drill:'pipedrive' },
+    ]},
+    { id:'strategic', name:'Strategic Licenses & Workflow Deep Dives', owner:'Bernie No / Grace Zhuang', outcome:'Centrally-funded licenses placed · workflow insights harvested', kpis:[
+      { id:'cf_alloc',       label:'Centrally-funded licenses allocated',    type:'auto', auto:'centrally_funded', drill:'pipedrive' },
+      { id:'deep_dives',     label:'Workflow deep dives completed',          type:'manual', unit:'count' },
+      { id:'templates',      label:'Templates / collateral produced',        type:'manual', unit:'count' },
+      { id:'feedback_items', label:'Product feedback items to roadmap',      type:'manual', unit:'count' },
+      { id:'pipeline_infl',  label:'Pipeline influenced (leads / $)',        type:'manual', unit:'$' },
+    ]},
+  ]},
+  { section: 'Product & Technology', items: [
+    { id:'analytics', name:'Analytics', owner:'Mark Elakawi', outcome:'Shared KPI dashboard for all workstreams & committees', kpis:[
+      { id:'dash_weekly',    label:'Dashboards updated weekly',              type:'auto', auto:'dashboards_weekly' },
+      { id:'kpis_integrated',label:'Workstream KPIs integrated into dashboard', type:'auto', auto:'kpis_integrated' },
+    ]},
+    { id:'data', name:'Data & Compliance', owner:'Robert Baker-Turley', outcome:'Data current · audit recommendations closed', kpis:[
+      { id:'audit_recs',     label:'Internal audit recs closed',             type:'manual', unit:'%' },
+      { id:'data_lag',       label:'Source-to-Land iQ data lag (median)',    type:'manual', unit:'days', lowerBetter:true },
+      { id:'proc_ontime',    label:'Monthly processing on time',             type:'manual', unit:'%' },
+      { id:'new_sources',    label:'Additional data sources added',          type:'manual', unit:'count' },
+      { id:'data_query',     label:'Data query resolution (median)',         type:'manual', unit:'days', lowerBetter:true },
+      { id:'tech_docs',      label:'Technical documentation up to date',     type:'milestone' },
+      { id:'data_agreements',label:'Agreements in place with data providers',type:'milestone' },
+    ]},
+    { id:'product', name:'Product', owner:'Grace Zhuang', outcome:'Capability & roadmap continuously improved', kpis:[
+      { id:'feat_ontime',    label:'Feature delivery vs roadmap (on time)',  type:'manual', unit:'%' },
+      { id:'feat_adopt',     label:'Feature adoption',                       type:'auto', auto:'feature_adoption', drill:'activity' },
+      { id:'roadmap_prior',  label:'Roadmap prioritised vs user feedback',   type:'milestone' },
+    ]},
+    { id:'quality', name:'Product Quality, UAT & Labs', owner:'Andrew Bobrige', outcome:'Defects caught pre-release · Labs pilots run', kpis:[
+      { id:'uat_days',       label:'Median days to complete UAT',            type:'manual', unit:'days', lowerBetter:true },
+      { id:'defects_pre',    label:'Defects found pre-release',              type:'manual', unit:'count' },
+      { id:'labs_sessions',  label:'Labs pilot / beta sessions run',         type:'manual', unit:'count' },
+    ]},
+    { id:'ux', name:'UX/UI', owner:'Rennie So', outcome:'Intuitive, consistent user experience', kpis:[
+      { id:'task_success',   label:'Usability / task success rate',          type:'manual', unit:'%' },
+      { id:'ux_resolved',    label:'UX/UI issues resolved',                  type:'manual', unit:'count' },
+      { id:'design_cover',   label:'Design system / template coverage',      type:'manual', unit:'%' },
+      { id:'ux_csat',        label:'User satisfaction with experience',      type:'manual', unit:'score' },
+    ]},
+  ]},
+];
+
+// ── storage (Supabase key 'workstream_kpis', auto-loaded into _cache by loadAll)
+function wsData() { return _cache['workstream_kpis'] || {}; }
+function wsPatch(k, v) {
+  const d = { ...wsData() }; if (v === null) delete d[k]; else d[k] = v;
+  _cache['workstream_kpis'] = d; lsWrite('workstream_kpis', d);
+  sb.from('dashboard_data').upsert({ key: 'workstream_kpis', value: d, updated_at: new Date().toISOString() })
+    .then(({ error }) => { if (error) toast('⚠ Save failed: ' + error.message); });
+}
+window.wsSetVal = (kpiId, q, v) => {
+  const num = parseFloat(String(v).replace(/[^0-9.\-]/g, ''));
+  wsPatch('v|' + kpiId + '|' + q, isNaN(num) ? null : { value: num, at: new Date().toISOString(), by: (_authEmail || '').split('@')[0] });
+  renderWorkstreams();
+};
+window.wsSetTarget = (kpiId, v) => {
+  const num = parseFloat(String(v).replace(/[^0-9.\-]/g, ''));
+  wsPatch('t|' + kpiId, isNaN(num) ? null : num); renderWorkstreams();
+};
+window.wsSetMilestone = (kpiId, s) => { wsPatch('ms|' + kpiId, s || null); renderWorkstreams(); };
+window.setWsQuarter = q => { activeSub.ws_quarter = q; renderWorkstreams(); };
+
+// ── quarter helpers
+function wsQuarterKey(d) { return d.getFullYear() + '-Q' + (Math.floor(d.getMonth() / 3) + 1); }
+function wsQuarterRange(key) {
+  const [y, q] = key.split('-Q').map(Number);
+  return { from: new Date(y, (q - 1) * 3, 1), to: new Date(y, q * 3, 0, 23, 59, 59, 999), label: 'Q' + q + ' ' + y };
+}
+function wsQuarters(n) {
+  const out = []; const now = new Date();
+  let y = now.getFullYear(), q = Math.floor(now.getMonth() / 3) + 1;
+  for (let i = 0; i < n; i++) { out.unshift(y + '-Q' + q); q--; if (q < 1) { q = 4; y--; } }
+  return out;
+}
+
+// ── auto KPI computations (quarter-scoped where the KPI is a flow; snapshots noted)
+function wsAuto(key, qr) {
+  const inQ = ds => { const d = pdParseDate(ds); return pdValidDate(d) && d >= qr.from && d <= qr.to; };
+  const val = d => parseFloat(d['Deal - Value']) || 0;
+  const advDeal = d => /advis/i.test((d['Deal - Pipeline'] || '') + ' ' + (d['Deal - Category'] || '') + ' ' + (d['Deal - Title'] || ''));
+  const now = new Date();
+  switch (key) {
+    case 'linkedin_reach': {
+      const wks = load('weekly_tracker').filter(r => { const d = new Date(r.week); return !isNaN(d) && d >= qr.from && d <= qr.to; });
+      if (!wks.length) return { disp: '—', sub: 'no tracker weeks in ' + qr.label };
+      const sum = wks.reduce((s, r) => s + (r.jsImp || 0) + (r.jmImp || 0) + (r.lbImp || 0), 0);
+      return { num: sum, disp: fmtNum(sum), sub: 'LinkedIn impressions · ' + qr.label + ' · Weekly Tracker' };
+    }
+    case 'email_rates': {
+      const wks = load('weekly_tracker').filter(r => { const d = new Date(r.week); return !isNaN(d) && d >= qr.from && d <= qr.to && r.edmOpen != null; });
+      if (!wks.length) return { disp: '—', sub: 'no email data in ' + qr.label };
+      const o = wks.reduce((s, r) => s + (r.edmOpen || 0), 0) / wks.length;
+      const c = wks.reduce((s, r) => s + (r.edmCtr || 0), 0) / wks.length;
+      return { num: o, disp: fmtPct(o) + ' / ' + fmtPct(c), sub: 'avg open / click · ' + qr.label };
+    }
+    case 'seat_churn': {
+      const churned = _pd_people.filter(p => p['Person - Customer Type'] === 'Access Revoked'
+        && (p['Person - Previous Customer Type'] || '').includes('Paid Subscription')
+        && inQ(p['Person - Date Access Removed']));
+      const active = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription').length;
+      const pctv = (active + churned.length) ? churned.length / (active + churned.length) * 100 : null;
+      return { num: pctv, disp: churned.length + (pctv != null ? ' (' + fmtPct(pctv) + ')' : ''), sub: 'paid seats lost in ' + qr.label, lowerBetter: true };
+    }
+    case 'active_usage': {
+      const act = _ph.emailActivity || [];
+      if (!act.length) return { disp: '—', sub: 'needs email matching (run posthog_add_emails.sql)' };
+      const emails = new Set(act.filter(r => { const d = new Date(r.last_seen); return !isNaN(d) && (now - d) < 30 * 86400000; }).map(r => (r.email || '').toLowerCase()));
+      const paid = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
+      const used = paid.filter(p => emails.has((p['Person - Email'] || p['Email'] || '').toLowerCase())).length;
+      const pctv = paid.length ? used / paid.length * 100 : null;
+      return { num: pctv, disp: pctv != null ? fmtPct(pctv) : '—', sub: used + ' of ' + paid.length + ' paid seats active in last 30d' };
+    }
+    case 'onboarding_active': {
+      const ob = _pd_deals.filter(d => d['Deal - Pipeline'] === 'General Onboarding Pipeline');
+      if (!ob.length) return { disp: '—', sub: 'no onboarding deals' };
+      const done = ob.filter(d => ['Onboarding Complete', 'Maintenance', 'Month 11!', '2 Month Growth Period'].includes(d['Deal - Stage']) || d['Deal - Status'] === 'Won').length;
+      return { num: done / ob.length * 100, disp: fmtPct(done / ob.length * 100), sub: done + ' of ' + ob.length + ' past onboarding · snapshot' };
+    }
+    case 'users_trained': {
+      const skip = ['Contact Register', 'Expression of Interest'];
+      const n = _pd_people.filter(p => !skip.includes(p['Person - Customer Type']) && inQ(p['Person - Date Access Granted'])).length;
+      return { num: n, disp: fmtNum(n), sub: 'access granted in ' + qr.label };
+    }
+    case 'new_leads': {
+      const n = _pd_deals.filter(d => inQ(d['Deal - Deal created'])).length;
+      return { num: n, disp: fmtNum(n), sub: 'deals created in ' + qr.label + ' · all pipelines' };
+    }
+    case 'lead_conversion': {
+      const won = _pd_deals.filter(d => d['Deal - Status'] === 'Won' && inQ(d['Deal - Won time'])).length;
+      const lost = _pd_deals.filter(d => d['Deal - Status'] === 'Lost' && inQ(d['Deal - Lost time'])).length;
+      if (!won && !lost) return { disp: '—', sub: 'no closed deals in ' + qr.label };
+      return { num: won / (won + lost) * 100, disp: fmtPct(won / (won + lost) * 100), sub: won + ' won / ' + lost + ' lost · ' + qr.label };
+    }
+    case 'net_new_seats': {
+      const added = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription' && inQ(p['Person - Date Access Granted'])).length;
+      const churned = _pd_people.filter(p => p['Person - Customer Type'] === 'Access Revoked'
+        && (p['Person - Previous Customer Type'] || '').includes('Paid Subscription') && inQ(p['Person - Date Access Removed'])).length;
+      return { num: added - churned, disp: (added - churned >= 0 ? '+' : '') + (added - churned), sub: added + ' added − ' + churned + ' churned · ' + qr.label };
+    }
+    case 'license_revenue': {
+      const deals = _pd_deals.filter(d => d['Deal - Status'] === 'Won' && !advDeal(d) && inQ(d['Deal - Won time']));
+      const sum = deals.reduce((s, d) => s + val(d), 0);
+      return { num: sum, disp: fmtCur(sum), sub: deals.length + ' won deals · ' + qr.label };
+    }
+    case 'centrally_funded': {
+      const n = _pd_people.filter(p => p['Person - Customer Type'] === 'Centrally Funded Licence').length;
+      return { num: n, disp: fmtNum(n), sub: 'current snapshot' };
+    }
+    case 'advisory_rev': {
+      const deals = _pd_deals.filter(d => advDeal(d) && d['Deal - Status'] === 'Won' && inQ(d['Deal - Won time']));
+      if (!_pd_deals.some(advDeal)) return null;   // not in Pipedrive yet → manual fallback
+      const sum = deals.reduce((s, d) => s + val(d), 0);
+      return { num: sum, disp: fmtCur(sum), sub: deals.length + ' advisory deals won · ' + qr.label };
+    }
+    case 'advisory_pipe': {
+      if (!_pd_deals.some(advDeal)) return null;
+      const open = _pd_deals.filter(d => advDeal(d) && d['Deal - Status'] === 'Open');
+      const sum = open.reduce((s, d) => s + val(d), 0);
+      return { num: sum, disp: fmtCur(sum), sub: open.length + ' open advisory deals · snapshot' };
+    }
+    case 'advisory_signed': {
+      if (!_pd_deals.some(advDeal)) return null;
+      const n = _pd_deals.filter(d => advDeal(d) && d['Deal - Status'] === 'Won' && inQ(d['Deal - Won time'])).length;
+      return { num: n, disp: fmtNum(n), sub: 'advisory engagements won · ' + qr.label };
+    }
+    case 'feature_adoption': {
+      const rows = _ph.featureAdoption || [];
+      if (!rows.length) return { disp: '—', sub: 'no usage data' };
+      const top = rows.slice(0, 8);
+      const avg = top.reduce((s, r) => s + (Number(r.adoption_pct) || 0), 0) / top.length;
+      return { num: avg, disp: fmtPct(avg), sub: 'avg adoption · top ' + top.length + ' features · all time' };
+    }
+    case 'dashboards_weekly': {
+      const ages = [];
+      if (_pd_deals_imported_at) ages.push((now - new Date(_pd_deals_imported_at)) / 86400000);
+      if (_pd_people_imported_at) ages.push((now - new Date(_pd_people_imported_at)) / 86400000);
+      const lastDay = (_ph.daily || []).reduce((mx, r) => (r.day && r.day > mx ? r.day : mx), '');
+      if (lastDay) ages.push((now - new Date(lastDay)) / 86400000);
+      if (!ages.length) return { disp: '—', sub: 'no data sources loaded' };
+      const worst = Math.ceil(Math.max(...ages));
+      return { num: worst <= 7 ? 100 : 0, disp: worst <= 7 ? '✓ Yes' : '✗ No', sub: 'oldest source: ' + worst + ' day' + (worst === 1 ? '' : 's') + ' · target ≤7', lowerBetter: false };
+    }
+    case 'kpis_integrated': {
+      let auto = 0, total = 0;
+      WORKSTREAMS.forEach(s => s.items.forEach(w => w.kpis.forEach(k => { total++; if (k.type === 'auto') auto++; })));
+      return { num: auto, disp: auto + ' of ' + total, sub: 'KPIs live-tracked on this board' };
+    }
+  }
+  return null;
+}
+
+function renderWorkstreams(el) {
+  el = el || document.getElementById('main-content');
+  const quarters = wsQuarters(6);
+  const q = (activeSub.ws_quarter && quarters.includes(activeSub.ws_quarter)) ? activeSub.ws_quarter : quarters[quarters.length - 1];
+  const qr = wsQuarterRange(q);
+  const d = wsData();
+  const isCurrentQ = q === quarters[quarters.length - 1];
+
+  // status: green at/above target (or at/below for lower-better), amber within 30%, red otherwise, grey if no target/value
+  function rag(num, target, lowerBetter) {
+    if (num == null || target == null || !isFinite(target)) return 'grey';
+    if (lowerBetter) return num <= target ? 'green' : num <= target * 1.3 ? 'amber' : 'red';
+    return num >= target ? 'green' : num >= target * 0.7 ? 'amber' : 'red';
+  }
+  const dotCol = { green: '#2a7a4b', amber: '#e6a817', red: '#e05252', grey: '#c4c4c4' };
+  const msOpts = [['', '—'], ['not_started', 'Not started'], ['in_progress', 'In progress'], ['done', '✓ Done']];
+  const msCol = { not_started: '#c4c4c4', in_progress: '#e6a817', done: '#2a7a4b' };
+
+  function kpiRow(k) {
+    const target = d['t|' + k.id];
+    let valueHTML = '', num = null, sub = '', badge = '', lower = k.lowerBetter;
+    if (k.type === 'milestone') {
+      const st = d['ms|' + k.id] || '';
+      badge = '<span style="font-size:9px;font-weight:700;color:#7b1fa2;background:#f3e8f8;border-radius:4px;padding:1px 6px">MILESTONE</span>';
+      valueHTML = `<select onchange="wsSetMilestone('${k.id}',this.value)" style="font-size:11.5px;padding:3px 6px;border-radius:6px;border:1.5px solid ${msCol[st]||'var(--bd)'};color:${msCol[st]||'var(--tm)'};font-weight:600;background:var(--wh);cursor:pointer;font-family:inherit">
+        ${msOpts.map(([v, l]) => `<option value="${v}"${st === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
+      return { html: rowHTML(k, st === 'done' ? 'green' : st === 'in_progress' ? 'amber' : 'grey', badge, valueHTML, '', ''), status: st === 'done' ? 'green' : st === 'in_progress' ? 'amber' : 'grey' };
+    }
+    let a = null;
+    if (k.type === 'auto') a = wsAuto(k.auto, qr);
+    if (a) {
+      badge = '<span style="font-size:9px;font-weight:700;color:#1f6740;background:#e8f5ee;border-radius:4px;padding:1px 6px">LIVE</span>';
+      num = a.num; sub = a.sub || ''; if (a.lowerBetter != null) lower = a.lowerBetter;
+      valueHTML = `<span style="font-size:15px;font-weight:700;color:var(--navy)">${a.disp}</span>`
+        + (k.drill ? ` <a onclick="switchTab('${k.drill}')" style="font-size:10px;color:var(--acc);cursor:pointer;text-decoration:underline">detail</a>` : '');
+    } else {
+      // manual (or auto with no Pipedrive advisory data yet)
+      const rec = d['v|' + k.id + '|' + q];
+      badge = '<span style="font-size:9px;font-weight:700;color:#8a5a00;background:#fdf6e9;border-radius:4px;padding:1px 6px">MANUAL</span>'
+        + (k.manualFallback ? ' <span style="font-size:9px;color:var(--tl)">auto once in Pipedrive</span>' : '');
+      num = rec ? rec.value : null;
+      valueHTML = `<input type="number" step="any" value="${rec ? rec.value : ''}" placeholder="—"
+        onchange="wsSetVal('${k.id}','${q}',this.value)"
+        style="width:86px;padding:4px 7px;border:1.5px solid ${rec ? 'var(--bd)' : '#e6a817'};border-radius:6px;font-size:13px;font-weight:600;font-family:inherit">
+        <span style="font-size:10.5px;color:var(--tl)">${k.unit || ''}</span>`;
+      sub = rec ? `updated ${fmtDate(rec.at).slice(0, 6)}${rec.by ? ' by ' + rec.by : ''}` : 'awaiting entry for ' + qr.label;
+    }
+    const st = rag(num, target, lower);
+    const targetHTML = `<input type="number" step="any" value="${target != null ? target : ''}" placeholder="TBD"
+      onchange="wsSetTarget('${k.id}',this.value)" title="Target — being set this week"
+      style="width:64px;padding:3px 6px;border:1px dashed var(--bd);border-radius:6px;font-size:11.5px;color:var(--tm);font-family:inherit;background:transparent">`;
+    return { html: rowHTML(k, st, badge, valueHTML, targetHTML, sub), status: st };
+  }
+
+  function rowHTML(k, st, badge, valueHTML, targetHTML, sub) {
+    return `<tr style="border-bottom:1px solid var(--bg2)">
+      <td style="padding:7px 6px;width:12px"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${dotCol[st]}"></span></td>
+      <td style="padding:7px 6px;font-size:12.5px">${k.label}<div style="margin-top:2px">${badge}</div></td>
+      <td style="padding:7px 6px;white-space:nowrap">${valueHTML}${sub ? `<div style="font-size:10px;color:var(--tl);margin-top:2px">${sub}</div>` : ''}</td>
+      <td style="padding:7px 6px;text-align:right">${targetHTML}</td>
+    </tr>`;
+  }
+
+  const sectionsHTML = WORKSTREAMS.map(sec => `
+    <div style="margin-bottom:6px;margin-top:22px;font-size:14px;font-weight:700;color:var(--navy);letter-spacing:.3px;text-transform:uppercase">${sec.section}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(430px,1fr));gap:14px">
+      ${sec.items.map(w => {
+        const rows = w.kpis.map(kpiRow);
+        const worst = rows.some(r => r.status === 'red') ? 'red' : rows.some(r => r.status === 'amber') ? 'amber' : rows.some(r => r.status === 'green') ? 'green' : 'grey';
+        return `<div class="box" style="margin-bottom:0">
+          <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:2px">
+            <span style="flex-shrink:0;margin-top:4px;width:11px;height:11px;border-radius:50%;background:${dotCol[worst]}"></span>
+            <div style="flex:1">
+              <div style="font-size:14px;font-weight:700;color:var(--navy)">${w.name}</div>
+              <div style="font-size:11px;color:var(--tl);margin:1px 0 2px">${w.outcome}</div>
+              <div style="font-size:11px;font-weight:600;color:var(--acc)">${w.owner}</div>
+            </div>
+          </div>
+          <table style="width:100%;border-collapse:collapse;margin-top:6px">
+            <thead><tr style="border-bottom:1.5px solid var(--bor)">
+              <th></th><th style="text-align:left;padding:3px 6px;font-size:10px;color:var(--tl);text-transform:uppercase">KPI</th>
+              <th style="text-align:left;padding:3px 6px;font-size:10px;color:var(--tl);text-transform:uppercase">${qr.label}</th>
+              <th style="text-align:right;padding:3px 6px;font-size:10px;color:var(--tl);text-transform:uppercase">Target</th>
+            </tr></thead>
+            <tbody>${rows.map(r => r.html).join('')}</tbody>
+          </table>
+        </div>`;
+      }).join('')}
+    </div>`).join('');
+
+  el.innerHTML = `
+    <div class="section-header">
+      <div>
+        <div class="section-title">Land iQ Workstreams</div>
+        <div class="section-sub">Key tasks & KPIs by workstream · the team's shared reference · Analytics workstream deliverable</div>
+      </div>
+      <div class="range-toggle" style="align-items:center">
+        ${quarters.map(k => `<button class="range-btn${k === q ? ' active' : ''}" onclick="setWsQuarter('${k}')">${wsQuarterRange(k).label}</button>`).join('')}
+      </div>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--tl);margin-bottom:4px;align-items:center">
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#2a7a4b"></span> on target</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#e6a817"></span> within 30%</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#e05252"></span> below</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c4c4c4"></span> no target / not started</span>
+      <span style="margin-left:auto">${isCurrentQ ? qr.label + ' in progress — LIVE numbers build through the quarter' : 'viewing a past quarter'} · targets editable (being set this week)</span>
+    </div>
+    ${sectionsHTML}`;
 }
 
 // ── TEAM / KPI TAB (Option A: per-rep sales scorecard from Pipedrive) ─────────
