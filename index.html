@@ -5083,8 +5083,8 @@ const WORKSTREAMS = [
   ]},
   { section: 'Product & Technology', items: [
     { id:'analytics', name:'Analytics', owner:'Mark Elakawi', outcome:'Shared KPI dashboard for all workstreams & committees', kpis:[
-      { id:'dash_weekly',    label:'Dashboards updated weekly',              type:'auto', auto:'dashboards_weekly' },
-      { id:'kpis_integrated',label:'Workstream KPIs integrated into dashboard', type:'auto', auto:'kpis_integrated' },
+      { id:'dash_weekly',    label:'Dashboards updated weekly (Power BI)',   type:'manual', unit:'% of weeks' },
+      { id:'kpis_integrated',label:'Workstream KPIs integrated into dashboard(s)', type:'milestone' },
     ]},
     { id:'data', name:'Data & Compliance', owner:'Robert Baker-Turley', outcome:'Data current · audit recommendations closed', kpis:[
       { id:'audit_recs',     label:'Internal audit recs closed',             type:'manual', unit:'%' },
@@ -5357,7 +5357,7 @@ function renderWorkstreams(el) {
     <div class="section-header">
       <div>
         <div class="section-title">Land iQ Workstreams</div>
-        <div class="section-sub">Key tasks & KPIs by workstream · the team's shared reference · Analytics workstream deliverable</div>
+        <div class="section-sub">Key tasks & KPIs by workstream · working reference alongside the Power BI tracker</div>
       </div>
       <div class="range-toggle" style="align-items:center">
         ${quarters.map(k => `<button class="range-btn${k === q ? ' active' : ''}" onclick="setWsQuarter('${k}')">${wsQuarterRange(k).label}</button>`).join('')}
