@@ -4791,23 +4791,27 @@ const pd12Months = () => {
 function pdNormalisePeople(rows) {
   if (!rows.length) return rows;
   const p0 = rows[0];
-  if ('Person - Customer Type' in p0) return rows; // already canonical, nothing to do
   const keys = Object.keys(p0);
   const find = (...needles) => keys.find(k => needles.some(n => k.toLowerCase() === n.toLowerCase()))
     || keys.find(k => needles.some(n => k.toLowerCase().includes(n.toLowerCase())));
+  // Map each canonical field independently (no all-or-nothing early return) so a
+  // file with SOME canonical headers still gets the rest mapped — e.g. Pipedrive
+  // People exports name the email column just "Email".
   const map = {
     'Person - Customer Type':          find('Person - Customer Type', 'Customer Type', 'Customer type', 'customer_type'),
     'Person - Previous Customer Type': find('Person - Previous Customer Type', 'Previous Customer Type', 'previous customer type', 'Previous Customer'),
     'Person - Date Access Granted':    find('Person - Date Access Granted', 'Date Access Granted', 'date access granted', 'Access Granted'),
     'Person - Date Access Removed':    find('Person - Date Access Removed', 'Date Access Removed', 'date access removed', 'Access Removed'),
     'Person - Organisation':           find('Person - Organisation', 'Organisation', 'Organization', 'Company', 'Org'),
+    'Person - Email':                  find('Person - Email', 'Email - Work', 'Primary email', 'Email'),
+    'Person - Name':                   find('Person - Name', 'Name'),
   };
-  const hasAny = Object.values(map).some(Boolean);
-  if (!hasAny) return rows; // nothing mappable found — return as-is
+  const need = Object.entries(map).filter(([canonical, src]) => src && src !== canonical);
+  if (!need.length) return rows; // everything already canonical
   return rows.map(p => {
     const n = {...p};
-    for (const [canonical, src] of Object.entries(map)) {
-      if (src && !(canonical in p)) n[canonical] = p[src] ?? '';
+    for (const [canonical, src] of need) {
+      if (n[canonical] == null || n[canonical] === '') n[canonical] = p[src] ?? '';
     }
     return n;
   });
