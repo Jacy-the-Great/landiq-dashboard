@@ -3764,9 +3764,9 @@ function renderWeeklyTracker(el) {
 
   const TRACKER_SECTIONS = [
     { label: 'LinkedIn', key: 'linkedin', rows: [
-      { key: 'jsImp',         label: 'JS (James) Post Impressions',  fmt: 'num' },
-      { key: 'jmImp',         label: 'JM (Jacy) Post Impressions',   fmt: 'num' },
-      { key: 'lbImp',         label: 'LB (Lucy) Post Impressions',   fmt: 'num' },
+      // Combined total only — individual names removed (work board, no personal-brand items)
+      { key: 'jsImp', label: 'LinkedIn Post Impressions (total)', fmt: 'num',
+        calc: r => (r.jsImp == null && r.jmImp == null && r.lbImp == null) ? null : (r.jsImp || 0) + (r.jmImp || 0) + (r.lbImp || 0) },
     ]},
     { label: 'EDM', key: 'edm', rows: [
       { key: 'edmOpen',        label: 'Email Open Rate',       fmt: 'pct' },
@@ -3808,7 +3808,7 @@ function renderWeeklyTracker(el) {
       </tr>`;
       sec.rows.forEach(row => {
         const cells = weeks.map(r => {
-          const val = r[row.key];
+          const val = row.calc ? row.calc(r) : r[row.key];
           const disp = (val == null || val === '')
             ? `<span style="color:#ccc">—</span>`
             : row.fmt === 'pct' ? fmtPct(val) : fmtNum(val);
@@ -3858,9 +3858,7 @@ function renderWeeklyTracker(el) {
       <div id="tracker-form" style="display:none"><div class="form-box">
         <div class="form-grid">
           <div class="form-group"><label>Week ending</label><input type="date" id="tr2-week"></div>
-          <div class="form-group"><label>JS (James) post impressions</label><input type="number" id="tr2-jsImp"></div>
-          <div class="form-group"><label>JM (Jacy) post impressions</label><input type="number" id="tr2-jmImp"></div>
-          <div class="form-group"><label>LB (Lucy) post impressions</label><input type="number" id="tr2-lbImp"></div>
+          <div class="form-group"><label>LinkedIn post impressions (total)</label><input type="number" id="tr2-jsImp"></div>
           <div class="form-group"><label>EDM open rate (%)</label><input type="number" id="tr2-edmOpen" step=".1"></div>
           <div class="form-group"><label>EDM click-through rate (%)</label><input type="number" id="tr2-edmCtr" step=".1"></div>
           <div class="form-group"><label>Webinar email sends</label><input type="number" id="tr2-wbEmailSend"></div>
@@ -4006,7 +4004,7 @@ function renderMarketing(el) {
 
     ${cardsHTML([
       ['LinkedIn impressions (latest week)', liImpLatest || null, null, null, latestW ? fmtDate(latestW.week) : null,
-        '<span class="src-tag">Manual · Weekly Tracker</span><br>Sum of <b>JS + JM + LB post impressions</b> from the most recently entered Weekly Tracker row.<br><div class="calc-row">jsImp + jmImp + lbImp (latest week)</div>JS = James Strutt, JM = Jacy Macnee, LB = Lucy Brown.'],
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total LinkedIn post impressions from the most recently entered Weekly Tracker row.<br><div class="calc-row">Sum of post impressions (latest week)</div>'],
       ['EDM open rate', latestW?.edmOpen ?? null, null, '%', latestW ? fmtDate(latestW.week) : null,
         '<span class="src-tag">Manual · Weekly Tracker</span><br>Email open rate from the <b>edmOpen</b> field of the latest Weekly Tracker row. Manually entered from the email platform (e.g. Mailchimp / HubSpot).'],
       ['Webinar registrations', latestW?.wbReg ?? null, null, null, latestW ? fmtDate(latestW.week) : null,
@@ -4068,14 +4066,13 @@ function renderMarketing(el) {
 
     <!-- ── LINKEDIN ── -->
     <div class="box">
-      <div class="box-title">LinkedIn impressions by team member</div>
+      <div class="box-title">LinkedIn impressions — weekly total</div>
       ${trackerRecent.length ? `<div class="chart-wrap" style="height:240px"><canvas id="li-chart"></canvas></div>` : '<div class="no-data">No tracker data yet.</div>'}
       ${trackerRecent.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--acc);font-weight:500;padding:4px 0">Show data table</summary>
         <div class="tbl-scroll" style="margin-top:8px"><table>
-          <thead><tr><th>Week</th><th>JS</th><th>JM</th><th>LB</th><th>Total</th></tr></thead>
+          <thead><tr><th>Week</th><th>Total impressions</th></tr></thead>
           <tbody>${[...trackerRecent].reverse().map(r => `<tr>
             <td>${fmtDate(r.week)}</td>
-            <td>${fmtNum(r.jsImp)}</td><td>${fmtNum(r.jmImp)}</td><td>${fmtNum(r.lbImp)}</td>
             <td><strong>${fmtNum((r.jsImp||0)+(r.jmImp||0)+(r.lbImp||0))}</strong></td>
           </tr>`).join('')}</tbody>
         </table></div>
@@ -4400,7 +4397,7 @@ function renderMarketing(el) {
     });
   }
 
-  // LinkedIn stacked bar + total line
+  // LinkedIn weekly total (individual names removed — combined figure only)
   if (trackerRecent.length) {
     const liLabels = trackerRecent.map(r => fmtDate(r.week).slice(0,6));
     const liTotals = trackerRecent.map(r => (r.jsImp||0)+(r.jmImp||0)+(r.lbImp||0));
@@ -4409,17 +4406,14 @@ function renderMarketing(el) {
       data: {
         labels: liLabels,
         datasets: [
-          { label: 'JS (James)', data: trackerRecent.map(r => r.jsImp||0),  backgroundColor: '#1a3c5e', borderRadius: 3, stack: 'a' },
-          { label: 'JM (Jacy)',  data: trackerRecent.map(r => r.jmImp||0), backgroundColor: '#2e8bc0', borderRadius: 3, stack: 'a' },
-          { label: 'LB (Lucy)',  data: trackerRecent.map(r => r.lbImp||0),  backgroundColor: '#90c4e0', borderRadius: 3, stack: 'a' },
-          { label: 'Total', data: liTotals, type: 'line', borderColor: '#c0392b', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 3, tension: .3, fill: false, order: 0 },
+          { label: 'Total impressions', data: liTotals, backgroundColor: '#2e8bc0', borderRadius: 3 },
         ]
       },
       options: { responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+        plugins: { legend: { display: false } },
         scales: {
-          x: { stacked: true, grid: { display: false }, ticks: axStyle },
-          y: { stacked: true, grid: gridStyle, ticks: axStyle }
+          x: { grid: { display: false }, ticks: axStyle },
+          y: { grid: gridStyle, ticks: axStyle }
         }
       }
     });
