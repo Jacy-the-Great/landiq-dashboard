@@ -1174,6 +1174,69 @@ function renderHome(el) {
         </div>`).join('')}
       </div>
     </div>` : ''}
+
+    ${(() => {
+      // ── WEEK & MONTH COMPARISON — completed periods only ─────────────────
+      // Last completed Mon–Sun week vs the week before; last completed month
+      // vs the month before. Same "no partial periods" rule as the alerts.
+      const dow = (_now.getDay() + 6) % 7;
+      const thisMon = new Date(_now); thisMon.setHours(0, 0, 0, 0); thisMon.setDate(thisMon.getDate() - dow);
+      const wk = off => { const from = new Date(thisMon); from.setDate(from.getDate() - 7 * off); const to = new Date(from); to.setDate(to.getDate() + 7); to.setTime(to.getTime() - 1); return { from, to }; };
+      const wkA = wk(1), wkB = wk(2);   // last completed week, week before
+      const inR = (ds, r) => { const d = pdParseDate(ds); return pdValidDate(d) && d >= r.from && d <= r.to; };
+      const grants = (r, trial) => _pd_people.filter(p => { const ct = p['Person - Customer Type'];
+        return (trial ? isTrialType(ct) : ct === 'Paid Subscription') && inR(p['Person - Date Access Granted'], r); }).length;
+      const trk = load('weekly_tracker').sort((a, b) => a.week > b.week ? 1 : -1);
+      const tw = trk.slice(-2);
+      const li = r => r ? (r.jsImp || 0) + (r.jmImp || 0) + (r.lbImp || 0) : null;
+      const row = (label, curr, prev, money) => {
+        if (curr == null && prev == null) return '';
+        const f = v => v == null ? '—' : money ? fmtCur(v) : fmtNum(v);
+        let chg = '<span style="color:var(--tl)">—</span>';
+        if (curr != null && prev != null && prev !== 0) {
+          const p = Math.round((curr - prev) / prev * 100);
+          chg = `<span style="color:${p > 0 ? 'var(--gr)' : p < 0 ? 'var(--re)' : 'var(--tl)'};font-weight:700">${p > 0 ? '▲ +' : p < 0 ? '▼ ' : ''}${p}%</span>`;
+        }
+        return `<tr style="border-bottom:1px solid var(--bg2)">
+          <td style="padding:5px 8px;color:var(--tm)">${label}</td>
+          <td style="padding:5px 8px;text-align:right;font-weight:700;color:var(--navy)">${f(curr)}</td>
+          <td style="padding:5px 8px;text-align:right;color:var(--tl)">${f(prev)}</td>
+          <td style="padding:5px 8px;text-align:right">${chg}</td></tr>`;
+      };
+      const head = (a, b) => `<thead><tr style="border-bottom:1.5px solid var(--bor)">
+        <th style="text-align:left;padding:4px 8px;font-size:10px;color:var(--tl);text-transform:uppercase">Metric</th>
+        <th style="text-align:right;padding:4px 8px;font-size:10px;color:var(--tl);text-transform:uppercase">${a}</th>
+        <th style="text-align:right;padding:4px 8px;font-size:10px;color:var(--tl);text-transform:uppercase">${b}</th>
+        <th style="text-align:right;padding:4px 8px;font-size:10px;color:var(--tl);text-transform:uppercase">Change</th></tr></thead>`;
+      const wkRows = [
+        row('Active product users', auNow, auPrev),
+        row('Website visitors', tw[1]?.websiteVisits ?? null, tw[0]?.websiteVisits ?? null),
+        row('LinkedIn impressions', li(tw[1]), li(tw[0])),
+        row('New trials granted', grants(wkA, true), grants(wkB, true)),
+        row('New paid seats', grants(wkA, false), grants(wkB, false)),
+      ].join('');
+      const trainedIn = (y, mo) => _pd_people.filter(p => !['Contact Register', 'Expression of Interest'].includes(p['Person - Customer Type']) && inMonth(p['Person - Date Access Granted'], y, mo)).length;
+      const moRows = [
+        row('Won deals', wonLastMonth.length, wonMonthPrior.length),
+        row('Revenue', revLastMonth, revMonthPrior, true),
+        row('New trials', trialsLastMonth, trialsMonthPrior),
+        row('Users trained', trainedIn(_pm.getFullYear(), _pm.getMonth()), trainedIn(_pm2.getFullYear(), _pm2.getMonth())),
+      ].join('');
+      const moName = d => d.toLocaleDateString('en-AU', { month: 'short' });
+      return `<div class="box" style="padding:14px 16px">
+        <div style="font-size:12px;color:var(--tl);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:10px">Week &amp; month comparison <span style="font-weight:400;text-transform:none">· completed periods only — no partial-period distortion</span></div>
+        <div style="display:flex;gap:26px;flex-wrap:wrap">
+          <div style="flex:1;min-width:300px">
+            <table style="width:100%;border-collapse:collapse;font-size:12.5px">${head('Last week', 'Week before')}<tbody>${wkRows}</tbody></table>
+            <div style="font-size:10px;color:var(--tl);margin-top:4px">Week of ${fmtDate(wkA.from).slice(0,6)} vs ${fmtDate(wkB.from).slice(0,6)} · website/LinkedIn from the two latest tracker entries</div>
+          </div>
+          <div style="flex:1;min-width:300px">
+            <table style="width:100%;border-collapse:collapse;font-size:12.5px">${head(moName(_pm), moName(_pm2))}<tbody>${moRows}</tbody></table>
+            <div style="font-size:10px;color:var(--tl);margin-top:4px">Last completed month vs the month before · Pipedrive</div>
+          </div>
+        </div>
+      </div>`;
+    })()}
 `;
   el.innerHTML += `
     ${cardsHTML([
@@ -5816,6 +5879,38 @@ function renderPdRevenue(sc) {
     <div class="box">
       <div class="box-title">Cumulative contracted revenue — all time</div>
       ${allMonthsSorted.length ? `<div class="chart-wrap" style="height:260px"><canvas id="pd-arr-cumul"></canvas></div>` : '<div class="no-data">No won deal data.</div>'}
+    </div>
+
+    <div class="box">
+      <div class="box-title">Contracted revenue by period ${infoBtn('Contracted revenue by period',
+        '<span class="src-tag">Pipedrive · Won Deals</span><br>The same won-deal values as the total above, grouped by when each deal was won. Hover any figure for the exact dollar amount.<br><div class="calc-row">SUM(Deal Value) grouped by year / quarter / month of Won time</div>')}</div>
+      ${(() => {
+        const byY = {}, byQ = {}, byM = {}, cY = {}, cQ = {}, cM = {};
+        wonDeals.forEach(dl => {
+          const dt = pdParseDate(dl['Deal - Won time']); if (!pdValidDate(dt)) return;
+          const v = parseFloat(dl['Deal - Value']) || 0;
+          const y = dt.getFullYear(), qk = y + '-Q' + (Math.floor(dt.getMonth() / 3) + 1), mk = monthKey(dt.toISOString());
+          byY[y] = (byY[y] || 0) + v; cY[y] = (cY[y] || 0) + 1;
+          byQ[qk] = (byQ[qk] || 0) + v; cQ[qk] = (cQ[qk] || 0) + 1;
+          byM[mk] = (byM[mk] || 0) + v; cM[mk] = (cM[mk] || 0) + 1;
+        });
+        if (!Object.keys(byY).length) return '<div class="no-data">No won deal data.</div>';
+        const tbl = (title, entries, lblFn) => `<div style="flex:1;min-width:180px">
+          <div style="font-size:11px;font-weight:700;color:var(--tl);text-transform:uppercase;margin-bottom:6px">${title}</div>
+          <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+            ${entries.map(([k, v]) => `<tr style="border-bottom:1px solid var(--bg2)">
+              <td style="padding:5px 6px;color:var(--tm)">${lblFn(k)}</td>
+              <td style="padding:5px 6px;text-align:right;font-weight:700;color:var(--navy);cursor:help" title="Exact: ${fmtDollar(v)} · ${(title==='By year'?cY:title==='By quarter'?cQ:cM)[k]} deals">${fmtCur(v)}</td>
+            </tr>`).join('')}
+          </table></div>`;
+        const qLbl = k => { const [y, qn] = k.split('-Q'); return 'Q' + qn + ' ' + y; };
+        const mLbl = k => monthLabel(k);
+        return `<div style="display:flex;gap:22px;flex-wrap:wrap">
+          ${tbl('By year', Object.entries(byY).sort((a,b)=>b[0]-a[0]), k => k)}
+          ${tbl('By quarter', Object.entries(byQ).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,6), qLbl)}
+          ${tbl('By month', Object.entries(byM).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,12), mLbl)}
+        </div>`;
+      })()}
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
