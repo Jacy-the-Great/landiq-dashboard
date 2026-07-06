@@ -5031,10 +5031,10 @@ const WORKSTREAMS = [
       { id:'brand_guides',   label:'Brand guidelines adopted across assets', type:'manual', unit:'%' },
       { id:'awareness',      label:'Prompted awareness (target agencies)',   type:'manual', unit:'%' },
       { id:'media_reach',    label:'LinkedIn reach (media mentions manual)', type:'auto', auto:'linkedin_reach', drill:'marketing' },
-      { id:'thought_lead',   label:'Thought leadership / events delivered',  type:'manual', unit:'count' },
+      { id:'thought_lead',   label:'Thought leadership / events delivered',  type:'auto', auto:'events_delivered', drill:'marketing' },
     ]},
     { id:'csr', name:'Customer Success & Retention', owner:'Christina Sun / Alex Khershberg', outcome:'Customers satisfied · retained & renewed', kpis:[
-      { id:'renewal_rate',   label:'Renewal rate',                           type:'manual', unit:'%' },
+      { id:'renewal_rate',   label:'Renewal rate',                           type:'auto', auto:'renewal_rate', drill:'pipedrive' },
       { id:'seat_churn',     label:'Seat churn',                             type:'auto', auto:'seat_churn', drill:'pipedrive' },
       { id:'active_usage',   label:'Active usage (% of licensed seats)',     type:'auto', auto:'active_usage', drill:'activity' },
       { id:'resp_days',      label:'Median days to respond to queries',      type:'manual', unit:'days', lowerBetter:true },
@@ -5042,7 +5042,7 @@ const WORKSTREAMS = [
     ]},
     { id:'lifecycle', name:'Lifecycle & Campaign Comms', owner:'Christina Sun / Alex Khershberg', outcome:'Users guided through onboarding, renewal & conversion', kpis:[
       { id:'cadence',        label:'Lifecycle comms cadence met',            type:'milestone' },
-      { id:'campaign_reach', label:'Campaign reach / engagement',            type:'manual', unit:'count' },
+      { id:'campaign_reach', label:'Campaign reach / engagement',            type:'auto', auto:'campaign_engage', drill:'marketing' },
       { id:'email_rates',    label:'Email open / click rate',                type:'auto', auto:'email_rates', drill:'marketing' },
       { id:'onb_active',     label:'Onboarding-to-active conversion',        type:'auto', auto:'onboarding_active', drill:'training' },
     ]},
@@ -5258,6 +5258,42 @@ function wsAuto(key, qr) {
       let auto = 0, total = 0;
       WORKSTREAMS.forEach(s => s.items.forEach(w => w.kpis.forEach(k => { total++; if (k.type === 'auto') auto++; })));
       return { num: auto, disp: auto + ' of ' + total, sub: 'KPIs live-tracked on this board' };
+    }
+    case 'events_delivered': {
+      // Thought leadership = Speaking / Webinar / Blog / YouTube entries in the content log
+      const types = ['Speaking', 'Webinar', 'Blog', 'YouTube'];
+      const items = load('content').filter(c => {
+        if (!types.includes(c.type)) return false;
+        const x = new Date(c.date || ''); return !isNaN(x) && x >= qr.from && x <= qr.to;
+      });
+      return { num: items.length, disp: fmtNum(items.length), sub: 'speaking / webinars / blogs / video in ' + qr.label + ' · content log' };
+    }
+    case 'campaign_engage': {
+      const items = load('content').filter(c => { const x = new Date(c.date || ''); return !isNaN(x) && x >= qr.from && x <= qr.to; });
+      if (!items.length) return { disp: '—', sub: 'no content logged in ' + qr.label };
+      const reach = items.reduce((s, c) => s + (c.impressions || 0) + (c.ytviews || 0) + (c.vivaviews || 0) + (c.recipients || 0), 0);
+      const eng = items.reduce((s, c) => s + (c.reactions || 0) + (c.comments || 0) + (c.shares || 0) + (c.clicks || 0) + (c.edmclicks || 0) + (c.vivareactions || 0), 0);
+      return { num: reach, disp: fmtNum(reach) + ' reach · ' + fmtNum(eng) + ' engaged', sub: items.length + ' content items in ' + qr.label + ' · content log' };
+    }
+    case 'renewal_rate': {
+      // Seats whose 12-month anniversary fell in this quarter, and whether they
+      // were still active when it passed. Assumes yearly terms from access grant.
+      let due = 0, kept = 0;
+      _pd_people.forEach(p => {
+        const ct = p['Person - Customer Type'];
+        const wasPaid = ct === 'Paid Subscription' ||
+          (ct === 'Access Revoked' && (p['Person - Previous Customer Type'] || '').includes('Paid Subscription'));
+        if (!wasPaid) return;
+        const g = pdParseDate(p['Person - Date Access Granted']); if (!pdValidDate(g)) return;
+        const a = new Date(g); a.setFullYear(a.getFullYear() + 1);
+        while (a < qr.from) a.setFullYear(a.getFullYear() + 1);
+        if (a > qr.to) return;
+        due++;
+        const rem = pdParseDate(p['Person - Date Access Removed']);
+        if (!pdValidDate(rem) || rem > a) kept++;
+      });
+      if (!due) return { disp: '—', sub: 'no renewal anniversaries fall in ' + qr.label };
+      return { num: kept / due * 100, disp: fmtPct(kept / due * 100), sub: kept + ' of ' + due + ' seats retained past their anniversary · assumes 12-month terms' };
     }
   }
   return null;
