@@ -5032,6 +5032,8 @@ const WORKSTREAMS = [
       { id:'awareness',      label:'Prompted awareness (target agencies)',   type:'manual', unit:'%' },
       { id:'media_reach',    label:'LinkedIn reach (media mentions manual)', type:'auto', auto:'linkedin_reach', drill:'marketing' },
       { id:'thought_lead',   label:'Thought leadership / events delivered',  type:'auto', auto:'events_delivered', drill:'marketing' },
+      { id:'engage_rate',    label:'Content engagement rate',                type:'auto', auto:'engagement_rate', drill:'marketing', proposed:true },
+      { id:'inbound_enq',    label:'Inbound enquiries',                      type:'auto', auto:'inbound_enquiries', drill:'tracker', proposed:true },
     ]},
     { id:'csr', name:'Customer Success & Retention', owner:'Christina Sun / Alex Khershberg', outcome:'Customers satisfied · retained & renewed', kpis:[
       { id:'renewal_rate',   label:'Renewal rate',                           type:'auto', auto:'renewal_rate', drill:'pipedrive' },
@@ -5045,9 +5047,11 @@ const WORKSTREAMS = [
       { id:'campaign_reach', label:'Campaign reach / engagement',            type:'auto', auto:'campaign_engage', drill:'marketing' },
       { id:'email_rates',    label:'Email open / click rate',                type:'auto', auto:'email_rates', drill:'marketing' },
       { id:'onb_active',     label:'Onboarding-to-active conversion',        type:'auto', auto:'onboarding_active', drill:'training' },
+      { id:'ttfv',           label:'Time-to-first-value (active ≤14d of access)', type:'auto', auto:'time_to_value', drill:'activity', proposed:true },
     ]},
     { id:'training', name:'Training & Enablement', owner:'Rennie So', outcome:'Users trained & equipped to get value', kpis:[
       { id:'users_trained',  label:'Users trained',                          type:'auto', auto:'users_trained', drill:'training' },
+      { id:'trained_active', label:'Trained → still active after 30 days',   type:'auto', auto:'trained_active', drill:'activity', proposed:true },
       { id:'guide_cover',    label:'Guide / template coverage',              type:'manual', unit:'count' },
       { id:'train_sat',      label:'Training satisfaction',                  type:'manual', unit:'score' },
       { id:'ai_support',     label:'AI chat support systems',                type:'milestone' },
@@ -5072,9 +5076,11 @@ const WORKSTREAMS = [
       { id:'lead_conv',      label:'Lead-to-paid conversion',                type:'auto', auto:'lead_conversion', drill:'pipedrive' },
       { id:'net_seats',      label:'Net new paid seats',                     type:'auto', auto:'net_new_seats', drill:'pipedrive' },
       { id:'lic_rev',        label:'License revenue ($/qtr)',                type:'auto', auto:'license_revenue', drill:'pipedrive' },
+      { id:'pipe_cover',     label:'Pipeline coverage (× quarterly target)', type:'auto', auto:'pipeline_coverage', drill:'pipedrive', proposed:true },
     ]},
     { id:'strategic', name:'Strategic Licenses & Workflow Deep Dives', owner:'Bernie No / Grace Zhuang', outcome:'Centrally-funded licenses placed · workflow insights harvested', kpis:[
       { id:'cf_alloc',       label:'Centrally-funded licenses allocated',    type:'auto', auto:'centrally_funded', drill:'pipedrive' },
+      { id:'cf_util',        label:'Centrally-funded seats active (30d)',    type:'auto', auto:'cf_utilisation', drill:'activity', proposed:true },
       { id:'deep_dives',     label:'Workflow deep dives completed',          type:'manual', unit:'count' },
       { id:'templates',      label:'Templates / collateral produced',        type:'manual', unit:'count' },
       { id:'feedback_items', label:'Product feedback items to roadmap',      type:'manual', unit:'count' },
@@ -5098,6 +5104,7 @@ const WORKSTREAMS = [
     { id:'product', name:'Product', owner:'Grace Zhuang', outcome:'Capability & roadmap continuously improved', kpis:[
       { id:'feat_ontime',    label:'Feature delivery vs roadmap (on time)',  type:'manual', unit:'%' },
       { id:'feat_adopt',     label:'Feature adoption',                       type:'auto', auto:'feature_adoption', drill:'activity' },
+      { id:'w4_ret',         label:'Week-4 retention (new users)',           type:'auto', auto:'week4_retention', drill:'activity', proposed:true },
       { id:'roadmap_prior',  label:'Roadmap prioritised vs user feedback',   type:'milestone' },
     ]},
     { id:'quality', name:'Product Quality, UAT & Labs', owner:'Andrew Bobrige', outcome:'Defects caught pre-release · Labs pilots run', kpis:[
@@ -5295,6 +5302,83 @@ function wsAuto(key, qr) {
       if (!due) return { disp: '—', sub: 'no renewal anniversaries fall in ' + qr.label };
       return { num: kept / due * 100, disp: fmtPct(kept / due * 100), sub: kept + ' of ' + due + ' seats retained past their anniversary · assumes 12-month terms' };
     }
+    // ── PROPOSED upgrades (tabled as better-practice alternatives) ──────────
+    case 'engagement_rate': {
+      const items = load('content').filter(c => { const x = new Date(c.date || ''); return !isNaN(x) && x >= qr.from && x <= qr.to && (c.impressions || 0) > 0; });
+      if (!items.length) return { disp: '—', sub: 'no content with impressions in ' + qr.label };
+      const imp = items.reduce((s, c) => s + (c.impressions || 0), 0);
+      const eng = items.reduce((s, c) => s + (c.reactions || 0) + (c.comments || 0) + (c.shares || 0) + (c.clicks || 0), 0);
+      return { num: eng / imp * 100, disp: fmtPct(eng / imp * 100), sub: fmtNum(eng) + ' engagements ÷ ' + fmtNum(imp) + ' impressions · ' + qr.label };
+    }
+    case 'inbound_enquiries': {
+      const wks = load('weekly_tracker').filter(r => { const x = new Date(r.week); return !isNaN(x) && x >= qr.from && x <= qr.to; });
+      if (!wks.length) return { disp: '—', sub: 'no tracker weeks in ' + qr.label };
+      const n = wks.reduce((s, r) => s + (r.purchaseEnq || 0) + (r.eoiTickets || 0), 0);
+      return { num: n, disp: fmtNum(n), sub: 'purchase enquiries + EOI tickets · ' + qr.label };
+    }
+    case 'time_to_value': {
+      const act = _ph.emailActivity || [];
+      if (!act.length) return { disp: '—', sub: 'needs email matching (run posthog_add_emails.sql)' };
+      const em = {}; act.forEach(r => { if (r.email) em[r.email.toLowerCase()] = r; });
+      const skip = ['Contact Register', 'Expression of Interest'];
+      const cohort = _pd_people.filter(p => {
+        if (skip.includes(p['Person - Customer Type'])) return false;
+        const g = pdParseDate(p['Person - Date Access Granted']);
+        return pdValidDate(g) && g >= qr.from && g <= qr.to && (g.getTime() + 14 * 86400000) <= now.getTime();
+      });
+      if (!cohort.length) return { disp: '—', sub: 'no measurable new users in ' + qr.label };
+      const hit = cohort.filter(p => {
+        const r = em[(p['Person - Email'] || p['Email'] || '').toLowerCase()]; if (!r) return false;
+        const g = pdParseDate(p['Person - Date Access Granted']);
+        const fs = new Date(r.first_seen), ls = new Date(r.last_seen);
+        return !isNaN(fs) && !isNaN(ls) && fs <= new Date(g.getTime() + 14 * 86400000) && ls >= g;
+      }).length;
+      return { num: hit / cohort.length * 100, disp: fmtPct(hit / cohort.length * 100), sub: hit + ' of ' + cohort.length + ' new users active within 14 days of access · ' + qr.label };
+    }
+    case 'trained_active': {
+      const act = _ph.emailActivity || [];
+      if (!act.length) return { disp: '—', sub: 'needs email matching (run posthog_add_emails.sql)' };
+      const em = {}; act.forEach(r => { if (r.email) em[r.email.toLowerCase()] = r; });
+      const skip = ['Contact Register', 'Expression of Interest'];
+      const cohort = _pd_people.filter(p => {
+        if (skip.includes(p['Person - Customer Type'])) return false;
+        const g = pdParseDate(p['Person - Date Access Granted']);
+        return pdValidDate(g) && g >= qr.from && g <= qr.to && (g.getTime() + 30 * 86400000) <= now.getTime();
+      });
+      if (!cohort.length) return { disp: '—', sub: 'no trained users 30+ days old in ' + qr.label };
+      const still = cohort.filter(p => {
+        const r = em[(p['Person - Email'] || p['Email'] || '').toLowerCase()]; if (!r) return false;
+        const g = pdParseDate(p['Person - Date Access Granted']);
+        const ls = new Date(r.last_seen);
+        return !isNaN(ls) && ls >= new Date(g.getTime() + 30 * 86400000);
+      }).length;
+      return { num: still / cohort.length * 100, disp: fmtPct(still / cohort.length * 100), sub: still + ' of ' + cohort.length + ' still active 30+ days after access · ' + qr.label };
+    }
+    case 'cf_utilisation': {
+      const act = _ph.emailActivity || [];
+      if (!act.length) return { disp: '—', sub: 'needs email matching (run posthog_add_emails.sql)' };
+      const recent = new Set(act.filter(r => { const d = new Date(r.last_seen); return !isNaN(d) && (now - d) < 30 * 86400000; }).map(r => (r.email || '').toLowerCase()));
+      const cf = _pd_people.filter(p => p['Person - Customer Type'] === 'Centrally Funded Licence');
+      if (!cf.length) return { disp: '—', sub: 'no centrally-funded seats' };
+      const used = cf.filter(p => recent.has((p['Person - Email'] || p['Email'] || '').toLowerCase())).length;
+      return { num: used / cf.length * 100, disp: fmtPct(used / cf.length * 100), sub: used + ' of ' + cf.length + ' centrally-funded seats active in last 30d' };
+    }
+    case 'week4_retention': {
+      const rows = (_ph.retention || []).filter(r => {
+        const cw = new Date(r.cohort_week);
+        return !isNaN(cw) && (cw.getTime() + 28 * 86400000) <= now.getTime() && Number(r.cohort_size) > 0;
+      });
+      if (!rows.length) return { disp: '—', sub: 'no mature usage cohorts yet' };
+      const size = rows.reduce((s, r) => s + Number(r.cohort_size), 0);
+      const kept4 = rows.reduce((s, r) => s + Number(r.retained_w4 || 0), 0);
+      return { num: kept4 / size * 100, disp: fmtPct(kept4 / size * 100), sub: fmtNum(kept4) + ' of ' + fmtNum(size) + ' new users still active 4 weeks on · last ' + rows.length + ' cohorts' };
+    }
+    case 'pipeline_coverage': {
+      const open = _pd_deals.filter(dl => dl['Deal - Status'] === 'Open' && !advDeal(dl));
+      const pipeVal = open.reduce((s, dl) => s + val(dl), 0);
+      const qTarget = TARGET_ARR / 4;
+      return { num: pipeVal / qTarget, disp: (pipeVal / qTarget).toFixed(1) + '×', sub: fmtCur(pipeVal) + ' open pipeline vs ' + fmtCur(qTarget) + ' quarterly target · 3× is healthy' };
+    }
   }
   return null;
 }
@@ -5354,7 +5438,8 @@ function renderWorkstreams(el) {
   }
 
   function rowHTML(k, st, badge, valueHTML, targetHTML, sub) {
-    return `<tr style="border-bottom:1px solid var(--bg2)">
+    if (k.proposed) badge += ' <span title="Suggested addition to the draft KPI set — not yet agreed" style="font-size:9px;font-weight:700;color:#185FA5;background:#e6f1fb;border-radius:4px;padding:1px 6px">PROPOSED</span>';
+    return `<tr style="border-bottom:1px solid var(--bg2)${k.proposed ? ';background:#f7fafd' : ''}">
       <td style="padding:7px 6px;width:12px"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${dotCol[st]}"></span></td>
       <td style="padding:7px 6px;font-size:12.5px">${k.label}<div style="margin-top:2px">${badge}</div></td>
       <td style="padding:7px 6px;white-space:nowrap">${valueHTML}${sub ? `<div style="font-size:10px;color:var(--tl);margin-top:2px">${sub}</div>` : ''}</td>
@@ -5399,11 +5484,42 @@ function renderWorkstreams(el) {
         ${quarters.map(k => `<button class="range-btn${k === q ? ' active' : ''}" onclick="setWsQuarter('${k}')">${wsQuarterRange(k).label}</button>`).join('')}
       </div>
     </div>
+
+    ${(() => {
+      // ── Shared top line — the numbers every workstream feeds ────────────────
+      const now2 = new Date();
+      const activeSeats = _pd_people.filter(p => {
+        if (p['Person - Customer Type'] !== 'Paid Subscription') return false;
+        const rem = pdParseDate(p['Person - Date Access Removed']);
+        return !pdValidDate(rem) || rem > now2;
+      }).length;
+      const rev = wsAuto('license_revenue', qr);
+      const usage = wsAuto('active_usage', qr);
+      const qTarget = TARGET_ARR / 4;
+      const tile = (label, valueHTML, subHTML, prog, progCol) => `<div class="box" style="margin-bottom:0;flex:1;min-width:220px">
+        <div style="font-size:11px;color:var(--tl);text-transform:uppercase;letter-spacing:.5px;font-weight:600">${label}</div>
+        <div style="font-size:30px;font-weight:700;color:var(--navy);line-height:1.15;margin:3px 0">${valueHTML}</div>
+        ${prog != null ? `<div style="height:7px;border-radius:4px;background:var(--bg2);overflow:hidden;margin:5px 0 4px"><div style="height:100%;border-radius:4px;background:${progCol};width:${Math.min(100, Math.round(prog))}%"></div></div>` : ''}
+        <div style="font-size:11px;color:var(--tl)">${subHTML}</div>
+      </div>`;
+      const seatsPct = activeSeats / TARGET_USERS * 100;
+      const revPct = rev && rev.num != null ? rev.num / qTarget * 100 : null;
+      return `<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px">
+        ${tile('Active paying seats', fmtNum(activeSeats) + `<span style="font-size:15px;color:var(--tl);font-weight:500"> / ${TARGET_USERS}</span>`,
+          Math.round(seatsPct) + '% of target · shared goal of every workstream', seatsPct, seatsPct >= 80 ? '#2a7a4b' : seatsPct >= 50 ? '#2e8bc0' : '#c25a00')}
+        ${tile('License revenue · ' + qr.label, rev ? rev.disp : '—',
+          revPct != null ? Math.round(revPct) + '% of the ' + fmtCur(qTarget) + ' quarterly pace toward $2.4M' : 'vs ' + fmtCur(qTarget) + ' quarterly pace', revPct, revPct != null && revPct >= 80 ? '#2a7a4b' : '#c25a00')}
+        ${tile('Paid seats actively using Land iQ', usage && usage.num != null ? fmtPct(usage.num) : '—',
+          usage && usage.num != null ? usage.sub : 'switches on with email matching — value delivered, not just sold', usage && usage.num != null ? usage.num : null, '#2e8bc0')}
+      </div>`;
+    })()}
+
     <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--tl);margin-bottom:4px;align-items:center">
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#2a7a4b"></span> on target</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#e6a817"></span> within 30%</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#e05252"></span> below</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c4c4c4"></span> no target / not started</span>
+      <span><span style="font-size:9px;font-weight:700;color:#185FA5;background:#e6f1fb;border-radius:4px;padding:1px 6px">PROPOSED</span> suggested addition — not yet agreed</span>
       <span style="margin-left:auto">${isCurrentQ ? qr.label + ' in progress — LIVE numbers build through the quarter' : 'viewing a past quarter'} · targets editable (being set this week)</span>
     </div>
     ${sectionsHTML}`;
