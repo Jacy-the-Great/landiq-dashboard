@@ -8483,7 +8483,7 @@ function renderPdHealth(sc) {
       ])}
       <div style="margin-top:12px;padding:10px 14px;border-left:3px solid ${matchVerdict.col};background:var(--bg2);border-radius:0 6px 6px 0;font-size:12.5px;color:var(--tm)">
         <b style="color:${matchVerdict.col}">Product-usage match reliability:</b> ${matchVerdict.txt}
-        ${phEmailShare != null ? `<br><span style="color:var(--tl)">${custEmailsMatched} of ${allCustEmails.length} customer emails matched a known active/at-risk user · ${knownPhIds.length} usage IDs checked</span>` : ''}
+        ${knownPhIds.length ? `<br><span style="color:var(--tl)">${custEmailsMatched} of ${allCustEmails.length} customer emails matched a known active/at-risk user · ${knownPhIds.length} usage IDs checked</span>` : ''}
       </div>
     </div>
 
