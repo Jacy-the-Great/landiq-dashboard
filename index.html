@@ -2157,10 +2157,10 @@ function renderWebsite(el) {
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <button class="add-btn" onclick="toggleForm('web-daily-form')">+ Add single day</button>
           <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:500;color:var(--acc);background:var(--acc2);border:1px solid var(--acc);border-radius:6px;padding:6px 12px">
-            ↑ Import CSV
+            ↑ Import CSV (Looker Studio export)
             <input type="file" accept=".csv" style="display:none" onchange="importWebsiteDailyCSV(this)">
           </label>
-          <span style="font-size:11px;color:var(--tl)">CSV columns: Date, Views, Users, Sessions, CTA clicks, EOI forms</span>
+          <span style="font-size:11px;color:var(--tl)">Export the daily chart/table from Looker Studio as CSV and upload it as-is — columns are matched by name (Date, Views, Users/Active users, Sessions, CTA, EOI), any order</span>
         </div>
         <div id="web-daily-form" style="display:none;margin-top:10px">
           <div class="form-box">
@@ -2382,36 +2382,82 @@ function importWebsiteCSV() {
   renderWebsite();
 }
 
+// Header-aware daily website import — accepts a raw Looker Studio / GA export:
+// finds the date column and metric columns by NAME wherever they sit, skips any
+// report-title rows above the header, and handles "1,234" numbers and odd dates.
+// Falls back to the legacy fixed-order format (date,views,users,sessions,cta,eoi).
 function importWebsiteDailyCSV(input) {
   const file = input.files[0];
   if (!file) return;
   Papa.parse(file, {
     header: false, skipEmptyLines: true,
     complete: (results) => {
-      const rows = results.data;
-      let imported = 0;
+      const raw = results.data;
+      const num = v => { if (v == null || v === '') return null; const n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isNaN(n) ? null : n; };
+      // Local-date string (NOT toISOString, which shifts Sydney dates back a day)
+      const ymd = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      const parseD = s => {
+        s = String(s || '').trim(); if (!s) return null;
+        const m = s.match(/^(\d{4})(\d{2})(\d{2})$/);            // Looker's 20260401 format
+        if (m) { const d = new Date(+m[1], +m[2] - 1, +m[3]); return isNaN(d) ? null : d; }
+        const d = new Date(s); return isNaN(d) ? null : d;
+      };
+      // Locate the header row (Looker exports sometimes put a report title above it)
+      const hIdx = raw.findIndex(row => row.some(c => /^(date|day)\b/i.test(String(c || '').trim())));
       const existing = load('website_daily');
       const map = Object.fromEntries(existing.map(r => [r.date, r]));
-      rows.forEach(p => {
-        // Skip header row
-        if (!p[0] || p[0].toLowerCase().includes('date')) return;
-        const dt = new Date(p[0]);
-        if (isNaN(dt.getTime())) return;
-        const date = dt.toISOString().split('T')[0];
-        map[date] = {
-          date,
-          views:    parseInt(p[1]) || map[date]?.views    || null,
-          users:    parseInt(p[2]) || map[date]?.users    || null,
-          sessions: parseInt(p[3]) || map[date]?.sessions || null,
-          cta:      parseInt(p[4]) || map[date]?.cta      || null,
-          eoiform:  parseInt(p[5]) || map[date]?.eoiform  || null,
+      let imported = 0, matchedNote = '';
+
+      if (hIdx >= 0) {
+        const headers = raw[hIdx].map(h => String(h || '').trim());
+        const lc = headers.map(h => h.toLowerCase());
+        const col = (...needles) => {
+          let i = lc.findIndex(h => needles.some(n => h === n));
+          if (i < 0) i = lc.findIndex(h => needles.some(n => h.includes(n)));
+          return i;
         };
-        imported++;
-      });
-      const merged = Object.values(map).sort((a,b) => a.date > b.date ? 1 : -1);
+        const cDate = col('date', 'day');
+        const cViews = col('screen page views', 'page views', 'pageviews', 'views');
+        const cUsers = col('total users', 'users');
+        const cActive = col('active users');
+        const cSess = col('sessions');
+        const cCta = col('cta', 'key events', 'conversions');
+        const cEoi = col('eoi', 'form submissions', 'form');
+        raw.slice(hIdx + 1).forEach(p => {
+          const d = parseD(p[cDate]); if (!d) return;
+          const date = ymd(d);
+          const prev = map[date] || {};
+          const pick = (ci, old) => ci >= 0 ? (num(p[ci]) ?? old ?? null) : (old ?? null);
+          map[date] = {
+            date,
+            views:    pick(cViews, prev.views),
+            users:    cUsers >= 0 ? (num(p[cUsers]) ?? prev.users ?? null) : pick(cActive, prev.users),
+            sessions: pick(cSess, prev.sessions),
+            cta:      pick(cCta, prev.cta),
+            eoiform:  pick(cEoi, prev.eoiform),
+          };
+          imported++;
+        });
+        matchedNote = [['views', cViews], ['users', cUsers >= 0 ? cUsers : cActive], ['sessions', cSess], ['CTA', cCta], ['EOI', cEoi]]
+          .filter(([, ci]) => ci >= 0).map(([k, ci]) => k + ' ← “' + headers[ci] + '”').join(' · ');
+      } else {
+        // Legacy fixed-order file with no recognisable header
+        raw.forEach(p => {
+          const d = parseD(p[0]); if (!d) return;
+          const date = ymd(d);
+          map[date] = { date,
+            views: num(p[1]) ?? map[date]?.views ?? null, users: num(p[2]) ?? map[date]?.users ?? null,
+            sessions: num(p[3]) ?? map[date]?.sessions ?? null, cta: num(p[4]) ?? map[date]?.cta ?? null,
+            eoiform: num(p[5]) ?? map[date]?.eoiform ?? null };
+          imported++;
+        });
+        matchedNote = 'fixed column order (no header row found)';
+      }
+      if (!imported) { toast('⚠ No rows imported — could not find a date column. Check the file has a Date column.', 8000); input.value = ''; return; }
+      const merged = Object.values(map).sort((a, b) => a.date > b.date ? 1 : -1);
       save('website_daily', merged);
       input.value = '';
-      toast('Imported ' + imported + ' days of website data.');
+      toast('✓ Imported ' + imported + ' days · ' + matchedNote, 9000);
       renderWebsite();
     },
     error: err => toast('CSV parse error: ' + err.message)
