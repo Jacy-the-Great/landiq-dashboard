@@ -6684,8 +6684,14 @@ function renderPdSales(sc) {
       </div>
     </div>
 
-    <div class="box"><div class="box-title">Won deals &amp; revenue by month — ${range.label} · ${pipelineLabel}</div>
-      <div class="chart-wrap" style="height:260px"><canvas id="pd-won-month"></canvas></div></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div class="box" style="margin-bottom:0"><div class="box-title">Won deals by month ${infoBtn('Won deals by month',
+        '<span class="src-tag">Pipedrive · ' + pipelineLabel + '</span><br>Count of deals with <b>Status = Won</b>, grouped by the calendar month of their <b>Won time</b>.<br><div class="calc-row">COUNT(Won deals) per month · ' + range.label + '</div>')}<span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:6px">${range.label}</span></div>
+        <div class="chart-wrap" style="height:230px"><canvas id="pd-won-month"></canvas></div></div>
+      <div class="box" style="margin-bottom:0"><div class="box-title">Revenue by month ${infoBtn('Revenue by month',
+        '<span class="src-tag">Pipedrive · ' + pipelineLabel + '</span><br>Sum of <b>Deal Value</b> for won deals, grouped by the calendar month of their <b>Won time</b>. Target line is $2.4M ÷ 12.<br><div class="calc-row">SUM(Deal Value) per month · ' + range.label + '</div>')}<span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:6px">${range.label}</span></div>
+        <div class="chart-wrap" style="height:230px"><canvas id="pd-rev-month"></canvas></div></div>
+    </div>
 
     <div class="box"><div class="box-title">Win rate by month — ${range.label} · ${pipelineLabel}</div>
       <div class="chart-wrap" style="height:210px"><canvas id="pd-winrate"></canvas></div></div>
@@ -6736,8 +6742,11 @@ function renderPdSales(sc) {
     </div>
 
     <div class="box" style="margin-top:14px">
-      <div class="box-title">Sales conversion funnel — visual
-        <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">Pipedrive "reached stage" · deals created in ${range.label}</span>
+      <div class="box-title">Sales conversion funnel — visual ${infoBtn('Sales conversion funnel',
+        '<span class="src-tag">Pipedrive · ' + pipelineLabel + '</span><br>Each box counts deals <b>created in ' + range.label + '</b> that <b>reached that stage or beyond</b> (a won deal counts as having reached every stage).<br>' +
+        '<div class="calc-row">Stage % = deals at this stage ÷ deals at the previous stage<br>Won % = Won deals ÷ deals that reached Contact Made</div>' +
+        'The green <b>Won %</b> is the overall figure: <b>what share of Contact Made deals end up won</b> — not the Payment→Won step. It includes still-open deals in the denominator, so it reads lower than the win rate (won ÷ [won+lost]).')}
+        <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">deals created in ${range.label}</span>
       </div>
       ${(() => {
         // Compact Pipedrive-style funnel visual
@@ -6755,8 +6764,9 @@ function renderPdSales(sc) {
               <div class="pd-funnel-name">${s}</div>
             </div>
           `).join('')}
-          <div class="pd-funnel-arrow">
+          <div class="pd-funnel-arrow" title="Won ÷ Contact Made deals">
             <div class="pd-funnel-pct" style="color:${funnelOvr!=null?(funnelOvr>=40?'#2a7a4b':funnelOvr>=25?'#c25a00':'#c0392b'):'#aaa'}">${funnelOvr!=null?fmtPct(funnelOvr):'—'}</div>
+            <div style="font-size:8px;color:var(--tl);line-height:1;text-align:center">of Contact<br>Made</div>
             <div class="pd-funnel-chevron">›</div>
           </div>
           <div class="pd-funnel-box won-box">
@@ -6765,8 +6775,8 @@ function renderPdSales(sc) {
           </div>
         </div>
         <div style="font-size:11px;color:var(--tl);margin-top:6px">
-          Overall conversion: <strong>${funnelOvr!=null?fmtPct(funnelOvr):'—'}</strong> entry → won.
-          For detailed conversion targets, see the <strong>OPTI-MAX</strong> subtab.
+          <strong>${funnelOvr!=null?fmtPct(funnelOvr):'—'}</strong> of Contact Made deals end up Won (${funnelWon} of ${funnelCnts[0]}).
+          For stage-by-stage targets, see the <strong>OPTI-MAX</strong> subtab.
         </div>`;
       })()}
     </div>
@@ -6865,19 +6875,27 @@ function renderPdSales(sc) {
   }
 
   if (wonDeals.length) {
+    // Won deals by month (count only, single axis)
     makeChart('pd-won-month', {
       type: 'bar',
-      data: {
-        labels: months12.map(m => monthLabel(m)),
+      data: { labels: months12.map(m => monthLabel(m)),
+        datasets: [{ label: 'Won deals', data: months12.map(m => wonByMonth[m]?.count||0), backgroundColor:'#2a7a4b', borderRadius:3 }] },
+      options: { responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ display:false } },
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,precision:0},beginAtZero:true} }
+      }
+    });
+    // Revenue by month (separate chart, its own $ axis + target line)
+    makeChart('pd-rev-month', {
+      type: 'bar',
+      data: { labels: months12.map(m => monthLabel(m)),
         datasets: [
-          { label: 'Won deals', data: months12.map(m => wonByMonth[m]?.count||0), backgroundColor:'#2a7a4b', borderRadius:3, yAxisID:'y' },
-          { label: 'Revenue ($)', data: months12.map(m => wonByMonth[m]?.value||0), type:'line', borderColor:'#1a3c5e', borderWidth:2, pointRadius:3, tension:.3, fill:false, yAxisID:'y1' },
-          { label: 'Target $200k/mo', data: months12.map(()=>TARGET_ARR/12), type:'line', borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false, yAxisID:'y1' },
-        ]
-      },
+          { label: 'Revenue', data: months12.map(m => wonByMonth[m]?.value||0), backgroundColor:'#1a3c5e', borderRadius:3 },
+          { label: 'Target $200k/mo', data: months12.map(()=>TARGET_ARR/12), type:'line', borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false },
+        ] },
       options: { responsive:true, maintainAspectRatio:false,
         plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
-        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{position:'left',grid:gridStyle,ticks:{...axStyle,stepSize:1},beginAtZero:true}, y1:{position:'right',grid:{drawOnChartArea:false},ticks:{...axStyle,callback:v=>'$'+(v/1000).toFixed(0)+'k'},beginAtZero:true} }
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,callback:v=>'$'+(v/1000).toFixed(0)+'k'},beginAtZero:true} }
       }
     });
     makeChart('pd-winrate', {
@@ -6890,8 +6908,9 @@ function renderPdSales(sc) {
         ]
       },
       options:{ responsive:true, maintainAspectRatio:false,
+        layout:{ padding:{ top:8 } },
         plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
-        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,callback:v=>v+'%'},min:0,max:100} }
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,callback:v=>v+'%',stepSize:20},min:0,max:105,grace:'5%'} }
       }
     });
     makeChart('pd-wl-month', {
@@ -6985,8 +7004,9 @@ function renderPdSales(sc) {
         {label:`Target ${velTarget30}%`, data:months12.map(()=>velTarget30), borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false},
       ]},
       options:{ responsive:true, maintainAspectRatio:false,
+        layout:{ padding:{ top:8 } },
         plugins:{ legend:{position:'bottom', labels:{font:{family:'DM Sans',size:11},boxWidth:12}} },
-        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,callback:v=>v+'%'},min:0,max:100} }
+        scales:{ x:{grid:{display:false},ticks:axStyle}, y:{grid:gridStyle,ticks:{...axStyle,callback:v=>v+'%',stepSize:20},min:0,max:105} }
       }
     });
     // Pipeline stage snapshot — stacked bar showing Open/Won/Lost per stage
