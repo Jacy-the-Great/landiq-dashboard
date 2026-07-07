@@ -916,6 +916,19 @@ const fmtDate = d => d ? new Date(d).toLocaleDateString('en-AU', { day:'2-digit'
 const shortDate = s => { const d = new Date(s); return isNaN(d) ? (s || '') : d.toLocaleDateString('en-AU', { day:'numeric', month:'short' }); };
 const fmtNum  = n => n != null ? Number(n).toLocaleString() : ':';
 const fmtPct  = n => n != null ? Number(n).toFixed(1) + '%' : ':';
+// Duration parsing for webinar times — accepts "49m 34s", "49:34", "49m", "45" (mins)
+function parseMinSec(s) {
+  if (s == null || s === '') return null;
+  s = String(s).trim();
+  let m = s.match(/^(\d+)\s*[:m]\s*(\d+)/i);       // 49:34 or 49m 34s
+  if (m) return (+m[1]) * 60 + (+m[2]);
+  m = s.match(/^(\d+(?:\.\d+)?)\s*m/i);             // 49m / 49 min
+  if (m) return Math.round(+m[1] * 60);
+  m = s.match(/^(\d+(?:\.\d+)?)$/);                 // bare number → minutes
+  if (m) return Math.round(+m[1] * 60);
+  return null;
+}
+const fmtMinSec = sec => sec == null ? '—' : Math.floor(sec / 60) + ':' + String(Math.round(sec % 60)).padStart(2, '0');
 const fmtDollar = n => n != null ? '$' + Number(n).toLocaleString() : ':';
 const fmtCur = n => { if (n == null) return '—'; if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M'; if (n >= 1000) return '$' + (n/1000).toFixed(n >= 10000 ? 0 : 1) + 'k'; return '$' + Math.round(n).toLocaleString(); };
 const pct = (a, b) => (a != null && b && b !== 0) ? (a / b * 100) : null;
@@ -3792,11 +3805,13 @@ function saveWebinar() {
   const date = document.getElementById('wb-date').value;
   if (!date) { toast('Please select a date.'); return; }
   const numFields = ['regPageViews','registered','attended','cancelled','reactions'];
-  const txtFields = ['title','avgTime'];
-  const entry = { _id: 'w' + Date.now(), date };
+  const txtFields = ['title','avgTime','length'];
+  const editId = document.getElementById('wb-editid')?.value || '';
+  const entry = { _id: editId || ('w' + Date.now()), date };
   numFields.forEach(f => { const v = document.getElementById('wb-' + f)?.value; if (v !== '' && v != null) entry[f] = Number(v); });
   txtFields.forEach(f => { const v = document.getElementById('wb-' + f)?.value; if (v) entry[f] = v; });
-  save('webinars', [...load('webinars'), entry]);
+  const rest = load('webinars').filter(w => w._id !== entry._id);
+  save('webinars', [...rest, entry].sort((a, b) => (a.date > b.date ? 1 : -1)));
   toggleForm('webinar-form');
   toast('Webinar saved.');
   renderMarketing();
@@ -3945,8 +3960,35 @@ function renderMarketing(el) {
   // Last 12 tracker weeks for charts
   const trackerRecent = tracker.slice(-12);
 
-  // Webinars data
+  // Webinars data — enriched with derived performance metrics, chronological
+  const DEFAULT_WB_SECS = 3600;   // assume 60 min when a length isn't recorded
   const webinars = load('webinars');
+  const wbPerf = [...webinars].sort((a, b) => (a.date > b.date ? 1 : -1)).map(w => {
+    const avgSec = parseMinSec(w.avgTime);
+    const lenSec = parseMinSec(w.length);
+    const usedLen = lenSec || DEFAULT_WB_SECS;
+    return {
+      ...w,
+      attendRate:  pct(w.attended, w.registered),                 // show rate
+      regConv:     pct(w.registered, w.regPageViews),             // reg-page conversion
+      cancelRate:  pct(w.cancelled, w.registered),
+      avgSec, lenSec, lenAssumed: !lenSec,
+      engageRatio: avgSec != null ? avgSec / usedLen * 100 : null, // watch ÷ length
+      reactPerAtt: (w.reactions != null && w.attended) ? w.reactions / w.attended : null,
+      noShow:      (w.registered != null && w.attended != null) ? w.registered - w.attended : null,
+    };
+  });
+  const wbAvg = k => { const v = wbPerf.map(w => w[k]).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+  const wbTotAttended = wbPerf.reduce((s, w) => s + (w.attended || 0), 0);
+  window.editWebinar = (id) => {
+    const w = load('webinars').find(x => x._id === id); if (!w) return;
+    toggleForm('webinar-form');
+    ['date','title','regPageViews','registered','attended','cancelled','avgTime','reactions','length'].forEach(f => {
+      const el = document.getElementById('wb-' + f); if (el) el.value = w[f] ?? '';
+    });
+    const idEl = document.getElementById('wb-editid'); if (idEl) idEl.value = id;
+    document.getElementById('webinar-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
 
   // ── FUNNEL: join tracker + trials by week ─────────────────────────────────
   const trialsData = load('trials').sort((a,b) => a.week > b.week ? 1 : -1);
@@ -4191,9 +4233,73 @@ function renderMarketing(el) {
 
     <!-- ── WEBINARS ── -->
     <div class="box">
-      <div class="box-title">Webinar performance</div>
-      ${trackerRecent.length ? `<div class="chart-wrap" style="height:220px"><canvas id="wb-chart"></canvas></div>` : '<div class="no-data">No tracker data yet.</div>'}
-      ${trackerRecent.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--acc);font-weight:500;padding:4px 0">Show data table</summary>
+      <div class="box-title">Webinar performance — by event ${infoBtn('Webinar performance',
+        '<span class="src-tag">Manual · Webinar log (Teams)</span><br>Per-event webinar data, not email campaign data. Key rates:<br>' +
+        '<div class="calc-row">Attendance (show) rate = Attended ÷ Registered<br>Reg-page conversion = Registered ÷ Viewed reg. page<br>Engagement ratio = Avg attendance time ÷ Total webinar length</div>' +
+        'When a webinar length isn\'t recorded, 60:00 is assumed (marked with *).')}</div>
+      ${wbPerf.length ? `
+        ${cardsHTML([
+          ['Avg attendance rate', wbAvg('attendRate'), null, '%', 'attended ÷ registered'],
+          ['Avg engagement ratio', wbAvg('engageRatio'), null, '%', 'watch time ÷ length'],
+          ['Avg reg-page conversion', wbAvg('regConv'), null, '%', 'registered ÷ page views'],
+          ['Reactions per attendee', wbAvg('reactPerAtt') != null ? Math.round(wbAvg('reactPerAtt') * 10) / 10 : null, null, null, 'engagement quality'],
+          ['Total attendees (all events)', wbTotAttended || null, null, null, wbPerf.length + ' webinars'],
+        ])}
+        <div class="chart-wrap" style="height:260px;margin-top:6px"><canvas id="wb-perf-chart"></canvas></div>
+        <div class="tbl-scroll" style="margin-top:14px"><table>
+          <thead><tr>
+            <th>Date</th><th>Title</th>
+            <th>Reg. page</th><th>Registered</th><th>Attended</th>
+            <th>Attend rate</th><th>Avg watch</th><th>Webinar time</th><th>Engagement</th>
+            <th>Reactions</th><th></th>
+          </tr></thead>
+          <tbody>${[...wbPerf].reverse().map(w => `<tr>
+            <td>${fmtDate(w.date)}</td>
+            <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${w.title||''}">${w.title || ':'}</td>
+            <td>${fmtNum(w.regPageViews)}</td>
+            <td>${fmtNum(w.registered)}</td>
+            <td>${fmtNum(w.attended)}</td>
+            <td>${w.attendRate!=null?`<span class="conv-pct ${w.attendRate>60?'good':w.attendRate>40?'mid':'bad'}">${fmtPct(w.attendRate)}</span>`:'—'}</td>
+            <td>${w.avgSec!=null?fmtMinSec(w.avgSec):(w.avgTime||'—')}</td>
+            <td>${w.lenSec!=null?fmtMinSec(w.lenSec):'<span style="color:var(--tl)">60:00*</span>'}</td>
+            <td>${w.engageRatio!=null?`<span class="conv-pct ${w.engageRatio>75?'good':w.engageRatio>55?'mid':'bad'}">${fmtPct(w.engageRatio)}</span>${w.lenAssumed?'<span style="color:var(--tl)">*</span>':''}`:'—'}</td>
+            <td>${fmtNum(w.reactions)}</td>
+            <td style="white-space:nowrap">
+              <button class="btn-del" style="background:var(--acc2);color:var(--acc)" onclick="editWebinar('${w._id}')">Edit</button>
+              <button class="btn-del" onclick="delRow('webinars','${w._id}','_id')">Delete</button>
+            </td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+        <div style="font-size:10.5px;color:var(--tl);margin-top:6px">* webinar length not recorded — 60:00 assumed. Add the real length via Edit for an accurate engagement ratio.</div>
+      ` : '<div class="no-data">No webinars logged yet — add one below.</div>'}
+      <div class="form-section" style="margin-top:14px">
+        <button class="add-btn" onclick="document.getElementById('wb-editid').value='';toggleForm('webinar-form')">+ Add webinar</button>
+        <div id="webinar-form" style="display:none"><div class="form-box">
+          <input type="hidden" id="wb-editid">
+          <div class="form-grid">
+            <div class="form-group"><label>Webinar date</label><input type="date" id="wb-date"></div>
+            <div class="form-group"><label>Title</label><input type="text" id="wb-title"></div>
+            <div class="form-group"><label>Viewed registration page</label><input type="number" id="wb-regPageViews"><div class="source-note">Teams attendance tab</div></div>
+            <div class="form-group"><label>Registered</label><input type="number" id="wb-registered"><div class="source-note">Teams attendance tab</div></div>
+            <div class="form-group"><label>Attended</label><input type="number" id="wb-attended"><div class="source-note">Teams attendance tab</div></div>
+            <div class="form-group"><label>Cancelled registrations</label><input type="number" id="wb-cancelled"><div class="source-note">Teams attendance tab</div></div>
+            <div class="form-group"><label>Average attendance time</label><input type="text" id="wb-avgTime" placeholder="e.g. 49:34 or 49m 34s"><div class="source-note">Teams attendance tab</div></div>
+            <div class="form-group"><label>Total webinar length</label><input type="text" id="wb-length" placeholder="e.g. 60:00 or 60m"><div class="source-note">Full run time — drives engagement ratio</div></div>
+            <div class="form-group"><label>Total reactions</label><input type="number" id="wb-reactions"><div class="source-note">Teams engagement tab</div></div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-save" onclick="saveWebinar()">Save</button>
+            <button class="btn-cancel" onclick="toggleForm('webinar-form')">Cancel</button>
+          </div>
+        </div></div>
+      </div>
+    </div>
+
+    <!-- ── WEBINAR EMAIL PROMOTION (was mislabeled 'Webinar performance') ── -->
+    <div class="box">
+      <div class="box-title">Webinar email promotion <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:6px">the email campaign that drives registrations — not attendance performance</span></div>
+      ${trackerRecent.length ? `<div class="chart-wrap" style="height:210px"><canvas id="wb-chart"></canvas></div>` : '<div class="no-data">No tracker data yet.</div>'}
+      ${trackerRecent.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--acc);font-weight:500;padding:4px 0">Show email data table</summary>
         <div class="tbl-scroll" style="margin-top:8px"><table>
           <thead><tr><th>Week</th><th>Email Send</th><th>Open Rate</th><th>CTR</th><th>Reg Page</th><th>Registrations</th></tr></thead>
           <tbody>${[...trackerRecent].reverse().map(r => `<tr>
@@ -4206,54 +4312,6 @@ function renderMarketing(el) {
           </tr>`).join('')}</tbody>
         </table></div>
       </details>` : ''}
-      <div style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px">
-        <div class="box-title" style="margin-bottom:10px">Webinar performance: by event</div>
-        ${webinars.length ? `
-          <div class="tbl-scroll"><table>
-            <thead><tr>
-              <th>Date</th><th>Title</th>
-              <th>Viewed reg. page</th><th>Registered</th><th>Attended</th>
-              <th>Attend rate</th><th>Cancelled</th>
-              <th>Avg attendance time</th><th>Total reactions</th>
-              <th></th>
-            </tr></thead>
-            <tbody>${[...webinars].reverse().map(w => {
-              const ar = pct(w.attended, w.registered);
-              return `<tr>
-                <td>${fmtDate(w.date)}</td>
-                <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${w.title||''}">${w.title || ':'}</td>
-                <td>${fmtNum(w.regPageViews)}</td>
-                <td>${fmtNum(w.registered)}</td>
-                <td>${fmtNum(w.attended)}</td>
-                <td><span class="conv-pct ${ar>70?'good':ar>50?'mid':'bad'}">${fmtPct(ar)}</span></td>
-                <td>${fmtNum(w.cancelled)}</td>
-                <td>${w.avgTime || ':'}</td>
-                <td>${fmtNum(w.reactions)}</td>
-                <td><button class="btn-del" onclick="delRow('webinars','${w._id}','_id')">Delete</button></td>
-              </tr>`;
-            }).join('')}</tbody>
-          </table></div>
-        ` : '<div class="no-data">No webinars logged yet.</div>'}
-        <div class="form-section" style="margin-top:12px">
-          <button class="add-btn" onclick="toggleForm('webinar-form')">+ Add webinar</button>
-          <div id="webinar-form" style="display:none"><div class="form-box">
-            <div class="form-grid">
-              <div class="form-group"><label>Webinar date</label><input type="date" id="wb-date"></div>
-              <div class="form-group"><label>Title</label><input type="text" id="wb-title"></div>
-              <div class="form-group"><label>Viewed registration page</label><input type="number" id="wb-regPageViews"><div class="source-note">Teams attendance tab</div></div>
-              <div class="form-group"><label>Registered</label><input type="number" id="wb-registered"><div class="source-note">Teams attendance tab</div></div>
-              <div class="form-group"><label>Attended</label><input type="number" id="wb-attended"><div class="source-note">Teams attendance tab</div></div>
-              <div class="form-group"><label>Cancelled registrations</label><input type="number" id="wb-cancelled"><div class="source-note">Teams attendance tab</div></div>
-              <div class="form-group"><label>Average attendance time</label><input type="text" id="wb-avgTime" placeholder="e.g. 49m 34s"><div class="source-note">Teams attendance tab</div></div>
-              <div class="form-group"><label>Total reactions</label><input type="number" id="wb-reactions"><div class="source-note">Teams engagement tab</div></div>
-            </div>
-            <div class="form-actions">
-              <button class="btn-save" onclick="saveWebinar()">Save</button>
-              <button class="btn-cancel" onclick="toggleForm('webinar-form')">Cancel</button>
-            </div>
-          </div></div>
-        </div>
-      </div>
     </div>
 
     <!-- ── WEBSITE ── -->
@@ -4516,6 +4574,29 @@ function renderMarketing(el) {
       options: { responsive: true, maintainAspectRatio: false,
         plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
         scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: axStyle, beginAtZero: true } }
+      }
+    });
+  }
+
+  // Webinar PERFORMANCE trend — per event, chronological (attendance/engagement rates + attendee count)
+  if (wbPerf.length) {
+    makeChart('wb-perf-chart', {
+      type: 'bar',
+      data: {
+        labels: wbPerf.map(w => shortDate(w.date)),
+        datasets: [
+          { type: 'bar',  label: 'Attended', data: wbPerf.map(w => w.attended ?? null), backgroundColor: '#cfe0ef', borderRadius: 3, yAxisID: 'y1', order: 3 },
+          { type: 'line', label: 'Attendance rate %', data: wbPerf.map(w => w.attendRate != null ? +w.attendRate.toFixed(1) : null), borderColor: '#2a7a4b', backgroundColor: 'transparent', borderWidth: 2, pointRadius: 4, tension: .3, spanGaps: true, yAxisID: 'y', order: 1 },
+          { type: 'line', label: 'Engagement ratio %', data: wbPerf.map(w => w.engageRatio != null ? +w.engageRatio.toFixed(1) : null), borderColor: '#c25a00', backgroundColor: 'transparent', borderWidth: 2, borderDash: [5, 4], pointRadius: 4, tension: .3, spanGaps: true, yAxisID: 'y', order: 2 },
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+        scales: {
+          x: { grid: { display: false }, ticks: axStyle },
+          y:  { position: 'left',  grid: gridStyle, ticks: { ...axStyle, callback: v => v + '%' }, min: 0, max: 100, title: { display: true, text: 'Rate', font: { size: 10 }, color: '#999' } },
+          y1: { position: 'right', grid: { drawOnChartArea: false }, ticks: axStyle, beginAtZero: true, title: { display: true, text: 'Attendees', font: { size: 10 }, color: '#999' } }
+        }
       }
     });
   }
