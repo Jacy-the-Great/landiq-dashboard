@@ -877,7 +877,6 @@ const METRIC_DOCS = [
   ['retention decay', 'PostHog · nightly sync', 'The same cohort data as the heatmap, drawn as decay lines for the latest 6 cohorts.'],
   ['user health segments', 'PostHog · nightly sync', 'Definitional windows: New = first seen ≤14d ago · Active = seen ≤14d · At-risk = quiet 14–30d · Dormant = quiet 30d+.'],
   ['feature adoption', 'PostHog · nightly sync', '% of ALL users ever seen who have tried each feature at least once: the all-time denominator makes percentages read low.'],
-  ['feature completion rates', 'PostHog · heuristic ⚠', 'A word-match guess: events containing "start" vs "complete/finish/success/done" per feature. Known to misfire for some features: treat as indicative only.'],
   ['at-risk users', 'PostHog · nightly sync', 'Was active 5+ days, last seen 30–90 days ago: the actionable re-engagement list.'],
   ['power users', 'PostHog · nightly sync', 'Top 25 by distinct active days (then total events).'],
   ['paying customers gone quiet', 'Pipedrive + PostHog', 'Active paid subscribers whose email matches usage data and whose last activity is 14+ days ago. Needs email matching enabled.'],
@@ -1427,8 +1426,6 @@ function renderHome(el) {
           const content = load('content');
           const postsThisMonth = thisMonth(content, 'date').length;
           return [
-            ['Website sessions', wl?.sessions || wl?.users || null, null, null, 'latest week',
-              '<span class="src-tag">Manual · Looker Studio</span><br><b>Sessions</b> field from the most recently entered weekly website record (falls back to Users if Sessions is blank). Manually imported from Looker Studio / Google Analytics: not real-time.'],
             ['Webinars (2026)', wbThisYear.length || null, null, null, 'from records',
               '<span class="src-tag">Manual · Webinar log</span><br>Count of webinar records with <b>date starting "2026"</b>. Manually entered in the Marketing tab.'],
             ['Content posts this month', postsThisMonth || null, null, null, null,
@@ -3311,18 +3308,6 @@ function setActivitySub(sub, rerender = true, data) {
       '</tr>'
     ).join('');
 
-    // Feature completion rows
-    const completionRows = (_ph.featureCompletion||[]).map(f =>
-      '<tr>' +
-      '<td style="font-weight:500;text-transform:capitalize">' + f.feature + '</td>' +
-      '<td style="text-align:right">' + fmtNum(f.started) + '</td>' +
-      '<td style="text-align:right">' + fmtNum(f.completed) + '</td>' +
-      '<td style="text-align:right">' +
-        '<span style="color:' + (f.completion_pct >= 80 ? '#2a7a4b' : f.completion_pct >= 50 ? '#c25a00' : '#c0392b') + ';font-weight:600">' +
-        f.completion_pct + '%</span></td>' +
-      '</tr>'
-    ).join('');
-
     // At-risk users rows
     const atRiskRows = (_ph.atRisk||[]).slice(0,20).map(u =>
       '<tr>' +
@@ -3348,7 +3333,7 @@ function setActivitySub(sub, rerender = true, data) {
     sc.innerHTML = `
       ${!hasData ? '<div class="callout warn"><div class="callout-text">Run the SQL migration and click Refresh PostHog to load Insights data.</div></div>' : ''}
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+      <div style="margin-bottom:0">
 
         <div class="box">
           <div class="box-title">User health segments</div>
@@ -3366,15 +3351,6 @@ function setActivitySub(sub, rerender = true, data) {
             </div>` : '<div class="no-data">No segment data yet.</div>'}
         </div>
 
-        <div class="box">
-          <div class="box-title">Feature completion rates
-            <span style="font-size:10px;font-weight:400;color:var(--tl);margin-left:6px">started → completed</span>
-          </div>
-          ${completionRows ? `<div class="tbl-scroll"><table>
-            <thead><tr><th>Feature</th><th style="text-align:right">Started</th><th style="text-align:right">Completed</th><th style="text-align:right">Rate</th></tr></thead>
-            <tbody>${completionRows}</tbody>
-          </table></div>` : '<div class="no-data">No completion data.</div>'}
-        </div>
       </div>
 
       <div class="box">
