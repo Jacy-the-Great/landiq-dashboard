@@ -7829,10 +7829,26 @@ function renderPdOptimax(sc) {
   const avgDealVal   = dealVals.length ? Math.round(dealVals.reduce((a,b)=>a+b,0)/dealVals.length) : 8000;
   const fullPriceCnt = dealVals.filter(v=>v>=7000).length;
   const discountCnt  = dealVals.filter(v=>v>0&&v<7000).length;
-  const avgLicPrice  = t.avg_lic_price || 8000;
 
-  // Licence count helper: deal value / avg licence price (rounds up)
-  function dealLics(d){ return Math.max(1, Math.round((parseFloat(d['Deal - Value'])||avgLicPrice) / avgLicPrice)); }
+  // ── (2.1) REAL average licence won cost = total $ ÷ total licences sold ──────
+  // Licences per deal come from Pipedrive "Product quantity" (actual seats sold).
+  // Computed from won deals that HAVE a quantity, so it reflects real prices after discounts.
+  const qtyWon = wonAll.filter(d => (parseFloat(d['Deal - Product quantity'])||0) > 0);
+  const totalLicencesSold = qtyWon.reduce((s,d)=>s+(parseFloat(d['Deal - Product quantity'])||0),0);
+  const qtyWonValue = qtyWon.reduce((s,d)=>s+(parseFloat(d['Deal - Value'])||0),0);
+  const avgLicWonCost = totalLicencesSold>0 ? Math.round(qtyWonValue/totalLicencesSold) : (t.avg_lic_price||8000);
+  const licCostFromData = totalLicencesSold>0;         // true = real; false = fell back to assumption
+  const avgLicPrice  = avgLicWonCost;                  // drives the licences-view estimate
+
+  // Licence count helper: use real Product quantity where present, else estimate from value
+  function dealLics(d){ const q=parseFloat(d['Deal - Product quantity'])||0; return q>0 ? q : Math.max(1, Math.round((parseFloat(d['Deal - Value'])||avgLicPrice) / avgLicPrice)); }
+
+  // ── (2.2) Total marketing impressions (replaces "total leads reached") ───────
+  const _content = load('content');
+  const impContent  = _content.reduce((s,c)=>s+(c.impressions||0)+(c.ytviews||0)+(c.vivaviews||0)+(c.recipients||0),0);
+  const _trk = load('weekly_tracker');
+  const impLinkedIn = _trk.reduce((s,r)=>s+(r.jsImp||0)+(r.jmImp||0)+(r.lbImp||0),0);
+  const totalImpressions = impContent + impLinkedIn;
 
   // Licence counts per reached stage (all-time)
   function licsCntAtStage(idx) {
@@ -7867,38 +7883,41 @@ function renderPdOptimax(sc) {
   const ROWS = [
     { isHdr:true, label:'STAGE 1 — INCREASE LEADS & DRIVE MORE TRAFFIC' },
     { id:'leads',
-      label:'Total leads reached',
-      desc:`${t.leads_curr.toLocaleString()} total outbound touches per month (webinars, EDMs, events, calls) · edit current below`,
-      currEditable:true, currKey:'leads_curr', currStep:1000, isCurrCount:true,
-      tgtKey:'leads_target',
-      curr: t.leads_curr, tgt: t.leads_target, currPct:null },
+      label:'Total impressions',
+      desc:`${totalImpressions.toLocaleString()} marketing impressions logged · auto from content log + weekly tracker`,
+      calc: '<span class="src-tag">Content log + Weekly Tracker</span><br>Total top-of-funnel reach across all logged marketing.<br><div class="calc-row">SUM(LinkedIn post impressions) + content-log (post impressions + YouTube views + Viva views + EDM recipients)</div>Content: ' + impContent.toLocaleString() + ' · LinkedIn: ' + impLinkedIn.toLocaleString() + '. Set the target impressions in the Target column.',
+      currEditable:false, tgtKey:'leads_target',
+      curr: totalImpressions, tgt: t.leads_target, currPct:null },
     { id:'contact',
       label:'Contact Made / Discovery',
       desc:`${currCnts[0].toLocaleString()} ${unitLabel} entered the CRM since pipeline start · live from Pipedrive`,
+      calc: '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals that reached the Contact Made / Discovery stage or beyond.<br><div class="calc-row">Current % = Contact Made ' + unitLabel + ' ÷ Total impressions</div>',
       currEditable:false, tgtKey:'contact_pct_target',
-      curr: currCnts[0], currPct: t.leads_curr>0?pct(currCnts[0],t.leads_curr):null, tgtPct: t.contact_pct_target },
+      curr: currCnts[0], currPct: totalImpressions>0?pct(currCnts[0],totalImpressions):null, tgtPct: t.contact_pct_target },
     { isHdr:true, label:'STAGE 2 — INCREASE EFFECTIVENESS OF SALES PROCESS' },
     { id:'meeting',
       label:'Meetings Scheduled',
       desc:`${currCnts[1].toLocaleString()} ${unitLabel} progressed to meeting stage · ${openByStg['Meeting Scheduled']} deals currently open · Pipedrive`,
+      calc: '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals that reached Meeting Scheduled or beyond.<br><div class="calc-row">Current % = Meetings ÷ Contact Made (previous stage)</div>',
       currEditable:false, tgtKey:'meeting_pct_target',
       curr: currCnts[1], currPct: currRts[1], tgtPct: t.meeting_pct_target },
     { id:'neg',
       label:'Negotiations',
       desc:`${currCnts[2].toLocaleString()} ${unitLabel} in active negotiations · ${openByStg['Negotiations']} deals currently open · Pipedrive`,
+      calc: '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals that reached Negotiations or beyond.<br><div class="calc-row">Current % = Negotiations ÷ Meetings (previous stage)</div>',
       currEditable:false, tgtKey:'neg_pct_target',
       curr: currCnts[2], currPct: currRts[2], tgtPct: t.neg_pct_target },
     { id:'order',
       label:'Order Form Sent',
       desc:`${currCnts[3].toLocaleString()} ${unitLabel} with order form sent · ${openByStg['Order Form Sent']} deals currently open · Pipedrive`,
+      calc: '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals that reached Order Form Sent or beyond.<br><div class="calc-row">Current % = Order Form Sent ÷ Negotiations (previous stage)</div>',
       currEditable:false, tgtKey:'order_pct_target',
       curr: currCnts[3], currPct: currRts[3], tgtPct: t.order_pct_target },
     { isHdr:true, label:'STAGE 3 — INCREASE SALES CONVERSIONS' },
     { id:'invoice',
       label:'Invoice Sent',
-      // FIX: denominator is Order Form Sent (index 3), not Signed Order Form Returned (index 4)
-      // This avoids the 100% bug (Signed OFR → Invoice was 41/41).
       desc:`${currCnts[5].toLocaleString()} ${unitLabel} with invoice sent · ${openByStg['Invoice Sent']} deals currently open · Pipedrive`,
+      calc: '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals that reached Invoice Sent or beyond.<br><div class="calc-row">Current % = Invoice Sent ÷ Order Form Sent</div>Denominator is Order Form Sent (not Signed OFR) to avoid a false 100%.',
       currEditable:false, tgtKey:'invoice_pct_target',
       curr: currCnts[5],
       currPct: currCnts[3]>0 ? pct(currCnts[5], currCnts[3]) : null,
@@ -7906,6 +7925,7 @@ function renderPdOptimax(sc) {
     { id:'won',
       label:'Won (Paid Subscription)',
       desc:`${wonCurr.toLocaleString()} ${unitLabel} closed as won · avg deal value ${fmtDollar(avgDealVal)} (${fullPriceCnt} full · ${discountCnt} discounted) · Pipedrive`,
+      calc: '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with Status = Won.<br><div class="calc-row">Current % = Won ÷ Invoice Sent (previous stage)</div>',
       currEditable:false, tgtKey:'won_pct_target',
       curr: wonCurr,
       currPct: currCnts[5]>0 ? pct(wonCurr, currCnts[5]) : null,
@@ -7914,12 +7934,14 @@ function renderPdOptimax(sc) {
     { id:'upsell',
       label:'Upsell rate',
       desc:`${t.upsell_pct_curr}% of clients currently take additional licences · edit current below`,
+      calc: '<span class="src-tag">Manual entry</span><br>Share of existing clients who take additional licences. Enter the current rate in the Current column and the target in the Target column.',
       currEditable:true, currKey:'upsell_pct_curr', currStep:1, currMax:100, isCurrPct:true,
       tgtKey:'upsell_pct_target',
       curr: null, currPct: t.upsell_pct_curr||null, tgtPct: t.upsell_pct_target },
     { id:'price',
       label:'Increase average price per licence (by reducing public sector discounts)',
-      desc:`Current avg price increase: $${t.price_curr||0}/licence/year · edit current below`,
+      desc:`Avg licence won cost today: <b>${fmtDollar(avgLicWonCost)}</b>${licCostFromData?'':' (assumed)'} · set the price-increase target below`,
+      calc: '<span class="src-tag">Pipedrive · Won Deals</span><br>Average licence won cost = total won revenue ÷ total licences sold (from Product quantity) — the real average once discounts are factored in.<br><div class="calc-row">' + (licCostFromData ? fmtDollar(qtyWonValue) + ' ÷ ' + totalLicencesSold.toLocaleString() + ' licences = ' + fmtDollar(avgLicWonCost) : 'No Product quantity in the data yet — assumed ' + fmtDollar(avgLicWonCost)) + '</div>The Current / Target here are the $/licence/year price increase you aim to achieve.',
       currEditable:true, currKey:'price_curr', currStep:10, currPrefix:'$', isCurrCount:true,
       tgtKey:'price_target',
       curr: t.price_curr||0, tgt: t.price_target||0, currPct:null },
@@ -7945,7 +7967,7 @@ function renderPdOptimax(sc) {
   // ── Stage 5: Total Impact calculations ───────────────────────────────────
   // Per-stage uplifts (projected vs current, as %)
   const stageUpliftPairs = [
-    { curr: t.leads_curr,  prj: t.leads_target },
+    { curr: totalImpressions, prj: t.leads_target },
     { curr: currCnts[0],   prj: proj.contact },
     { curr: currCnts[1],   prj: proj.meeting },
     { curr: currCnts[2],   prj: proj.neg },
@@ -7991,7 +8013,7 @@ function renderPdOptimax(sc) {
     // Others: Pipedrive count (read-only display)
     let currCell;
     if (r.id === 'leads') {
-      currCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input om-input-wide" type="number" min="0" step="1000" value="${t[r.currKey]||0}" onchange="omSave('${r.currKey}',this.value)"></div>`;
+      currCell = `<span style="font-weight:600">${totalImpressions.toLocaleString()}</span>`;   // auto from marketing data
     } else if (r.id === 'upsell') {
       currCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="100" step="1" value="${t[r.currKey]||0}" onchange="omSave('${r.currKey}',this.value)"><span style="font-size:11px;color:var(--tl)">%</span></div>`;
     } else if (r.id === 'price') {
@@ -8009,7 +8031,7 @@ function renderPdOptimax(sc) {
     if (r.id === 'leads' || r.id === 'upsell' || r.id === 'price') {
       currPctCell = '<span style="color:var(--tl)">—</span>';
     } else {
-      const label = r.id === 'contact' ? '<div style="font-size:9px;color:var(--tl)">of leads</div>' : '';
+      const label = r.id === 'contact' ? '<div style="font-size:9px;color:var(--tl)">of impressions</div>' : '';
       currPctCell = r.currPct!=null
         ? `<span class="conv-pct ${r.currPct>=70?'good':r.currPct>=40?'mid':'bad'}">${fmtPct(r.currPct)}</span>${label}`
         : '—';
@@ -8049,7 +8071,7 @@ function renderPdOptimax(sc) {
     // Price: (target_$ - curr_$) relative to avg deal value
     let actualPct;
     if (r.id === 'leads') {
-      actualPct = t.leads_curr > 0 ? +((t.leads_target - t.leads_curr) / t.leads_curr * 100).toFixed(1) : null;
+      actualPct = totalImpressions > 0 ? +((t.leads_target - totalImpressions) / totalImpressions * 100).toFixed(1) : null;
     } else if (r.id === 'upsell') {
       actualPct = +((t.upsell_pct_target||0) - (t.upsell_pct_curr||0)).toFixed(1);
     } else if (r.id === 'price') {
@@ -8081,7 +8103,7 @@ function renderPdOptimax(sc) {
       : '—';
 
     return `<tr>
-      <td><div style="font-weight:500">${r.label}</div>${r.desc?`<div style="font-size:11px;color:var(--tl);margin-top:2px">${r.desc}</div>`:''}</td>
+      <td><div style="font-weight:500;display:flex;align-items:center;gap:2px;flex-wrap:wrap">${r.label}${r.calc?infoBtn(r.label, r.calc):''}</div>${r.desc?`<div style="font-size:11px;color:var(--tl);margin-top:2px">${r.desc}</div>`:''}</td>
       <td style="text-align:right">${currCell}</td>
       <td style="text-align:right">${currPctCell}</td>
       <td style="text-align:right">${tgtCountCell}</td>
@@ -8140,18 +8162,19 @@ function renderPdOptimax(sc) {
         <button class="range-btn${!isLic?' active':''}" onclick="setOmView('deals')">Deals</button>
         <button class="range-btn${isLic?' active':''}" onclick="setOmView('licences')">Licences</button>
       </div>
-      ${isLic ? `<span style="font-size:11px;color:var(--tl)">Licence count = deal value ÷ avg licence price</span>
-        <div style="display:flex;align-items:center;gap:4px;margin-left:8px">
-          <span style="font-size:11px;color:var(--tl)">Avg lic price: $</span>
+      ${isLic ? `<span style="font-size:11px;color:var(--tl)">Licences = Product quantity where recorded, else deal value ÷ ${licCostFromData ? '<b>'+fmtDollar(avgLicWonCost)+'</b> (real avg from data)' : 'fallback price below'}</span>
+        ${licCostFromData ? '' : `<div style="display:flex;align-items:center;gap:4px;margin-left:8px">
+          <span style="font-size:11px;color:var(--tl)">Fallback lic price: $</span>
           <input class="om-input" style="width:72px" type="number" min="100" step="500" value="${t.avg_lic_price||8000}" onchange="omSave('avg_lic_price',this.value)">
-        </div>` : ''}
+        </div>`}` : ''}
     </div>
 
     <div class="cards" style="margin-bottom:18px">
-      <div class="card"><div class="card-label">Won ${unitLabel} (all time)</div><div class="card-value">${wonCurr}</div><div class="card-sub">2026 Sales pipeline</div></div>
-      <div class="card"><div class="card-label">Projected won / month (target)</div><div class="card-value" style="color:var(--gr)">${projWon??'—'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">+${projImpPct}% improvement</div>`:''}</div>
-      <div class="card"><div class="card-label">Revenue / month (current)</div><div class="card-value">${fmtDollar(currRevMonth)}</div><div class="card-sub">${fmtDollar(currRevYear)}/yr at current rate</div></div>
-      <div class="card"><div class="card-label">Revenue / month (target)</div><div class="card-value" style="color:var(--gr)">${fmtDollar(projRevMonth)}</div><div class="card-sub" style="color:var(--gr)">+${fmtDollar(projRevMonth-currRevMonth)}/mo uplift</div></div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Won ${unitLabel} (all time)${infoBtn('Won '+unitLabel,'<span class="src-tag">Pipedrive · 2026 Sales</span><br>Count of '+unitLabel+' with Status = Won.<br><div class="calc-row">'+(isLic?'SUM(Product quantity of won deals)':'COUNT(Won deals)')+'</div>')}</div><div class="card-value">${wonCurr}</div><div class="card-sub">2026 Sales pipeline</div></div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Avg licence won cost${infoBtn('Average licence won cost','<span class="src-tag">Pipedrive · Won Deals</span><br>The real average price per licence once discounts are factored in.<br><div class="calc-row">Total won revenue ÷ total licences sold (Product quantity)<br>'+(licCostFromData?fmtDollar(qtyWonValue)+' ÷ '+totalLicencesSold.toLocaleString()+' = '+fmtDollar(avgLicWonCost):'no Product quantity yet — assumed')+'</div>')}</div><div class="card-value">${fmtDollar(avgLicWonCost)}</div><div class="card-sub">${licCostFromData?totalLicencesSold.toLocaleString()+' licences sold':'assumed — add Product quantity'}</div></div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Projected won / month${infoBtn('Projected won / month','<span class="src-tag">Calculated</span><br>Won '+unitLabel+' per month if every target conversion rate is hit.<br><div class="calc-row">Target impressions × chained target % at each stage</div>')}</div><div class="card-value" style="color:var(--gr)">${projWon??'—'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">+${projImpPct}% improvement</div>`:''}</div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Revenue / month (current)${infoBtn('Revenue / month (current)','<span class="src-tag">Pipedrive · Won Deals</span><br>Current won run-rate × average deal value.<br><div class="calc-row">(Won deals ÷ months since first deal) × avg deal value ('+fmtDollar(avgDealVal)+')</div>')}</div><div class="card-value">${fmtDollar(currRevMonth)}</div><div class="card-sub">${fmtDollar(currRevYear)}/yr at current rate</div></div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Revenue / month (target)${infoBtn('Revenue / month (target)','<span class="src-tag">Calculated</span><br>Projected won run-rate × average deal value.<br><div class="calc-row">(Projected won ÷ months) × avg deal value</div>')}</div><div class="card-value" style="color:var(--gr)">${fmtDollar(projRevMonth)}</div><div class="card-sub" style="color:var(--gr)">+${fmtDollar(projRevMonth-currRevMonth)}/mo uplift</div></div>
     </div>
 
     <div style="overflow-x:auto">
