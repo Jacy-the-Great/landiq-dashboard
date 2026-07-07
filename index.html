@@ -805,8 +805,116 @@ function _flagLabelText(el) {
   return c.textContent.replace(/\s+/g, ' ').trim();
 }
 
-// Adds a trust dot to every metric label/title. Idempotent — safe to call on
-// every DOM change (a MutationObserver does exactly that, to catch sub-tabs).
+// ── METRIC DOCUMENTATION REGISTRY ─────────────────────────────────────────────
+// Source + exact calculation for every chart/table, matched by title substring
+// (checked in order — first hit wins). The injector below appends an ⓘ popup to
+// every .box-title from this registry, so EVERY section is documented; anything
+// unmatched gets an honest source-level fallback for its tab.
+const METRIC_DOCS = [
+  // Training (the access-granted family — explicitly NOT training sessions)
+  ['new user access granted per month', 'Pipedrive · People', 'COUNT of people by the month of <b>Date Access Granted</b> (licence activation), excluding Contact Register and Expression of Interest. <b>This is onboarding/licence activation, NOT training sessions</b> — actual sessions are in the training log below.'],
+  ['trial → paid conversions by month', 'Pipedrive · People', 'People whose current type is <b>Paid Subscription</b> and previous type includes a trial licence, grouped by the month their access was granted (Pipedrive has no conversion-date field, so this dates by trial start).'],
+  ['pipedrive onboarding starts by month', 'Pipedrive · Deals', 'General Onboarding Pipeline deals that have moved past "Awaiting Onboarding", grouped by the month the deal was created.'],
+  ['onboarding pipeline', 'Pipedrive · General Onboarding Pipeline', 'Current count of deals at each onboarding stage — a live snapshot, not date-filtered.'],
+  // Sales sub-tab
+  ['won vs lost by month', 'Pipedrive · Deals', 'Won deals counted by the month of <b>Won time</b>; lost deals by the month of <b>Lost time</b>.'],
+  ['average sales cycle', 'Pipedrive · Deals', 'For each won deal: days from <b>Deal created</b> to <b>Won time</b>, averaged per month of winning.'],
+  ['deal source performance', 'Pipedrive · Deals', 'Closed deals grouped by <b>Source channel</b>; bars show won vs lost counts per source.'],
+  ['won deals by category', 'Pipedrive · Deals', 'Won deals grouped by the <b>Category</b> field (New Organisation / Increase Licences / Convert from Central Funding etc.).'],
+  ['won deals by owner', 'Pipedrive · Deals', 'Won deals grouped by <b>Deal Owner</b>.'],
+  ['pipeline stage snapshot', 'Pipedrive · Deals', 'Every deal\'s CURRENT stage, split by status (open / won / lost). Snapshot — not date-filtered.'],
+  ['sales conversion funnel —', 'Pipedrive · Deals', 'Deals created in the selected period that <b>reached each stage or beyond</b> (won deals count as having reached every stage). Stage % = this stage ÷ previous stage.'],
+  ['stage conversion rates', 'Pipedrive · Deals', 'Same reached-stage funnel as above, shown as a table: each stage\'s count and its % of the previous stage. "Won (total)" % = Won ÷ Contact Made.'],
+  ['sales velocity', 'Pipedrive · Deals', 'Days from <b>Deal created</b> to <b>Won time</b> per won deal — bucket distribution plus the share won within 30 days, by month.'],
+  ['all won deals', 'Pipedrive · Deals', 'Raw table of every won deal in the selected range — title, org, owner, source, value, won date, cycle days. No calculations beyond cycle = won − created.'],
+  ['win / loss analysis', 'Pipedrive · Deals', 'Left: lost deals grouped by <b>Lost reason</b>. Right: win rate (won ÷ won+lost) per <b>Source channel</b>, only sources with 2+ closed deals.'],
+  // Revenue
+  ['cumulative contracted revenue', 'Pipedrive · Won Deals', 'Running total of won <b>Deal Value</b> by month of Won time, across all time, vs the $2.4M target line.'],
+  ['revenue per month', 'Pipedrive · Won Deals', 'New won Deal Value per month ÷ 12 — the monthly-revenue equivalent of each month\'s signings (assumes yearly contracts).'],
+  ['deal size distribution', 'Pipedrive · Won Deals', 'Won deals in range bucketed by Deal Value (<$1k, $1–5k, $5–20k, $20–50k, $50k+): COUNT per bucket.'],
+  ['revenue by deal size', 'Pipedrive · Won Deals', 'Same value buckets as the distribution chart, but SUM of Deal Value per bucket — shows where the money concentrates.'],
+  ['top organisations by contracted revenue', 'Pipedrive · Won Deals', 'SUM of won Deal Value per organisation in the selected range.'],
+  ['revenue progress to', 'Pipedrive · Won Deals', 'Total booked revenue (all-time won Deal Value) as a share of the $2.4M target; deals-needed = gap ÷ average deal value.'],
+  ['revenue trajectory', 'Calculated · OPTI-MAX', 'Current monthly won-rate × avg deal value projected 36 months, vs the same with OPTI-MAX target conversion rates.'],
+  ['revenue won vs lost by month', 'Pipedrive · Deals', 'SUM of Deal Value for won deals (by Won time month) vs lost deals (by Lost time month).'],
+  // Churn
+  ['revenue churn vs new paid', 'Pipedrive · People', 'New paid: people whose type is/was Paid Subscription counted by month access was granted. Churn: Access Revoked with previous type including Paid Subscription, by month access was removed.'],
+  ['revenue churn by month', 'Pipedrive · People', 'Paid→Revoked people by the month of <b>Date Access Removed</b>; pale bars are trial non-conversions.'],
+  ['tenure at churn', 'Pipedrive · People', 'For each churned paid subscriber: days from Date Access Granted to Date Access Removed, bucketed.'],
+  ['previous customer type at churn', 'Pipedrive · People', 'For all Access Revoked people, the last value in their (comma-separated) Previous Customer Type field, counted.'],
+  ['revenue churn by organisation', 'Pipedrive · People', 'COUNT of churned paid subscribers (Paid→Revoked) per organisation, all time.'],
+  ['recently churned paid subscribers', 'Pipedrive · People', 'Row-level list: type = Access Revoked AND previous type includes Paid Subscription, sorted by removal date.'],
+  // Users & Licences
+  ['active paid subscribers over time', 'Pipedrive · People', 'Point-in-time count per month: people whose access was granted on/before month-end and not removed by then. Not cumulative signups — a true "how many active then".'],
+  ['customer type breakdown', 'Pipedrive · People', 'COUNT of all people per <b>Customer Type</b> — current state, no date filter.'],
+  ['new paid subscribers by month', 'Pipedrive · People', 'Paid Subscription people counted by the month of Date Access Granted.'],
+  ['active paid subscribers by organisation', 'Pipedrive · People', 'Currently-active paid subscribers (not removed) grouped by organisation.'],
+  ['access end dates', 'Pipedrive · People', 'Paid subscribers\' <b>Date Access Removed</b> values counted by month — upcoming and past access expiries.'],
+  // Trials
+  ['open trial deals', 'Pipedrive · Trial Pipeline', 'Current open deals per trial stage — live snapshot.'],
+  ['trial funnel — stage conversion', 'Pipedrive · Trial Pipeline', 'All-time deals that reached each trial stage or beyond; % vs previous stage.'],
+  ['new trial people by month', 'Pipedrive · People', 'People whose Customer Type contains "trial", counted by month of Date Access Granted.'],
+  ['new trial deals by month', 'Pipedrive · Trial Pipeline', 'Trial Pipeline deals counted by the month of Deal created.'],
+  ['active trials by organisation', 'Pipedrive · People', 'Currently-active trial-type people grouped by organisation.'],
+  ['trial lost reasons', 'Pipedrive · Trial Pipeline', 'Lost trial deals grouped by <b>Lost reason</b>.'],
+  // Marketing
+  ['website → trial → signed funnel', 'Manual · Weekly Tracker + Trials tables', 'Joins the two weekly tables by week: visitors/enquiries from the tracker, demo/SDK/order/signed from the trials table. Cumulative totals; a missed week distorts rates.'],
+  ['linkedin impressions — weekly total', 'Manual · Weekly Tracker', 'SUM of logged LinkedIn post impressions per tracked week (combined total — no individual attribution).'],
+  ['webinar email promotion', 'Manual · Weekly Tracker', 'The promo email campaign: sends, open rate, click-through, reg-page conversion, registrations. This is promotion, not webinar attendance performance.'],
+  ['edm performance', 'Manual · Content log + Weekly Tracker', 'Email newsletter entries and their open/click rates as logged.'],
+  ['content events vs website traffic', 'Manual · Content log + Website data', 'Daily website users (line) with content publish dates overlaid as bars — visual coincidence, not proven causation.'],
+  ['all content', 'Manual · Content log', 'Every logged content item with its own per-channel metrics.'],
+  ['monthly views', 'Manual · Content log', 'Logged view counts summed by month.'],
+  // Activity (PostHog)
+  ['giraffe — weekly active users', 'PostHog · nightly sync', 'Distinct users with ≥1 event per week; logins = $identify events; new = first-ever-seen that week. Current week is partial.'],
+  ['weekly breakdown', 'PostHog · nightly sync', 'Same weekly numbers as the chart, as a table.'],
+  ['daily users as a share of monthly', 'PostHog · nightly sync', 'Each day\'s distinct users ÷ that calendar month\'s distinct users.'],
+  ['daily users', 'PostHog · nightly sync', 'Distinct users with ≥1 event per day, last 30 days.'],
+  ['sdk & feature usage', 'PostHog · nightly sync', 'Events grouped by feature (the prefix of the event name, e.g. "sitegen"), last 30 days; excludes internal $-events and click noise.'],
+  ['feature breakdown', 'PostHog · nightly sync', 'Per-feature events and distinct users, last 30 days.'],
+  ['new users per week', 'PostHog · nightly sync', 'Users counted in the week they were FIRST ever seen.'],
+  ['cohort retention heatmap', 'PostHog · nightly sync', 'Users grouped by first-seen week; retained-at-N-weeks = last seen at least N weeks after first seen. Recent cohorts can\'t show later columns yet.'],
+  ['retention decay', 'PostHog · nightly sync', 'The same cohort data as the heatmap, drawn as decay lines for the latest 6 cohorts.'],
+  ['user health segments', 'PostHog · nightly sync', 'Definitional windows: New = first seen ≤14d ago · Active = seen ≤14d · At-risk = quiet 14–30d · Dormant = quiet 30d+.'],
+  ['feature adoption', 'PostHog · nightly sync', '% of ALL users ever seen who have tried each feature at least once — the all-time denominator makes percentages read low.'],
+  ['feature completion rates', 'PostHog · heuristic ⚠', 'A word-match guess: events containing "start" vs "complete/finish/success/done" per feature. Known to misfire for some features — treat as indicative only.'],
+  ['at-risk users', 'PostHog · nightly sync', 'Was active 5+ days, last seen 30–90 days ago — the actionable re-engagement list.'],
+  ['power users', 'PostHog · nightly sync', 'Top 25 by distinct active days (then total events).'],
+  ['paying customers gone quiet', 'Pipedrive + PostHog', 'Active paid subscribers whose email matches usage data and whose last activity is 14+ days ago. Needs email matching enabled.'],
+  ['top at-risk users', 'PostHog · nightly sync', 'First rows of the at-risk list (see Activity → Insights for the full list).'],
+  // Team / Exec / Home / misc
+  ['scorecard —', 'Pipedrive · Deals', 'Per Deal Owner in the chosen period: won count, SUM won value, win rate (won ÷ won+lost), avg deal, avg cycle. Colour = vs the editable targets.'],
+  ['trend —', 'Pipedrive · Deals', 'The same per-owner stats computed for each of the last 6 periods.'],
+  ['targets — per rep', 'Manual', 'Editable targets applied to every rep; saved on this device.'],
+  ['sales performance — last 12 months', 'Pipedrive · Deals + People', 'Bars: won deals (2026 Sales) per month of Won time. Line: cumulative count of paid subscribers by access-granted month, vs the 600 target.'],
+  ['recent deal activity', 'Pipedrive · Deals', 'Last 10 closed (won or lost) deals by close date — raw rows.'],
+  ['sales pipeline', 'Pipedrive · Deals', 'Current open 2026 Sales deals counted per stage.'],
+  ['weekly marketing tracker', 'Manual · weekly entry', 'The team\'s weekly manual entries — metrics as rows, weeks as columns. Source of the marketing-side numbers used elsewhere.'],
+  ['data currency', 'System', 'The most recent record date per data source; ⚠ when older than 10 days.'],
+  ['import pipedrive data', 'System', 'Upload panel — per-file date, row count and required-field check.'],
+  ['contracted revenue by period', 'Pipedrive · Won Deals', 'Won Deal Value summed by year, quarter and month of Won time. Hover any figure for the exact dollars.'],
+  ['webinar performance — by event', 'Manual · Webinar log (Teams)', 'Per-event: attendance rate = attended ÷ registered; engagement ratio = avg watch time ÷ webinar length (60:00 assumed when length missing).'],
+];
+function metricDocFor(txt) {
+  const t = txt.toLowerCase();
+  for (const [pat, src, calc] of METRIC_DOCS) if (t.includes(pat)) return { src, calc };
+  return null;
+}
+const TAB_FALLBACK_SRC = {
+  pipedrive: 'Pipedrive CSV import — see the import dates in the banner above',
+  team: 'Pipedrive · Deals (Deal Owner)',
+  activity: 'PostHog usage data · nightly sync',
+  marketing: 'Manual entry — content log / weekly tracker / webinar log',
+  tracker: 'Manual · weekly entry',
+  training: 'Pipedrive access dates + manual training log',
+  home: 'Mixed — each card inside has its own ⓘ',
+  exec: 'Mixed — aggregated from the other tabs',
+  workstreams: 'Mixed — see the source note under each KPI value',
+};
+
+// Adds a trust dot to every metric label/title AND an ⓘ calculation popup to
+// every box title (from METRIC_DOCS, else a per-tab source fallback).
+// Idempotent — safe on every DOM change (MutationObserver covers sub-tabs).
 function injectFlags(root) {
   root = root || document.getElementById('main-content');
   if (!root) return;
@@ -814,6 +922,13 @@ function injectFlags(root) {
     if (el.querySelector(':scope > .flag-dot')) return;
     const txt = _flagLabelText(el);
     if (!txt || txt.length < 3) return;
+    // ⓘ popup for box titles that don't already have one
+    if (el.classList.contains('box-title') && !el.querySelector('.info-btn')) {
+      const doc = metricDocFor(txt);
+      const src = doc ? doc.src : (TAB_FALLBACK_SRC[activeTab] || 'See source data');
+      const calc = doc ? doc.calc : 'Computed directly from the source above, grouped as the title describes.';
+      el.insertAdjacentHTML('beforeend', infoBtn(txt.slice(0, 70), '<span class="src-tag">' + src + '</span><br>' + calc));
+    }
     const key = flagKey(txt);
     const status = _metricFlags[key] || '';
     const dot = document.createElement('span');
@@ -1233,7 +1348,7 @@ function renderHome(el) {
         row('Won deals', wonLastMonth.length, wonMonthPrior.length),
         row('Revenue', revLastMonth, revMonthPrior, true),
         row('New trials', trialsLastMonth, trialsMonthPrior),
-        row('Users trained', trainedIn(_pm.getFullYear(), _pm.getMonth()), trainedIn(_pm2.getFullYear(), _pm2.getMonth())),
+        row('New access granted', trainedIn(_pm.getFullYear(), _pm.getMonth()), trainedIn(_pm2.getFullYear(), _pm2.getMonth())),
       ].join('');
       const moName = d => d.toLocaleDateString('en-AU', { month: 'short' });
       return `<div class="box" style="padding:14px 16px">
@@ -1263,7 +1378,7 @@ function renderHome(el) {
         '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND either no Date Access Removed, or Date Access Removed is in the future.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
       ['Website users', wl?.users, null, null, null,
         '<span class="src-tag">Manual · Looker Studio</span><br>The <b>Users</b> field from the most recently entered weekly website record. Not real-time — requires manual import from Looker Studio / Google Analytics.'],
-      ['People trained', trainedTotal, null, null, null,
+      ['Users given access', trainedTotal, null, null, null,
         '<span class="src-tag">Pipedrive · People</span><br>Count of all Pipedrive people with a <b>Date Access Granted</b> date set. Includes all licence types (Paid, Trial, Centrally Funded).<br><div class="calc-row">COUNT where Date Access Granted is not null</div>Falls back to sum of manually entered training session attendees if Pipedrive is not loaded.'],
     ])}
 
@@ -1553,10 +1668,10 @@ function renderExec(el) {
           </table>` : '<div class="no-data">No 2026 Sales pipeline data.</div>'}
       </div>
       <div class="box" style="margin-bottom:0">
-        <div class="box-title">Training this month</div>
+        <div class="box-title">New access granted (this month)</div>
         <div style="font-size:28px;font-weight:700;color:var(--navy);margin:8px 0">${trainedThisMonth || '—'}</div>
         <div style="font-size:12px;color:var(--tl)">new users onboarded (access granted)</div>
-        <div style="margin-top:12px;font-size:12px;color:var(--tl)">Total trained: <strong style="color:var(--navy)">${fmtNum(pdTrained.length)}</strong></div>
+        <div style="margin-top:12px;font-size:12px;color:var(--tl)">Total with access: <strong style="color:var(--navy)">${fmtNum(pdTrained.length)}</strong></div>
       </div>
       <div class="box" style="margin-bottom:0">
         <div class="box-title">Top at-risk users</div>
@@ -3507,9 +3622,9 @@ function renderTraining(el) {
     </div>
 
     ${cardsHTML([
-      ['Trained this month', trainedThisMonth || null, null, null, null,
+      ['New access granted (this month)', trainedThisMonth || null, null, null, null,
         '<span class="src-tag">Pipedrive · People</span><br>Count of people with <b>Date Access Granted</b> in the current calendar month. All licence types included (Paid, Trial, Centrally Funded).<br><div class="calc-row">COUNT where Date Access Granted month = current month</div>Falls back to manually entered training session attendees if Pipedrive is not loaded.'],
-      ['Trained (total)', cumulative || null, null, null, null,
+      ['Users given access (total)', cumulative || null, null, null, null,
         '<span class="src-tag">Pipedrive · People</span><br>Total count of all Pipedrive people with any <b>Date Access Granted</b> date set — across all time and all licence types.<br><div class="calc-row">COUNT where Date Access Granted is not null</div>Falls back to sum of manually entered attendee counts if Pipedrive is not loaded.'],
       ['Currently onboarding', inOnboard + awaiting || null, null, null, 'Pipedrive: Onboarding Pipeline',
         '<span class="src-tag">Pipedrive · General Onboarding Pipeline</span><br>Deals currently at <b>In Onboarding</b> (' + inOnboard + ') or <b>Awaiting Onboarding</b> (' + awaiting + ') stages. Current open deal snapshot — not date-filtered.<br><div class="calc-row">Stage = "In Onboarding" OR "Awaiting Onboarding"</div>'],
@@ -3602,7 +3717,7 @@ function setTrainingSub(sub, rerender = true, barData, data, webinars, convMonth
   if (sub === 'sessions') {
     sc.innerHTML = `
       <div class="box">
-        <div class="box-title">People trained per month — Pipedrive access granted date · up to 3 years</div>
+        <div class="box-title">New user access granted per month — up to 3 years</div>
         <div class="chart-wrap" style="height:240px"><canvas id="training-bar"></canvas></div>
       </div>
 
@@ -3655,7 +3770,7 @@ function setTrainingSub(sub, rerender = true, barData, data, webinars, convMonth
       type: 'bar',
       data: {
         labels: barData.map(([k]) => monthLabel(k)),
-        datasets: [{ label: 'People trained', data: barData.map(([,v]) => v), backgroundColor: '#2a7a4b', borderRadius: 4 }]
+        datasets: [{ label: 'Access granted', data: barData.map(([,v]) => v), backgroundColor: '#2a7a4b', borderRadius: 4 }]
       },
       options: { responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
@@ -5323,9 +5438,14 @@ function wsAuto(key, qr) {
       return { num: done / ob.length * 100, disp: fmtPct(done / ob.length * 100), sub: done + ' of ' + ob.length + ' past onboarding · snapshot' };
     }
     case 'users_trained': {
+      // Prefer REAL training data (session-log attendees). Access-granted is an
+      // onboarding proxy, only used when no sessions are logged for the quarter.
+      const sess = load('training').filter(r => { const d = new Date(r.date || ''); return !isNaN(d) && d >= qr.from && d <= qr.to; });
+      const att = sess.reduce((s, r) => s + (r.attendees || 0), 0);
+      if (att > 0) return { num: att, disp: fmtNum(att), sub: att + ' attendees · ' + sess.length + ' logged sessions · ' + qr.label };
       const skip = ['Contact Register', 'Expression of Interest'];
       const n = _pd_people.filter(p => !skip.includes(p['Person - Customer Type']) && inQ(p['Person - Date Access Granted'])).length;
-      return { num: n, disp: fmtNum(n), sub: 'access granted in ' + qr.label };
+      return { num: n, disp: fmtNum(n), sub: 'proxy: access granted (no training sessions logged for ' + qr.label + ')' };
     }
     case 'new_leads': {
       const n = _pd_deals.filter(d => inQ(d['Deal - Deal created'])).length;
