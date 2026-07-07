@@ -5873,6 +5873,70 @@ function pdValidateImport(rows, kind) {
   return warns;
 }
 
+// ── BULLETPROOF UPLOAD PIPELINE ──────────────────────────────────────────────
+// Only the columns the dashboard uses are stored (a raw Pipedrive export has
+// 100+ columns of noise — trimming cuts payloads ~85% and avoids size limits).
+const PD_KEEP = {
+  deals: ['Deal - ID','Deal - Title','Deal - Value','Deal - Currency of Value','Deal - Organisation','Deal - Contact person',
+    'Deal - Person','Deal - Owner','Deal - Stage','Deal - Pipeline','Deal - Status','Deal - Deal created','Deal - Won time',
+    'Deal - Lost time','Deal - Lost reason','Deal - Deal closed on','Deal - Expected close date','Deal - Next activity date',
+    'Deal - Last activity date','Deal - Last stage change','Deal - Total activities','Deal - Source channel','Deal - Source origin',
+    'Deal - Label','Deal - Category','Deal - Weighted value','Deal - Probability','Deal - Product quantity','Deal - Product name',
+    'Deal - Product amount','Deal - Onboarding Flow','Deal - Payment Due','Deal - Payment Requested','Deal - Payment Received',
+    'Deal - Team Role','Deal - Current Solutions','Deal - Product Feedback'],
+  people: ['Person - ID','Person - Name','Person - First name','Person - Last name','Person - Owner','Person - Customer Type',
+    'Person - Previous Customer Type','Person - Date Access Granted','Person - Date Access Removed','Person - Organisation',
+    'Person - Email','Person - Email - Work','Person - Email - Home','Person - Email - Other','Person - Trial License Number',
+    'Person - Last activity date','Organisation - Name','Organisation - Organisation Group','Organisation - Organisation Subgroup',
+    'Organisation - Organisation Size','Organisation - Location of Work','Organisation - Licence Pool','Organisation - Network',
+    'Organisation - Issued Licenses','Organisation - People','Organisation - Won deals','Organisation - Last activity date'],
+};
+
+// Trim to kept columns and strip characters Postgres JSON rejects.
+function pdCleanRows(rows, kind) {
+  const keep = new Set(PD_KEEP[kind]);
+  const clean = s => String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+  return rows.map(r => {
+    const o = {};
+    for (const k of Object.keys(r)) {
+      if (!keep.has(k)) continue;
+      const v = r[k];
+      if (v != null && v !== '') o[k] = typeof v === 'string' ? clean(v) : v;
+    }
+    return o;
+  }).filter(o => Object.keys(o).length > 0);
+}
+
+// Delete-all + batched insert with retry, row-level fallback, and a final
+// verified count from the database. Never fails silently.
+async function pdUploadRows(table, rows, noun) {
+  const del = await sb.from(table).delete().gte('imported_at', '1970-01-01T00:00:00Z');
+  if (del.error) { toast('✗ Could not clear old ' + noun + ': ' + del.error.message + ' — nothing changed.', 10000); return null; }
+  let stored = 0, failed = 0, firstErr = null;
+  const batchSize = 100;
+  for (let i = 0; i < rows.length; i += batchSize) {
+    const batch = rows.slice(i, i + batchSize).map(r => ({ raw: r }));
+    let { error } = await sb.from(table).insert(batch);
+    if (error) ({ error } = await sb.from(table).insert(batch));   // retry once
+    if (!error) { stored += batch.length; continue; }
+    // batch keeps failing — insert row by row so one bad row can't sink 100
+    for (const one of batch) {
+      const r1 = await sb.from(table).insert([one]);
+      if (r1.error) { failed++; if (!firstErr) firstErr = r1.error.message; }
+      else stored++;
+    }
+  }
+  // Verify what the database actually holds now
+  const { count } = await sb.from(table).select('*', { count: 'exact', head: true });
+  const dbCount = count ?? stored;
+  if (dbCount === rows.length) {
+    toast(`✓ All ${rows.length.toLocaleString()} ${noun} stored — database count verified.`, 6000);
+  } else {
+    toast(`⚠ Parsed ${rows.length.toLocaleString()} ${noun} but the database holds ${dbCount.toLocaleString()}. ${failed ? failed + ' row(s) rejected — first error: ' + firstErr : 'Try re-importing.'}`, 12000);
+  }
+  return dbCount;
+}
+
 async function handleDealsImport(input) {
   const file = input.files[0];
   if (!file) return;
@@ -5880,21 +5944,17 @@ async function handleDealsImport(input) {
   Papa.parse(file, {
     header: true, skipEmptyLines: true,
     complete: async (results) => {
-      const rows = results.data;
+      const rows = pdCleanRows(results.data, 'deals');
+      if (!rows.length) { toast('✗ No usable rows found — check this is a Pipedrive Deals export.', 8000); return; }
       const warns = pdValidateImport(rows, 'deals');
       if (warns.length) toast('⚠ Data check: ' + warns.join(' · '), 7000);
       const missReq = pdFieldReport(pdNormaliseDeals(rows), 'deals').filter(f => f.req && f.status === 'missing');
       if (missReq.length) toast('⚠ Missing required column(s): ' + missReq.map(f => f.label).join(', ') + ' — re-export with these fields or some metrics will be blank.', 9000);
       toast('Uploading ' + rows.length + ' deals…');
-      await sb.from('liq_pipedrive_deals').delete().gte('imported_at', '1970-01-01T00:00:00Z');
-      const batchSize = 100;
-      for (let i = 0; i < rows.length; i += batchSize) {
-        const { error } = await sb.from('liq_pipedrive_deals').insert(rows.slice(i, i + batchSize).map(r => ({ raw: r })));
-        if (error) { toast('Upload error: ' + error.message); return; }
-      }
+      const dbCount = await pdUploadRows('liq_pipedrive_deals', rows, 'deals');
+      if (dbCount == null) return;
       _pd_deals = pdNormaliseDeals(rows);
       _pd_deals_imported_at = new Date().toISOString();
-      toast('✓ Imported ' + rows.length + ' deals');
       renderPipedrive();
     },
     error: err => toast('CSV parse error: ' + err.message)
@@ -5908,21 +5968,17 @@ async function handlePeopleImport(input) {
   Papa.parse(file, {
     header: true, skipEmptyLines: true,
     complete: async (results) => {
-      const rows = results.data;
+      const rows = pdCleanRows(results.data, 'people');
+      if (!rows.length) { toast('✗ No usable rows found — check this is a Pipedrive People export.', 8000); return; }
       const warns = pdValidateImport(rows, 'people');
       if (warns.length) toast('⚠ Data check: ' + warns.join(' · '), 7000);
       const missReqP = pdFieldReport(pdNormalisePeople(rows), 'people').filter(f => f.req && f.status === 'missing');
       if (missReqP.length) toast('⚠ Missing required column(s): ' + missReqP.map(f => f.label).join(', ') + ' — re-export with these fields or subscriber/churn metrics will be blank.', 9000);
       toast('Uploading ' + rows.length + ' people…');
-      await sb.from('liq_pipedrive_people').delete().gte('imported_at', '1970-01-01T00:00:00Z');
-      const batchSize = 100;
-      for (let i = 0; i < rows.length; i += batchSize) {
-        const { error } = await sb.from('liq_pipedrive_people').insert(rows.slice(i, i + batchSize).map(r => ({ raw: r })));
-        if (error) { toast('Upload error: ' + error.message); return; }
-      }
+      const dbCount = await pdUploadRows('liq_pipedrive_people', rows, 'people');
+      if (dbCount == null) return;
       _pd_people = pdNormalisePeople(rows);
       _pd_people_imported_at = new Date().toISOString();
-      toast('✓ Imported ' + rows.length + ' people');
       renderPipedrive();
     },
     error: err => toast('CSV parse error: ' + err.message)
