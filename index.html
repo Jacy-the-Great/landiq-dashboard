@@ -2208,6 +2208,11 @@ function renderWebsite(el) {
   el = el || document.getElementById('main-content');
   const granularity = activeSub.website_gran || 'weekly';
   const range = activeSub.website_range || '6m';
+  // Inline = embedded in the Marketing tab (vs the standalone Website view). On the
+  // Marketing tab we drop the empty CTA cards and tuck data-entry controls + the raw
+  // table into review mode, keeping the everyday view to the useful summary.
+  const inline = !!(el && el.id === 'website-inline');
+  const collapsibleTable = inner => `<details${inline?' class="review-only"':''} style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;color:var(--acc);font-weight:500;padding:4px 0">Show data table (recent entries)</summary>${inner}</details>`;
 
   if (granularity === 'daily') {
     // ── Daily view ────────────────────────────────────────────────────────
@@ -2241,8 +2246,9 @@ function renderWebsite(el) {
           '<span class="src-tag">Manual · Looker Studio daily</span><br>Sum of the <b>Users</b> field across all daily website records in the latest logged month (' + latestMonthLabel + '). Manually imported from Looker Studio / Google Analytics.'],
         ['Sessions (' + latestMonthLabel + ')', tmDaily.reduce((s,r)=>s+(r.sessions||0),0)||null, null, null, null,
           '<span class="src-tag">Manual · Looker Studio daily</span><br>Sum of the <b>Sessions</b> field across all daily website records in the latest logged month (' + latestMonthLabel + ').'],
-        ['CTA clicks (' + latestMonthLabel + ')', tmDaily.reduce((s,r)=>s+(r.cta||0),0)||null, null, null, null,
-          '<span class="src-tag">Manual · Looker Studio daily</span><br>Sum of <b>CTA button clicks</b> across all daily records in the latest logged month (' + latestMonthLabel + '). Tracks clicks on the primary call-to-action on the Land iQ website.'],
+        // CTA cards carry no data yet; hidden on the Marketing tab, kept on the standalone view.
+        ...(inline ? [] : [['CTA clicks (' + latestMonthLabel + ')', tmDaily.reduce((s,r)=>s+(r.cta||0),0)||null, null, null, null,
+          '<span class="src-tag">Manual · Looker Studio daily</span><br>Sum of <b>CTA button clicks</b> across all daily records in the latest logged month (' + latestMonthLabel + '). Tracks clicks on the primary call-to-action on the Land iQ website.']]),
         ['Days logged', dailyData.length||null, null, null, 'total entries',
           '<span class="src-tag">Manual · Daily log</span><br>Total number of individual daily records imported. Each row = one calendar day of website data.'],
       ])}
@@ -2262,7 +2268,7 @@ function renderWebsite(el) {
         ${recent.length ? `<div class="chart-wrap" style="height:260px"><canvas id="web-daily-chart"></canvas></div>` : '<div class="no-data">No daily data yet. Add entries below.</div>'}
       </div>
 
-      <div class="form-section">
+      <div class="form-section${inline?' review-only':''}">
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
           <button class="add-btn" onclick="toggleForm('web-daily-form')">+ Add single day</button>
           <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:500;color:var(--acc);background:var(--acc2);border:1px solid var(--acc);border-radius:6px;padding:6px 12px">
@@ -2289,13 +2295,13 @@ function renderWebsite(el) {
         </div>
       </div>
 
-      ${tableHTML('website_daily', dailyData, [
+      ${(() => { const t = tableHTML('website_daily', dailyData, [
         { key: 'date',     label: 'Date',     render: r => fmtDate(r.date) },
         { key: 'views',    label: 'Views',    render: r => fmtNum(r.views) },
         { key: 'users',    label: 'Users',    render: r => fmtNum(r.users) },
         { key: 'sessions', label: 'Sessions', render: r => fmtNum(r.sessions) },
         { key: 'cta',      label: 'CTA',      render: r => fmtNum(r.cta) },
-      ], 'date')}
+      ], 'date'); return inline ? collapsibleTable(t) : t; })()}
     `;
 
     if (recent.length) {
@@ -2355,10 +2361,13 @@ function renderWebsite(el) {
         '<span class="src-tag">Manual · Looker Studio weekly</span><br>Sum of the <b>Users</b> field across all weekly website records in the current calendar month. Manually imported from Looker Studio.'],
       ['Sessions (month)', totalSessions || null, null, null, null,
         '<span class="src-tag">Manual · Looker Studio weekly</span><br>Sum of the <b>Sessions</b> field across all weekly website records in the current calendar month.'],
-      ['CTA clicks (month)', totalCta || null, null, null, null,
-        '<span class="src-tag">Manual · Looker Studio weekly</span><br>Sum of <b>CTA clicks</b> across all weekly records in the current month.'],
-      ['CTA click rate', ctaRate, null, '%', null,
-        '<span class="src-tag">Manual · Looker Studio weekly</span><br>CTA clicks ÷ total Users for the current month, expressed as a percentage.<br><div class="calc-row">CTA clicks / Users × 100</div>'],
+      // CTA cards carry no data yet; hidden on the Marketing tab, kept on the standalone view.
+      ...(inline ? [] : [
+        ['CTA clicks (month)', totalCta || null, null, null, null,
+          '<span class="src-tag">Manual · Looker Studio weekly</span><br>Sum of <b>CTA clicks</b> across all weekly records in the current month.'],
+        ['CTA click rate', ctaRate, null, '%', null,
+          '<span class="src-tag">Manual · Looker Studio weekly</span><br>CTA clicks ÷ total Users for the current month, expressed as a percentage.<br><div class="calc-row">CTA clicks / Users × 100</div>'],
+      ]),
     ])}
 
     ${bestWeek ? `<div class="callout info"><div class="callout-label">Best week this month</div><div class="callout-text">${fmtDate(bestWeek.week)}: ${fmtNum(bestWeek.users)} users</div></div>` : ''}
@@ -2384,7 +2393,7 @@ function renderWebsite(el) {
       ${monthlyViews.length ? `<div class="chart-wrap" style="height:200px"><canvas id="web-views-chart"></canvas></div>` : '<div class="no-data">No data yet.</div>'}
     </div>
 
-    <div class="form-section">
+    <div class="form-section${inline?' review-only':''}">
       <button class="add-btn" onclick="toggleForm('web-form')">+ Add website data</button>
       <div id="web-form" style="display:none">
         <div class="form-box">
@@ -2412,13 +2421,13 @@ function renderWebsite(el) {
       </div>
     </div>
 
-    ${tableHTML('website', data, [
+    ${(() => { const t = tableHTML('website', data, [
       { key: 'week',     label: 'Week',     render: r => fmtDate(r.week) },
       { key: 'views',    label: 'Views',    render: r => fmtNum(r.views) },
       { key: 'users',    label: 'Users',    render: r => fmtNum(r.users) },
       { key: 'sessions', label: 'Sessions', render: r => fmtNum(r.sessions) },
       { key: 'cta',      label: 'CTA',      render: r => fmtNum(r.cta) },
-    ], 'week')}
+    ], 'week'); return inline ? collapsibleTable(t) : t; })()}
   `;
 
   if (recent.length) {
@@ -4346,8 +4355,8 @@ function renderMarketing(el) {
       <div id="website-inline"></div>
     </div>
 
-    <!-- ── CONTENT LOG ── -->
-    <div class="box">
+    <!-- ── CONTENT LOG (review-only: draft/management view) ── -->
+    <div class="box review-only">
       <div class="box-title">All content</div>
       <div class="form-section">
         <button class="add-btn" onclick="toggleForm('content-form')">+ Add content item</button>
@@ -4446,8 +4455,8 @@ function renderMarketing(el) {
       ], '_id')}
     </div>
 
-    <!-- ── CONTENT → PIPELINE ATTRIBUTION ── -->
-    <div class="box">
+    <!-- ── CONTENT → PIPELINE ATTRIBUTION (review-only: draft/management view) ── -->
+    <div class="box review-only">
       <div class="box-title">Content → Pipeline attribution (${ATTR_WINDOW}-day window) ${infoBtn('Content attribution',
         `<p>For each content piece in the log, counts deals <b>created within ${ATTR_WINDOW} days</b> of the publish date. Grouped by content type.</p>
         <p>This is a coincidence window: it shows what deal activity happened in the period after a piece was published, not a tracked source attribution.</p>
@@ -4489,8 +4498,8 @@ function renderMarketing(el) {
         </div>` : `<div class="no-data">Add content to the log and import Pipedrive deals to see attribution data.</div>`}
     </div>
 
-    <!-- ── CORRELATION ── -->
-    <div class="box">
+    <!-- ── CORRELATION (review-only: draft/management view) ── -->
+    <div class="box review-only">
       <div class="box-title">Content events vs website traffic: daily (last 90 days)</div>
       <div style="font-size:12px;color:var(--tl);padding:6px 0 14px;display:flex;flex-wrap:wrap;gap:10px">
         ${corrLegend}
