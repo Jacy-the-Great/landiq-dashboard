@@ -1029,6 +1029,14 @@ function confirmClear() {
 // HELPERS
 // ─────────────────────────────────────────
 const fmtDate = d => d ? new Date(d).toLocaleDateString('en-AU', { day:'2-digit', month:'short', year:'numeric' }) : ':';
+// Combined LinkedIn post impressions for a tracker week: the sum of every team
+// member's column (js/jm/lb/sk). Per-person figures are legacy; only the combined
+// total is ever shown. Returns null when the week has no LinkedIn data at all.
+const liImp = r => {
+  if (!r) return null;
+  if (r.jsImp == null && r.jmImp == null && r.lbImp == null && r.skImp == null) return null;
+  return (r.jsImp || 0) + (r.jmImp || 0) + (r.lbImp || 0) + (r.skImp || 0);
+};
 // Chart axis labels: '16 Mar': readable at a glance (vs raw '03-16')
 const shortDate = s => { const d = new Date(s); return isNaN(d) ? (s || '') : d.toLocaleDateString('en-AU', { day:'numeric', month:'short' }); };
 const fmtNum  = n => n != null ? Number(n).toLocaleString() : ':';
@@ -1318,7 +1326,7 @@ function renderHome(el) {
         return (trial ? isTrialType(ct) : ct === 'Paid Subscription') && inR(p['Person - Date Access Granted'], r); }).length;
       const trk = load('weekly_tracker').sort((a, b) => a.week > b.week ? 1 : -1);
       const tw = trk.slice(-2);
-      const li = r => r ? (r.jsImp || 0) + (r.jmImp || 0) + (r.lbImp || 0) : null;
+      const li = liImp;
       const row = (label, curr, prev, money) => {
         if (curr == null && prev == null) return '';
         const f = v => v == null ? ':' : money ? fmtCur(v) : fmtNum(v);
@@ -3879,7 +3887,7 @@ function renderWeeklyTracker(el) {
     { label: 'LinkedIn', key: 'linkedin', rows: [
       // Combined total only: individual names removed (work board, no personal-brand items)
       { key: 'jsImp', label: 'LinkedIn Post Impressions (total)', fmt: 'num',
-        calc: r => (r.jsImp == null && r.jmImp == null && r.lbImp == null) ? null : (r.jsImp || 0) + (r.jmImp || 0) + (r.lbImp || 0) },
+        calc: r => liImp(r) },
     ]},
     { label: 'EDM', key: 'edm', rows: [
       { key: 'edmOpen',        label: 'Email Open Rate',       fmt: 'pct' },
@@ -4007,7 +4015,7 @@ function renderMarketing(el) {
   // Summary cards from latest tracker week
   const tracker = load('weekly_tracker').sort((a,b) => a.week > b.week ? 1 : -1);
   const latestW = tracker.length ? tracker[tracker.length - 1] : null;
-  const liImpLatest = latestW ? ((latestW.jsImp||0) + (latestW.jmImp||0) + (latestW.lbImp||0)) : null;
+  const liImpLatest = liImp(latestW);
 
   // Last 12 tracker weeks for charts
   const trackerRecent = tracker.slice(-12);
@@ -4134,7 +4142,7 @@ function renderMarketing(el) {
           <thead><tr><th>Week</th><th>Total impressions</th></tr></thead>
           <tbody>${[...trackerRecent].reverse().map(r => `<tr>
             <td>${fmtDate(r.week)}</td>
-            <td><strong>${fmtNum((r.jsImp||0)+(r.jmImp||0)+(r.lbImp||0))}</strong></td>
+            <td><strong>${fmtNum(liImp(r) || 0)}</strong></td>
           </tr>`).join('')}</tbody>
         </table></div>
       </details>` : ''}
@@ -4482,7 +4490,7 @@ function renderMarketing(el) {
   // LinkedIn weekly total (individual names removed: combined figure only)
   if (trackerRecent.length) {
     const liLabels = trackerRecent.map(r => fmtDate(r.week).slice(0,6));
-    const liTotals = trackerRecent.map(r => (r.jsImp||0)+(r.jmImp||0)+(r.lbImp||0));
+    const liTotals = trackerRecent.map(r => liImp(r) || 0);
     makeChart('li-chart', {
       type: 'bar',
       data: {
@@ -4604,7 +4612,7 @@ function save2MGrowth() {
 function saveTrackerWeek() {
   const week = document.getElementById('tr2-week').value;
   if (!week) { toast('Select a week.'); return; }
-  const fields = ['jsImp','jmImp','lbImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','purchaseEnq','eoiTickets','trialsStarted'];
+  const fields = ['jsImp','jmImp','lbImp','skImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','purchaseEnq','eoiTickets','trialsStarted'];
   // Preserve existing _id if this week already exists
   const existing = load('weekly_tracker').find(r => r.week === week);
   const entry = { _id: existing?._id || ('trk-' + Date.now()), week };
@@ -4632,7 +4640,7 @@ function cancelTrackerEdit() {
 }
 
 function saveTrackerEdit(id) {
-  const fields = ['jsImp','jmImp','lbImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','purchaseEnq','eoiTickets','trialsStarted'];
+  const fields = ['jsImp','jmImp','lbImp','skImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','purchaseEnq','eoiTickets','trialsStarted'];
   const arr = load('weekly_tracker');
   const idx = arr.findIndex(r => r._id === id);
   if (idx < 0) { toast('Row not found.'); return; }
@@ -4697,9 +4705,15 @@ function importTrackerCSV(input) {
 
       // Row 0 = header: [label col, date1, date2, ...]
       const headerRow = rows[0];
-      const dateKeys = []; // ISO date string per column (null if unparseable)
+      const dateKeys = []; // ISO date string per column (null if unparseable / skipped)
+      const skippedCols = [];
+      const FUTURE_CUTOFF = Date.now() + 45 * 86400000; // a weekly tracker never reports months ahead
       for (let c = 1; c < headerRow.length; c++) {
-        dateKeys.push(parseTrackerDate(String(headerRow[c] || '').trim()));
+        const raw = String(headerRow[c] || '').trim();
+        let dk = parseTrackerDate(raw);
+        // Drop stray far-future columns (e.g. a lone legacy "6-Nov" adrift from the run)
+        if (dk && new Date(dk).getTime() > FUTURE_CUTOFF) { skippedCols.push(raw); dk = null; }
+        dateKeys.push(dk);
       }
 
       // Section-aware field mapping
@@ -4708,6 +4722,7 @@ function importTrackerCSV(input) {
           'js post impressions': 'jsImp',
           'jm post impressions': 'jmImp',
           'lb post impressions': 'lbImp',
+          'sk post impressions': 'skImp',
         },
         edm: {
           'email open rate':     'edmOpen',
@@ -4729,12 +4744,15 @@ function importTrackerCSV(input) {
           'registrations':           'wbReg',
         },
         website: {
+          'website/landing page visits (total users)': 'websiteVisits',
           'total users (visits)':    'websiteVisits',
           'total users':             'websiteVisits',
           'website visits':          'websiteVisits',
           'users':                   'websiteVisits',
           'purchase enquiries':      'purchaseEnq',
           'purchase enquiry':        'purchaseEnq',
+          'purchse enquiries':       'purchaseEnq',   // common misspelling in Lucy's sheet
+          'purchse enquiry':         'purchaseEnq',
           'purchase':                'purchaseEnq',
           'eoi tickets':             'eoiTickets',
           'eoi ticket':              'eoiTickets',
@@ -4765,9 +4783,13 @@ function importTrackerCSV(input) {
         const label = String(row[0] || '').trim();
         if (!label) continue;
 
-        // Check if this row is a section header
+        // Switch section when a row names one. Don't skip the row afterwards: in
+        // Lucy's sheet some rows are BOTH the section marker and a data row (e.g.
+        // "Website/Landing Page Visits (total users)" carries the visits figures),
+        // so we still try to map it below. Pure header rows (e.g. "LinkedIn",
+        // "Webinar - May") simply match no field and fall through harmlessly.
         const sec = detectSection(label);
-        if (sec) { currentSection = sec; continue; }
+        if (sec) currentSection = sec;
         if (!currentSection) continue;
 
         // Look up the field key for this metric label
@@ -4795,8 +4817,13 @@ function importTrackerCSV(input) {
         }
       }
 
-      // Merge with existing tracker records
-      const existing   = load('weekly_tracker');
+      // Merge with existing tracker records. Drop any corrupt weeks first: an older
+      // import mis-parsed day-month headers as year 2001 (a V8 date quirk). Anything
+      // dated before 2020 is bogus for this product and is cleared out here.
+      const existing   = load('weekly_tracker').filter(r => {
+        const y = parseInt(String(r.week).slice(0, 4), 10);
+        return !(y && y < 2020);
+      });
       const existingMap = Object.fromEntries(existing.map(r => [r.week, r]));
       let count = 0;
       Object.entries(dataMap).forEach(([week, fields]) => {
@@ -4810,7 +4837,8 @@ function importTrackerCSV(input) {
       save('weekly_tracker', merged);
       input.value = '';
       const weekCount = Object.values(dataMap).filter(f => Object.keys(f).length > 0).length;
-      toast(`Imported ${weekCount} weeks from CSV.`);
+      const skipNote = skippedCols.length ? ` · skipped ${skippedCols.length} stray column${skippedCols.length > 1 ? 's' : ''} (${skippedCols.join(', ')})` : '';
+      toast(`Imported ${weekCount} weeks from CSV${skipNote}.`);
       renderTab(activeTab);
     },
     error: err => toast('CSV parse error: ' + err.message)
@@ -5247,7 +5275,7 @@ function wsAuto(key, qr) {
     case 'linkedin_reach': {
       const wks = load('weekly_tracker').filter(r => { const d = new Date(r.week); return !isNaN(d) && d >= qr.from && d <= qr.to; });
       if (!wks.length) return { disp: ':', sub: 'no tracker weeks in ' + qr.label };
-      const sum = wks.reduce((s, r) => s + (r.jsImp || 0) + (r.jmImp || 0) + (r.lbImp || 0), 0);
+      const sum = wks.reduce((s, r) => s + (liImp(r) || 0), 0);
       return { num: sum, disp: fmtNum(sum), sub: 'LinkedIn impressions · ' + qr.label + ' · Weekly Tracker' };
     }
     case 'email_rates': {
@@ -7810,7 +7838,7 @@ function renderPdOptimax(sc) {
   const _content = load('content');
   const impContent  = _content.reduce((s,c)=>s+(c.impressions||0)+(c.ytviews||0)+(c.vivaviews||0)+(c.recipients||0),0);
   const _trk = load('weekly_tracker');
-  const impLinkedIn = _trk.reduce((s,r)=>s+(r.jsImp||0)+(r.jmImp||0)+(r.lbImp||0),0);
+  const impLinkedIn = _trk.reduce((s,r)=>s+(liImp(r) || 0),0);
   const totalImpressions = impContent + impLinkedIn;
 
   // Licence counts per reached stage (all-time)
