@@ -223,6 +223,9 @@ body.review-mode .flag-dot.green{background:#2a7a4b;border-color:#2a7a4b}
 body.review-mode .flag-dot.yellow{background:#e6a817;border-color:#e6a817}
 body.review-mode .flag-dot.red{background:#e05252;border-color:#e05252}
 body.review-mode .flag-dot:hover{transform:scale(1.35)}
+/* Review-only blocks: hidden for the everyday/exec view, revealed in review mode */
+.review-only{display:none}
+body.review-mode .review-only{display:block}
 /* ── Data-source freshness banner ── */
 .freshness{display:flex;align-items:center;gap:8px;font-size:12.5px;line-height:1.5;padding:9px 13px;border-radius:8px;margin-bottom:14px;border:1px solid}
 .freshness.ok{background:#eef7f1;border-color:#b3dfc5;color:#1f6740}
@@ -860,7 +863,7 @@ const METRIC_DOCS = [
   // Marketing
   ['website → trial → signed funnel', 'Manual · Weekly Tracker + Trials tables', 'Joins the two weekly tables by week: visitors/enquiries from the tracker, demo/SDK/order/signed from the trials table. Cumulative totals; a missed week distorts rates.'],
   ['linkedin impressions: weekly total', 'Manual · Weekly Tracker', 'SUM of logged LinkedIn post impressions per tracked week (combined total: no individual attribution).'],
-  ['webinar email promotion', 'Manual · Weekly Tracker', 'The promo email campaign: sends, open rate, click-through, reg-page conversion, registrations. This is promotion, not webinar attendance performance.'],
+  ['webinar email promotion', 'Manual · Weekly Tracker', 'Weekly promo-email sends vs the registrations they drove, straight from Lucy\'s tracker. Rough promotion volume only: the full, cleaner webinar funnel (open rate, click rate, reg-page, attendance, watch time) lives in the webinar performance table above.'],
   ['edm performance', 'Manual · Content log + Weekly Tracker', 'Email newsletter entries and their open/click rates as logged.'],
   ['content events vs website traffic', 'Manual · Content log + Website data', 'Daily website users (line) with content publish dates overlaid as bars: visual coincidence, not proven causation.'],
   ['all content', 'Manual · Content log', 'Every logged content item with its own per-channel metrics.'],
@@ -963,6 +966,9 @@ function toggleReviewMode() {
   const leg = document.getElementById('flag-legend');
   if (leg) leg.style.height = _reviewMode ? '22px' : '0';
   updateFlagLegend();
+  // Re-render so review-only sections (and any charts inside them) draw into a
+  // correctly-sized, now-visible container rather than a hidden 0-height one.
+  if (typeof renderTab === 'function' && activeTab) renderTab(activeTab);
 }
 
 function updateFlagLegend() {
@@ -2208,10 +2214,19 @@ function renderWebsite(el) {
     const dailyData = load('website_daily');
     const daysMap = { '30d':30, '60d':60, '90d':90, 'all':9999 };
     const dRange   = activeSub.website_drange || '60d';
-    const cutoff   = new Date(); cutoff.setDate(cutoff.getDate() - (daysMap[dRange]||60));
+    // Anchor the window to the most recent logged day, not today. A stale Looker
+    // export (data ending weeks ago) would otherwise show an empty chart once the
+    // rolling "today" window scrolled past the last entry.
+    const latestDay = dailyData.reduce((m, r) => (r.date && r.date > m ? r.date : m), '');
+    const anchor    = latestDay ? new Date(latestDay) : new Date();
+    const cutoff    = new Date(anchor); cutoff.setDate(cutoff.getDate() - (daysMap[dRange] || 60));
     const recent   = dailyData.filter(r => !r.date || new Date(r.date) >= cutoff).sort((a,b)=>a.date>b.date?1:-1);
     const today    = new Date().toISOString().split('T')[0];
-    const tmDaily  = dailyData.filter(r => r.date && r.date.startsWith(new Date().toISOString().slice(0,7)));
+    const latestMonth = latestDay ? latestDay.slice(0, 7) : new Date().toISOString().slice(0, 7);
+    const latestMonthLabel = latestDay ? new Date(latestDay).toLocaleDateString('en-AU', { month:'short', year:'numeric' }) : 'this month';
+    const staleNote = (latestDay && latestMonth !== new Date().toISOString().slice(0,7))
+      ? `<span style="font-size:11px;font-weight:400;color:#8a5a00;margin-left:6px">latest data: ${fmtDate(latestDay)}</span>` : '';
+    const tmDaily  = dailyData.filter(r => r.date && r.date.startsWith(latestMonth));
 
     el.innerHTML = `
       <div class="section-header">
@@ -2222,18 +2237,18 @@ function renderWebsite(el) {
         <a class="src-link" href="https://lookerstudio.google.com" target="_blank">↗ Looker Studio</a>
       </div>
       ${cardsHTML([
-        ['Users this month (daily)', tmDaily.reduce((s,r)=>s+(r.users||0),0)||null, null, null, null,
-          '<span class="src-tag">Manual · Looker Studio daily</span><br>Sum of the <b>Users</b> field across all daily website records in the current calendar month. Manually imported from Looker Studio / Google Analytics.'],
-        ['Sessions this month', tmDaily.reduce((s,r)=>s+(r.sessions||0),0)||null, null, null, null,
-          '<span class="src-tag">Manual · Looker Studio daily</span><br>Sum of the <b>Sessions</b> field across all daily website records in the current calendar month.'],
-        ['CTA clicks (month)', tmDaily.reduce((s,r)=>s+(r.cta||0),0)||null, null, null, null,
-          '<span class="src-tag">Manual · Looker Studio daily</span><br>Sum of <b>CTA button clicks</b> across all daily records in the current month. Tracks clicks on the primary call-to-action on the Land iQ website.'],
+        ['Users (' + latestMonthLabel + ')', tmDaily.reduce((s,r)=>s+(r.users||0),0)||null, null, null, null,
+          '<span class="src-tag">Manual · Looker Studio daily</span><br>Sum of the <b>Users</b> field across all daily website records in the latest logged month (' + latestMonthLabel + '). Manually imported from Looker Studio / Google Analytics.'],
+        ['Sessions (' + latestMonthLabel + ')', tmDaily.reduce((s,r)=>s+(r.sessions||0),0)||null, null, null, null,
+          '<span class="src-tag">Manual · Looker Studio daily</span><br>Sum of the <b>Sessions</b> field across all daily website records in the latest logged month (' + latestMonthLabel + ').'],
+        ['CTA clicks (' + latestMonthLabel + ')', tmDaily.reduce((s,r)=>s+(r.cta||0),0)||null, null, null, null,
+          '<span class="src-tag">Manual · Looker Studio daily</span><br>Sum of <b>CTA button clicks</b> across all daily records in the latest logged month (' + latestMonthLabel + '). Tracks clicks on the primary call-to-action on the Land iQ website.'],
         ['Days logged', dailyData.length||null, null, null, 'total entries',
           '<span class="src-tag">Manual · Daily log</span><br>Total number of individual daily records imported. Each row = one calendar day of website data.'],
       ])}
       <div class="box">
         <div class="box-title">
-          Daily users
+          Daily users${staleNote}
           <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
             <div class="range-toggle">
               <button class="range-btn${granularity==='daily'?' active':''}" onclick="setWebsiteGran('daily')">Daily</button>
@@ -3864,7 +3879,7 @@ function saveTrainingSession() {
 function saveWebinar() {
   const date = document.getElementById('wb-date').value;
   if (!date) { toast('Please select a date.'); return; }
-  const numFields = ['emailsSent','emailsOpened','regPageViews','registered','attended','cancelled','reactions'];
+  const numFields = ['emailsSent','emailsOpened','emailsClicked','regPageViews','registered','attended','cancelled','reactions'];
   const txtFields = ['title','avgTime','length'];
   const editId = document.getElementById('wb-editid')?.value || '';
   const entry = { _id: editId || ('w' + Date.now()), date };
@@ -3902,6 +3917,9 @@ function renderWeeklyTracker(el) {
     ]},
     { label: 'Website', key: 'website', rows: [
       { key: 'websiteVisits', label: 'Total Users (visits)',   fmt: 'num' },
+      { key: 'websiteViews',  label: 'Total Views',            fmt: 'num' },
+    ]},
+    { label: 'Leads', key: 'leads', rows: [
       { key: 'purchaseEnq',   label: 'Purchase Enquiries',     fmt: 'num' },
       { key: 'eoiTickets',    label: 'EOI Tickets',            fmt: 'num' },
       { key: 'trialsStarted', label: 'Trials Started',         fmt: 'num' },
@@ -3909,7 +3927,8 @@ function renderWeeklyTracker(el) {
   ];
 
   const tracker = load('weekly_tracker');
-  const weeks = [...tracker].sort((a,b) => a.week > b.week ? 1 : -1).slice(-10);
+  const allWeeks = [...tracker].sort((a,b) => a.week > b.week ? 1 : -1);
+  const weeks = allWeeks.slice(-10);
   const colSpan = weeks.length + 1;
 
   const weekHeaders = weeks.map(r =>
@@ -3921,12 +3940,21 @@ function renderWeeklyTracker(el) {
     </th>`
   ).join('');
 
+  const hideWb = localStorage.getItem('liq_hide_tracker_webinar') === '1';
   let bodyRows = '';
   if (weeks.length) {
     TRACKER_SECTIONS.forEach(sec => {
+      const isWb = sec.key === 'webinar';
+      const toggle = isWb
+        ? `<button onclick="toggleTrackerWebinar()" style="float:right;background:none;border:none;color:var(--acc);cursor:pointer;font-size:10px;font-weight:600;text-transform:none;letter-spacing:0">${hideWb ? 'show ▸' : 'hide ▾'}</button>`
+        : '';
       bodyRows += `<tr style="background:var(--acc2)">
-        <td colspan="${colSpan}" style="font-weight:700;font-size:11px;color:var(--acc);padding:6px 10px;letter-spacing:.6px;text-transform:uppercase">${sec.label}</td>
+        <td colspan="${colSpan}" style="font-weight:700;font-size:11px;color:var(--acc);padding:6px 10px;letter-spacing:.6px;text-transform:uppercase">${sec.label}${toggle}</td>
       </tr>`;
+      if (isWb && hideWb) {
+        bodyRows += `<tr><td colspan="${colSpan}" style="padding:8px 10px 8px 20px;color:var(--tl);font-size:12px;font-style:italic">Hidden: this comes straight from the source spreadsheet and is messy. See the <b>Marketing</b> page for the clean webinar funnel and attendance insights.</td></tr>`;
+        return;
+      }
       sec.rows.forEach(row => {
         const cells = weeks.map(r => {
           const val = row.calc ? row.calc(r) : r[row.key];
@@ -3977,6 +4005,14 @@ function renderWeeklyTracker(el) {
         <span style="font-size:11px;color:var(--tl)">Dates as column headers, metric names in first column: matches Lucy's spreadsheet layout</span>
       </div>
       <div id="tracker-form" style="display:none"><div class="form-box">
+        <div class="form-group" style="max-width:340px;margin-bottom:12px">
+          <label>Edit an existing week</label>
+          <select id="tr2-picker" onchange="loadTrackerWeek(this.value)">
+            <option value="">— New week (enter a date below) —</option>
+            ${allWeeks.map(w => `<option value="${w.week}">${fmtDate(w.week)}</option>`).join('')}
+          </select>
+          <div class="source-note">Pick a week to load its values, edit, then Save. Or leave on "New week" and set a date to add one.</div>
+        </div>
         <div class="form-grid">
           <div class="form-group"><label>Week ending</label><input type="date" id="tr2-week"></div>
           <div class="form-group"><label>LinkedIn post impressions (total)</label><input type="number" id="tr2-jsImp"></div>
@@ -3988,6 +4024,7 @@ function renderWeeklyTracker(el) {
           <div class="form-group"><label>Webinar reg. page visits (%)</label><input type="number" id="tr2-wbRegPage" step=".1"></div>
           <div class="form-group"><label>Webinar registrations</label><input type="number" id="tr2-wbReg"></div>
           <div class="form-group"><label>Website visits (total users)</label><input type="number" id="tr2-websiteVisits"></div>
+          <div class="form-group"><label>Website total views</label><input type="number" id="tr2-websiteViews"></div>
           <div class="form-group"><label>Purchase enquiries</label><input type="number" id="tr2-purchaseEnq"></div>
           <div class="form-group"><label>EOI tickets</label><input type="number" id="tr2-eoiTickets"></div>
           <div class="form-group"><label>Trials started</label><input type="number" id="tr2-trialsStarted"></div>
@@ -4030,6 +4067,7 @@ function renderMarketing(el) {
     return {
       ...w,
       emailOpenRate: pct(w.emailsOpened, w.emailsSent),           // email opens ÷ sent
+      emailClickRate: pct(w.emailsClicked, w.emailsSent),         // email clicks ÷ sent
       emailToReg:    pct(w.registered, w.emailsSent),             // sent → registered
       attendRate:  pct(w.attended, w.registered),                 // show rate
       regConv:     pct(w.registered, w.regPageViews),             // reg-page conversion
@@ -4045,7 +4083,7 @@ function renderMarketing(el) {
   window.editWebinar = (id) => {
     const w = load('webinars').find(x => x._id === id); if (!w) return;
     toggleForm('webinar-form');
-    ['date','title','emailsSent','emailsOpened','regPageViews','registered','attended','cancelled','avgTime','reactions','length'].forEach(f => {
+    ['date','title','emailsSent','emailsOpened','emailsClicked','regPageViews','registered','attended','cancelled','avgTime','reactions','length'].forEach(f => {
       const el = document.getElementById('wb-' + f); if (el) el.value = w[f] ?? '';
     });
     const idEl = document.getElementById('wb-editid'); if (idEl) idEl.value = id;
@@ -4162,7 +4200,7 @@ function renderMarketing(el) {
           </tr>`).join('')}</tbody>
         </table></div>
       </details>` : ''}
-      <div style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px">
+      <div class="review-only" style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px">
         <div class="box-title" style="margin-bottom:10px">Campaign sends</div>
         ${edms.length ? `<table class="conv-table">
           <thead><tr><th>Date</th><th>Campaign</th><th>Recipients</th><th>Opens</th><th>Open rate</th><th>Clicks</th><th>Click rate</th><th>Unsubs</th></tr></thead>
@@ -4176,7 +4214,7 @@ function renderMarketing(el) {
           }).join('')}</tbody>
         </table>` : '<div class="no-data">No EDM campaigns logged yet. Add via the content form below and select "EDM" as type.</div>'}
       </div>
-      <div style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px">
+      <div class="review-only" style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px">
         <div class="box-title" style="margin-bottom:10px">2-Month Growth Email: automated onboarding sequence
           <span style="font-size:11px;color:var(--tl);font-weight:400;margin-left:4px">Sent to new users at 2-month mark</span>
         </div>
@@ -4223,14 +4261,14 @@ function renderMarketing(el) {
           ['Avg email→registration', wbAvg('emailToReg'), null, '%', 'registered ÷ emails sent'],
           ['Avg attendance rate', wbAvg('attendRate'), null, '%', 'attended ÷ registered'],
           ['Avg engagement ratio', wbAvg('engageRatio'), null, '%', 'watch time ÷ length'],
-          ['Reactions per attendee', wbAvg('reactPerAtt') != null ? Math.round(wbAvg('reactPerAtt') * 10) / 10 : null, null, null, 'engagement quality'],
+          ['Reactions per attendee', wbAvg('reactPerAtt') != null ? Math.round(wbAvg('reactPerAtt') * 100) / 100 : null, null, null, 'engagement quality'],
           ['Total attendees (all events)', wbTotAttended || null, null, null, wbPerf.length + ' webinars'],
         ])}
         <div class="chart-wrap" style="height:260px;margin-top:6px"><canvas id="wb-perf-chart"></canvas></div>
         <div class="tbl-scroll" style="margin-top:14px"><table>
           <thead><tr>
             <th>Date</th><th>Title</th>
-            <th>Emails sent</th><th>Open rate</th>
+            <th>Emails sent</th><th>Open rate</th><th>Click rate</th>
             <th>Reg. page</th><th>Registered</th><th>Attended</th>
             <th>Attend rate</th><th>Avg watch</th><th>Webinar time</th><th>Engagement</th>
             <th>Reactions</th><th></th>
@@ -4240,6 +4278,7 @@ function renderMarketing(el) {
             <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${w.title||''}">${w.title || ':'}</td>
             <td>${fmtNum(w.emailsSent)}</td>
             <td>${w.emailOpenRate!=null?fmtPct(w.emailOpenRate):':'}</td>
+            <td>${w.emailClickRate!=null?fmtPct(w.emailClickRate):':'}</td>
             <td>${fmtNum(w.regPageViews)}</td>
             <td>${fmtNum(w.registered)}</td>
             <td>${fmtNum(w.attended)}</td>
@@ -4265,6 +4304,7 @@ function renderMarketing(el) {
             <div class="form-group"><label>Title</label><input type="text" id="wb-title"></div>
             <div class="form-group"><label>Promo emails sent</label><input type="number" id="wb-emailsSent"><div class="source-note">Email platform: top of funnel</div></div>
             <div class="form-group"><label>Promo emails opened</label><input type="number" id="wb-emailsOpened"><div class="source-note">Email platform</div></div>
+            <div class="form-group"><label>Promo emails clicked</label><input type="number" id="wb-emailsClicked"><div class="source-note">Email platform: link clicks</div></div>
             <div class="form-group"><label>Viewed registration page</label><input type="number" id="wb-regPageViews"><div class="source-note">Teams attendance tab</div></div>
             <div class="form-group"><label>Registered</label><input type="number" id="wb-registered"><div class="source-note">Teams attendance tab</div></div>
             <div class="form-group"><label>Attended</label><input type="number" id="wb-attended"><div class="source-note">Teams attendance tab</div></div>
@@ -4281,9 +4321,9 @@ function renderMarketing(el) {
       </div>
     </div>
 
-    <!-- ── WEBINAR EMAIL PROMOTION (was mislabeled 'Webinar performance') ── -->
-    <div class="box">
-      <div class="box-title">Webinar email promotion <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:6px">the email campaign that drives registrations: not attendance performance</span></div>
+    <!-- ── WEBINAR EMAIL PROMOTION (review-only: rough promo volume; real funnel is the table above) ── -->
+    <div class="box review-only">
+      <div class="box-title">Webinar email promotion <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:6px">promo email sends vs registrations · see the webinar performance table above for the full funnel</span></div>
       ${trackerRecent.length ? `<div class="chart-wrap" style="height:210px"><canvas id="wb-chart"></canvas></div>` : '<div class="no-data">No tracker data yet.</div>'}
       ${trackerRecent.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--acc);font-weight:500;padding:4px 0">Show email data table</summary>
         <div class="tbl-scroll" style="margin-top:8px"><table>
@@ -4612,13 +4652,18 @@ function save2MGrowth() {
 function saveTrackerWeek() {
   const week = document.getElementById('tr2-week').value;
   if (!week) { toast('Select a week.'); return; }
-  const fields = ['jsImp','jmImp','lbImp','skImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','purchaseEnq','eoiTickets','trialsStarted'];
-  // Preserve existing _id if this week already exists
+  // Every form field except the legacy per-person LinkedIn splits.
+  const fields = ['jsImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
+  // Start from the existing row so we edit in place and keep its _id.
   const existing = load('weekly_tracker').find(r => r.week === week);
-  const entry = { _id: existing?._id || ('trk-' + Date.now()), week };
+  const entry = { ...(existing || {}), _id: existing?._id || ('trk-' + Date.now()), week };
+  // The single LinkedIn input is the combined total; drop the legacy js/jm/lb/sk
+  // splits so a manual edit can't double-count against the total.
+  delete entry.jmImp; delete entry.lbImp; delete entry.skImp;
   fields.forEach(f => {
     const v = document.getElementById('tr2-' + f)?.value;
-    if (v !== '' && v != null && v !== undefined) entry[f] = Number(v);
+    if (v !== '' && v != null) entry[f] = Number(v);
+    else delete entry[f];   // cleared field → remove it
   });
   const arr = load('weekly_tracker').filter(r => r.week !== week);
   arr.push(entry);
@@ -4627,6 +4672,17 @@ function saveTrackerWeek() {
   toggleForm('tracker-form');
   toast('Tracker week saved.');
   renderTab(activeTab);
+}
+
+// Populate the add/edit form from an existing tracker week (or clear it for a new one).
+function loadTrackerWeek(week) {
+  const fields = ['edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = (val == null ? '' : val); };
+  if (!week) { set('tr2-week', ''); set('tr2-jsImp', ''); fields.forEach(f => set('tr2-' + f, '')); return; }
+  const rec = load('weekly_tracker').find(r => r.week === week) || {};
+  set('tr2-week', week);
+  set('tr2-jsImp', liImp(rec));                       // show the combined LinkedIn total
+  fields.forEach(f => set('tr2-' + f, rec[f]));
 }
 
 function startTrackerEdit(id) {
@@ -4640,7 +4696,7 @@ function cancelTrackerEdit() {
 }
 
 function saveTrackerEdit(id) {
-  const fields = ['jsImp','jmImp','lbImp','skImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','purchaseEnq','eoiTickets','trialsStarted'];
+  const fields = ['jsImp','jmImp','lbImp','skImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
   const arr = load('weekly_tracker');
   const idx = arr.findIndex(r => r._id === id);
   if (idx < 0) { toast('Row not found.'); return; }
@@ -4685,6 +4741,12 @@ function parseTrackerDate(str) {
   m = str.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
   if (m) return build(parseInt(m[1]), parseInt(m[2]) - 1, m[3]);
   return null;
+}
+
+function toggleTrackerWebinar() {
+  const hidden = localStorage.getItem('liq_hide_tracker_webinar') === '1';
+  localStorage.setItem('liq_hide_tracker_webinar', hidden ? '0' : '1');
+  renderTab(activeTab);
 }
 
 function delTrackerWeek(id) {
@@ -4749,6 +4811,8 @@ function importTrackerCSV(input) {
           'total users':             'websiteVisits',
           'website visits':          'websiteVisits',
           'users':                   'websiteVisits',
+          'website/landing page visits (views)': 'websiteViews',
+          'total views':             'websiteViews',
           'purchase enquiries':      'purchaseEnq',
           'purchase enquiry':        'purchaseEnq',
           'purchse enquiries':       'purchaseEnq',   // common misspelling in Lucy's sheet
