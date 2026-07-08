@@ -223,6 +223,12 @@ body.review-mode .flag-dot.green{background:#2a7a4b;border-color:#2a7a4b}
 body.review-mode .flag-dot.yellow{background:#e6a817;border-color:#e6a817}
 body.review-mode .flag-dot.red{background:#e05252;border-color:#e05252}
 body.review-mode .flag-dot:hover{transform:scale(1.35)}
+/* Hide-metric toggle (review mode): curate what shows in the everyday view */
+.hide-toggle{display:none}
+body.review-mode .hide-toggle{display:inline-block;cursor:pointer;font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--acc);background:var(--acc2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;margin-left:6px;user-select:none;vertical-align:middle}
+body.review-mode .hide-toggle:hover{border-color:var(--acc)}
+body:not(.review-mode) .metric-hidden{display:none !important}
+body.review-mode .metric-hidden{opacity:.4;outline:1px dashed #c4c4c4;outline-offset:3px}
 /* Review-only blocks: hidden for the everyday/exec view, revealed in review mode */
 .review-only{display:none}
 body.review-mode .review-only{display:block}
@@ -779,6 +785,7 @@ function importBackup(json) {
 // Hidden by default; a header "Review mode" toggle reveals + lets you set them.
 // ─────────────────────────────────────────
 let _metricFlags = {};
+let _hiddenMetrics = {};
 let _reviewMode  = false;
 
 function flagKey(text) {
@@ -802,9 +809,28 @@ function saveMetricFlags() {
     .then(({ error }) => { if (error) console.warn('flag save failed:', error.message); });
 }
 
+// Hidden metrics: which metrics the user has toggled off so they don't show in the
+// everyday view. Keyed by the same flagKey() as trust flags; persisted like them.
+async function loadHiddenMetrics() {
+  try { _hiddenMetrics = JSON.parse(localStorage.getItem('liq_hidden_metrics') || '{}'); } catch { _hiddenMetrics = {}; }
+  try {
+    const { data } = await sb.from('dashboard_data').select('value').eq('key', 'hidden_metrics').maybeSingle();
+    if (data && data.value && typeof data.value === 'object') {
+      _hiddenMetrics = data.value;
+      localStorage.setItem('liq_hidden_metrics', JSON.stringify(_hiddenMetrics));
+    }
+  } catch (e) { /* offline: keep local copy */ }
+}
+
+function saveHiddenMetrics() {
+  localStorage.setItem('liq_hidden_metrics', JSON.stringify(_hiddenMetrics));
+  sb.from('dashboard_data').upsert({ key: 'hidden_metrics', value: _hiddenMetrics, updated_at: new Date().toISOString() })
+    .then(({ error }) => { if (error) console.warn('hidden save failed:', error.message); });
+}
+
 function _flagLabelText(el) {
   const c = el.cloneNode(true);
-  c.querySelectorAll('button, .info-btn, .flag-dot').forEach(n => n.remove());
+  c.querySelectorAll('button, .info-btn, .flag-dot, .hide-toggle').forEach(n => n.remove());
   return c.textContent.replace(/\s+/g, ' ').trim();
 }
 
@@ -941,6 +967,15 @@ function injectFlags(root) {
     dot.dataset.fk = key;
     dot.title = status ? `Trust: ${status}: click to change` : 'Unrated: click to set trust';
     el.appendChild(dot);
+    // Hide toggle: lets a reviewer curate this metric out of the everyday view.
+    const isHidden = !!_hiddenMetrics[key];
+    const eye = document.createElement('span');
+    eye.className = 'hide-toggle';
+    eye.dataset.hk = key;
+    eye.textContent = isHidden ? 'show' : 'hide';
+    eye.title = isHidden ? 'Hidden from the everyday view: click to show' : 'Click to hide this from the everyday view';
+    el.appendChild(eye);
+    if (isHidden && el.parentElement) el.parentElement.classList.add('metric-hidden');
   });
 }
 
@@ -955,6 +990,21 @@ document.addEventListener('click', e => {
   dot.className = 'flag-dot' + (next ? ' ' + next : '');
   dot.title = next ? `Trust: ${next}: click to change` : 'Unrated: click to set trust';
   saveMetricFlags();
+  updateFlagLegend();
+});
+
+document.addEventListener('click', e => {
+  const eye = e.target.closest ? e.target.closest('.hide-toggle') : null;
+  if (!eye || !_reviewMode) return;
+  e.stopPropagation();
+  const k = eye.dataset.hk;
+  if (_hiddenMetrics[k]) delete _hiddenMetrics[k]; else _hiddenMetrics[k] = 1;
+  const nowHidden = !!_hiddenMetrics[k];
+  const container = eye.parentElement && eye.parentElement.parentElement;  // title → container
+  if (container) container.classList.toggle('metric-hidden', nowHidden);
+  eye.textContent = nowHidden ? 'show' : 'hide';
+  eye.title = nowHidden ? 'Hidden from the everyday view: click to show' : 'Click to hide this from the everyday view';
+  saveHiddenMetrics();
   updateFlagLegend();
 });
 
@@ -977,10 +1027,12 @@ function updateFlagLegend() {
   if (!_reviewMode) { el.innerHTML = ''; return; }
   const v = Object.values(_metricFlags);
   const g = v.filter(x => x === 'green').length, y = v.filter(x => x === 'yellow').length, r = v.filter(x => x === 'red').length;
-  el.innerHTML = `<span style="padding:3px 0;display:inline-block">Click any dot to rate: `
+  const h = Object.keys(_hiddenMetrics).length;
+  el.innerHTML = `<span style="padding:3px 0;display:inline-block">Click a dot to rate trust, or "hide" to curate: `
     + `<span style="color:#1f6740;font-weight:600">● ${g} trusted</span> · `
     + `<span style="color:#8a5a00;font-weight:600">● ${y} check</span> · `
-    + `<span style="color:#b0342b;font-weight:600">● ${r} known error</span></span>`;
+    + `<span style="color:#b0342b;font-weight:600">● ${r} known error</span>`
+    + (h ? ` · <span style="color:#555;font-weight:600">${h} hidden</span>` : '') + `</span>`;
 }
 
 function startFlagObserver() {
@@ -8626,6 +8678,7 @@ function updateDbStatusPill() {
 async function init() {
   await loadAll();
   await loadMetricFlags();
+  await loadHiddenMetrics();
   updateDbStatusPill();
   buildNav();
   startFlagObserver();
