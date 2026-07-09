@@ -229,6 +229,19 @@ body.review-mode .hide-toggle{display:inline-block;cursor:pointer;font-size:9.5p
 body.review-mode .hide-toggle:hover{border-color:var(--acc)}
 body:not(.review-mode) .metric-hidden{display:none !important}
 body.review-mode .metric-hidden{opacity:.4;outline:1px dashed #c4c4c4;outline-offset:3px}
+/* Marketing section headings + posts/events calendar */
+.mk-head{font-size:15px;font-weight:700;color:var(--acc);margin:26px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--acc2);letter-spacing:.02em}
+.cal-months{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+.cal-month-title{font-size:12px;font-weight:600;color:var(--tx);margin-bottom:6px}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.cal-dow{font-size:9.5px;color:var(--tl);text-align:center;padding:2px 0;font-weight:600}
+.cal-day{min-height:34px;border:1px solid var(--bd);border-radius:4px;padding:2px 3px;font-size:10px;background:var(--wh)}
+.cal-day.empty{border:none;background:transparent}
+.cal-day.has-ev{background:var(--acc2)}
+.cal-num{color:var(--tl)}
+.cal-dots{display:flex;flex-wrap:wrap;gap:2px;margin-top:2px}
+.cal-dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.cal-more{font-size:8px;color:var(--tl)}
 /* Review-only blocks: hidden for the everyday/exec view, revealed in review mode */
 .review-only{display:none}
 body.review-mode .review-only{display:block}
@@ -520,7 +533,7 @@ document.getElementById('lock-password').addEventListener('keydown', e => { if (
 // DATA LAYER (Supabase)
 // ─────────────────────────────────────────
 
-const KEYS = { sales:'sales', trials:'trials', website:'website', website_daily:'website_daily', training:'training', content:'content', webinars:'webinars', linkedin_weekly:'linkedin_weekly', edm_2m:'edm_2m', weekly_tracker:'weekly_tracker', activity_giraffe:'activity_giraffe', activity_sdk:'activity_sdk', activity_labs:'activity_labs' };
+const KEYS = { sales:'sales', trials:'trials', website:'website', website_daily:'website_daily', training:'training', content:'content', webinars:'webinars', linkedin_weekly:'linkedin_weekly', edm_2m:'edm_2m', weekly_tracker:'weekly_tracker', activity_giraffe:'activity_giraffe', activity_sdk:'activity_sdk', activity_labs:'activity_labs', proficiency:'proficiency' };
 
 // In-memory cache: loaded from Supabase on init, kept in sync on every save
 const _cache = {};
@@ -891,6 +904,10 @@ const METRIC_DOCS = [
   ['linkedin impressions: weekly total', 'Manual · Weekly Tracker', 'SUM of logged LinkedIn post impressions per tracked week (combined total: no individual attribution).'],
   ['webinar email promotion', 'Manual · Weekly Tracker', 'Weekly promo-email sends vs the registrations they drove, straight from Lucy\'s tracker. Rough promotion volume only: the full, cleaner webinar funnel (open rate, click rate, reg-page, attendance, watch time) lives in the webinar performance table above.'],
   ['edm performance', 'Manual · Content log + Weekly Tracker', 'Email newsletter entries and their open/click rates as logged.'],
+  ['posts and events calendar', 'Manual · Content log + Webinar log', 'Each dot is a logged post, email campaign or event on the day it was published or held. Past items only: nothing projected.'],
+  ['people trained per week', 'Manual training log + Pipedrive', 'Stacked weekly count: session attendees (non Self-serve) plus people granted access that week in Pipedrive, and Self-serve session attendees as the self-trained share.'],
+  ['user proficiency self-score', 'Manual · proficiency audits', 'Average self-rated proficiency (1 to 5) per audit, e.g. calling a sample of users. Manual until the in-app pop-up ships.'],
+  ['edm audience growth', 'Manual · Content log (EDM campaigns)', 'Recipient count of each logged email campaign over time: shows whether the mailing audience is growing.'],
   ['content events vs website traffic', 'Manual · Content log + Website data', 'Daily website users (line) with content publish dates overlaid as bars: visual coincidence, not proven causation.'],
   ['all content', 'Manual · Content log', 'Every logged content item with its own per-channel metrics.'],
   ['monthly views', 'Manual · Content log', 'Logged view counts summed by month.'],
@@ -2748,10 +2765,16 @@ function renderActivity(el) {
     ${statusHTML}
 
     ${cardsHTML([
-      ['Weekly active users', wauVal, null, null, phLive ? 'live · PostHog' : (gLast ? 'week of '+fmtDate(gLast.week) : 'no data yet'),
+      ['Active users: SDK (weekly)', wauVal, null, null, phLive ? 'live · PostHog (Giraffe)' : (gLast ? 'week of '+fmtDate(gLast.week) : 'no data yet'),
         phLive
-          ? '<span class="src-tag">Live · PostHog</span><br>Users who triggered at least one event in Land iQ (Giraffe) in the most recent 7-day window. Pulled from the <b>ph_weekly_stats()</b> materialized view, refreshed nightly at 3am.<br><div class="calc-row">ph_weekly_stats() → active_users, latest week</div>'
+          ? '<span class="src-tag">Live · PostHog</span><br>Users who triggered at least one event in Land iQ (Giraffe/SDK) in the most recent 7-day window. Pulled from the <b>ph_weekly_stats()</b> materialized view, refreshed nightly at 3am.<br><div class="calc-row">ph_weekly_stats() → active_users, latest week</div>'
           : '<span class="src-tag">Manual · Activity log</span><br>Manually entered <b>active users</b> from the most recent Giraffe weekly record. Run the SQL migration to enable live PostHog data.'],
+      ['Weekly SDK events', phLive ? (phWLast?.total_events ?? null) : null, null, null, phLive ? 'live · PostHog (Giraffe)' : 'run SQL migration to enable',
+        '<span class="src-tag">Live · PostHog</span><br>Total events triggered in Land iQ (Giraffe/SDK) in the most recent 7-day window.<br><div class="calc-row">ph_weekly_stats() → total_events, latest week</div>'],
+      ['Active users: Labs (weekly)', lLast?.active_users ?? null, null, null, lLast ? 'week of ' + fmtDate(lLast.week) + ' · manual' : 'no Labs data logged yet',
+        '<span class="src-tag">Manual · Labs weekly snapshot</span><br>Active users from the most recent manually entered Labs weekly record (Labs is not in PostHog yet). Add snapshots in the Giraffe sub-tab below.'],
+      ['Weekly Labs sessions', lLast?.sessions ?? null, null, null, lLast ? 'week of ' + fmtDate(lLast.week) + ' · manual' : 'no Labs data logged yet',
+        '<span class="src-tag">Manual · Labs weekly snapshot</span><br>Session count from the most recent manually entered Labs weekly record: the closest available stand-in for weekly Labs events until Labs joins PostHog.'],
       ['Total users (all time)', totalUsers, null, null, phLive ? 'all time · PostHog' : 'run SQL migration to enable',
         phLive
           ? '<span class="src-tag">Live · PostHog</span><br>Distinct users who have ever triggered an event in Land iQ, from the <b>ph_summary()</b> materialized view.<br><div class="calc-row">ph_summary() → total_users</div>'
@@ -3569,6 +3592,45 @@ function saveLabsActivity() {
 // ─────────────────────────────────────────
 // TRAINING TAB
 // ─────────────────────────────────────────
+// Weekly trained / self-trained series for the last 12 weeks (Monday-start).
+// "Trained" = manual session attendees (non Self-serve) + Pipedrive access granted.
+// "Self-trained" = sessions logged with type "Self-serve": manual until Labs tracking is live.
+function trainingWeeklySeries() {
+  const ymdL = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const weekStartOf = ds => { const x = new Date(ds); if (isNaN(x)) return null; x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return ymdL(x); };
+  const weeks = [];
+  const cur = new Date(); cur.setHours(0, 0, 0, 0); cur.setDate(cur.getDate() - ((cur.getDay() + 6) % 7));
+  for (let i = 11; i >= 0; i--) { const w = new Date(cur); w.setDate(w.getDate() - i * 7); weeks.push(ymdL(w)); }
+  const trained = Object.fromEntries(weeks.map(w => [w, 0]));
+  const self    = Object.fromEntries(weeks.map(w => [w, 0]));
+  load('training').forEach(r => {
+    const w = weekStartOf(r.date); if (w == null || !(w in trained)) return;
+    if ((r.type || '') === 'Self-serve') self[w] += (r.attendees || 0); else trained[w] += (r.attendees || 0);
+  });
+  const _skip = ['Contact Register', 'Expression of Interest'];
+  _pd_people.forEach(p => {
+    const dt = pdParseDate(p['Person - Date Access Granted']);
+    if (!pdValidDate(dt) || _skip.includes(p['Person - Customer Type'])) return;
+    const w = weekStartOf(dt); if (w != null && (w in trained)) trained[w] += 1;
+  });
+  return { weeks, trained, self };
+}
+
+// Manual proficiency audits (1-5 self-score) until the in-app Labs pop-up ships.
+function saveProficiency() {
+  const date = document.getElementById('prof-date').value;
+  const score = Number(document.getElementById('prof-score').value);
+  if (!date || !score) { toast('Enter a date and an average score.'); return; }
+  if (score < 1 || score > 5) { toast('Score must be between 1 and 5.'); return; }
+  const entry = { _id: 'prof-' + Date.now(), date, score };
+  const sample = document.getElementById('prof-sample').value; if (sample) entry.sample = Number(sample);
+  const notes = document.getElementById('prof-notes').value; if (notes) entry.notes = notes;
+  save('proficiency', [...load('proficiency'), entry].sort((a, b) => a.date > b.date ? 1 : -1));
+  toggleForm('prof-form');
+  toast('Proficiency audit saved.');
+  renderTraining();
+}
+
 function renderTraining(el) {
   el = el || document.getElementById('main-content');
   const data = load('training');
@@ -3604,6 +3666,24 @@ function renderTraining(el) {
     if (k) months[k] = (months[k] || 0) + (r.attendees || 0);
   });
   const barData = Object.entries(months).sort().slice(-36);
+
+  // Weekly trained / self-trained (last 12 weeks) + this-week snapshot
+  const wkSeries = trainingWeeklySeries();
+  const thisWk = wkSeries.weeks[wkSeries.weeks.length - 1];
+  const trainedThisWeek = wkSeries.trained[thisWk] || 0;
+  const selfThisWeek = wkSeries.self[thisWk] || 0;
+
+  // % of the user base trained in the last year (approximate: attendee counts can
+  // include repeat attendees, and the user base is PostHog's all-time user count)
+  const yearAgo = new Date(); yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+  const trainedLastYear = pdTrained.filter(p => pdParseDate(p['Person - Date Access Granted']) >= yearAgo).length
+    + data.filter(r => r.date && new Date(r.date) >= yearAgo && (r.type || '') !== 'Self-serve').reduce((s, r) => s + (r.attendees || 0), 0);
+  const userBase = (_ph && _ph.summary && _ph.summary.total_users) || cumulative || null;
+  const pctTrainedYr = userBase ? Math.min(100, trainedLastYear / userBase * 100) : null;
+
+  // Manual proficiency audits
+  const profs = load('proficiency').sort((a, b) => a.date > b.date ? 1 : -1);
+  const profLatest = profs.length ? profs[profs.length - 1] : null;
 
   // Pipedrive onboarding pipeline
   const onboarding = _pd_deals.filter(d => d['Deal - Pipeline'] === 'General Onboarding Pipeline');
@@ -3653,6 +3733,14 @@ function renderTraining(el) {
         '<span class="src-tag">Pipedrive · General Onboarding Pipeline</span><br>Deals at the <b>2 Month Growth Period</b> stage. These customers have completed initial training and are in the post-training follow-up phase.<br><div class="calc-row">Stage = "2 Month Growth Period"</div>'],
       ['Active trials', trialActive + trialMid || null, null, null, 'Pipedrive: Trial Pipeline',
         '<span class="src-tag">Pipedrive · Trial Pipeline</span><br>Deals at <b>Trial in Progress</b> (' + trialActive + ') plus <b>Trial Mid Point</b> (' + trialMid + ') stages. Both stages represent active, ongoing trials.<br><div class="calc-row">Stage = "Trial in Progress" OR "Trial Mid Point"</div>'],
+      ['Trained this week', trainedThisWeek || null, null, null, 'week of ' + fmtDate(thisWk),
+        '<span class="src-tag">Manual training log + Pipedrive</span><br>Session attendees logged this week (excluding Self-serve) plus people whose access was granted this week in Pipedrive. See the weekly chart below.'],
+      ['Self-trained this week', selfThisWeek || null, null, null, 'manual: "Self-serve" sessions',
+        '<span class="src-tag">Manual training log</span><br>Attendees of sessions logged with type <b>Self-serve</b> this week. Manual entry until Labs self-service training tracking is live.'],
+      ['User base trained (last year)', pctTrainedYr, null, '%', 'target: 80%+ trained and competent',
+        '<span class="src-tag">Pipedrive + training log ÷ PostHog user base</span><br>People given access or trained in the last 365 days, divided by the total user base (PostHog all-time users' + (userBase ? ': ' + fmtNum(userBase) : '') + '). <b>Approximate</b>: attendee counts can include repeat attendees.<br><div class="calc-row">(access granted + session attendees, last 365 days) ÷ total users × 100</div>'],
+      ['Avg proficiency self-score', profLatest ? profLatest.score : null, null, null, profLatest ? ('of 5 · audited ' + fmtDate(profLatest.date)) : 'manual audits: log below',
+        '<span class="src-tag">Manual · proficiency audits</span><br>Average self-rated proficiency (1 to 5) from the most recent audit, where users are asked to rate their own Land iQ proficiency. Manual (e.g. phone audits) until the in-app pop-up ships.'],
     ])}
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
@@ -3736,10 +3824,47 @@ function setTrainingSub(sub, rerender = true, barData, data, webinars, convMonth
   if (!sc) return;
 
   if (sub === 'sessions') {
+    const wkS = trainingWeeklySeries();
+    const profs = load('proficiency').sort((a, b) => a.date > b.date ? 1 : -1);
     sc.innerHTML = `
+      <div class="box">
+        <div class="box-title">People trained per week: last 12 weeks</div>
+        <div style="font-size:11px;color:var(--tl);margin-bottom:6px">Trained = session attendees + new access granted (Pipedrive). Self-trained = sessions logged as "Self-serve": manual until Labs tracking is live.</div>
+        <div class="chart-wrap" style="height:220px"><canvas id="training-week-chart"></canvas></div>
+      </div>
+
       <div class="box">
         <div class="box-title">New user access granted per month: up to 3 years</div>
         <div class="chart-wrap" style="height:240px"><canvas id="training-bar"></canvas></div>
+      </div>
+
+      <div class="box">
+        <div class="box-title">User proficiency self-score <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:6px">1 to 5 · manual audits until the in-app pop-up ships</span></div>
+        ${profs.length ? `<table class="conv-table">
+          <thead><tr><th>Audit date</th><th>Average score</th><th>Users asked</th><th>Notes</th><th></th></tr></thead>
+          <tbody>${[...profs].reverse().map(r => `<tr>
+            <td>${fmtDate(r.date)}</td>
+            <td><strong>${r.score}</strong> / 5</td>
+            <td>${fmtNum(r.sample)}</td>
+            <td style="color:var(--tl)">${r.notes || ':'}</td>
+            <td><button class="btn-del" onclick="delRow('proficiency','${r._id}','_id')">Delete</button></td>
+          </tr>`).join('')}</tbody>
+        </table>` : '<div class="no-data">No proficiency audits logged yet. Goal: 80%+ of users onboarded, trained and competent. Run spot-check audits (e.g. call users) and log the average score here.</div>'}
+        <div style="margin-top:12px">
+          <button class="add-btn" onclick="toggleForm('prof-form')">+ Add proficiency audit</button>
+          <div id="prof-form" style="display:none;margin-top:10px"><div class="form-box">
+            <div class="form-grid">
+              <div class="form-group"><label>Audit date</label><input type="date" id="prof-date"></div>
+              <div class="form-group"><label>Average score (1 to 5)</label><input type="number" id="prof-score" min="1" max="5" step=".1"></div>
+              <div class="form-group"><label>Users asked</label><input type="number" id="prof-sample"></div>
+              <div class="form-group"><label>Notes</label><input type="text" id="prof-notes" placeholder="e.g. phone audit of 10 council users"></div>
+            </div>
+            <div class="form-actions">
+              <button class="btn-save" onclick="saveProficiency()">Save</button>
+              <button class="btn-cancel" onclick="toggleForm('prof-form')">Cancel</button>
+            </div>
+          </div></div>
+        </div>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
@@ -3786,6 +3911,21 @@ function setTrainingSub(sub, rerender = true, barData, data, webinars, convMonth
         { key: 'sdk',       label: 'SDK after' },
       ], '_id')}
     `;
+
+    makeChart('training-week-chart', {
+      type: 'bar',
+      data: {
+        labels: wkS.weeks.map(w => fmtDate(w).slice(0, 6)),
+        datasets: [
+          { label: 'Trained (sessions + new access)', data: wkS.weeks.map(w => wkS.trained[w] || 0), backgroundColor: '#2a7a4b', borderRadius: 3 },
+          { label: 'Self-trained (manual)', data: wkS.weeks.map(w => wkS.self[w] || 0), backgroundColor: '#2e8bc0', borderRadius: 3 },
+        ]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
+        scales: { x: { stacked: true, grid: { display: false }, ticks: axStyle }, y: { stacked: true, grid: gridStyle, ticks: axStyle, beginAtZero: true } }
+      }
+    });
 
     makeChart('training-bar', {
       type: 'bar',
@@ -3964,6 +4104,7 @@ function renderWeeklyTracker(el) {
       // Combined total only: individual names removed (work board, no personal-brand items)
       { key: 'jsImp', label: 'LinkedIn Post Impressions (total)', fmt: 'num',
         calc: r => liImp(r) },
+      { key: 'postsWeek', label: 'Total Posts per Week', fmt: 'num' },
     ]},
     { label: 'EDM', key: 'edm', rows: [
       { key: 'edmOpen',        label: 'Email Open Rate',       fmt: 'pct' },
@@ -4077,6 +4218,7 @@ function renderWeeklyTracker(el) {
         <div class="form-grid">
           <div class="form-group"><label>Week ending</label><input type="date" id="tr2-week"></div>
           <div class="form-group"><label>LinkedIn post impressions (total)</label><input type="number" id="tr2-jsImp"></div>
+          <div class="form-group"><label>Total posts this week</label><input type="number" id="tr2-postsWeek"></div>
           <div class="form-group"><label>EDM open rate (%)</label><input type="number" id="tr2-edmOpen" step=".1"></div>
           <div class="form-group"><label>EDM click-through rate (%)</label><input type="number" id="tr2-edmCtr" step=".1"></div>
           <div class="form-group"><label>Webinar email sends</label><input type="number" id="tr2-wbEmailSend"></div>
@@ -4155,6 +4297,46 @@ function renderMarketing(el) {
   const edms = data.filter(r => r.type === 'EDM').reverse();
   const growth2m = load('edm_2m');
 
+  // EDM indicator data: campaigns in date order for clicks/recipient-growth KPIs
+  const edmSorted = data.filter(r => r.type === 'EDM' && r.date).sort((a, b) => a.date > b.date ? 1 : -1);
+  const edmLast = edmSorted[edmSorted.length - 1] || null;
+  const edmPrev = edmSorted[edmSorted.length - 2] || null;
+  const edmRecGrowth = (edmLast?.recipients != null && edmPrev?.recipients != null) ? edmLast.recipients - edmPrev.recipients : null;
+  const edmRec = edmSorted.filter(e => e.recipients != null);
+
+  // ── POSTS & EVENTS CALENDAR (past/held only, last 3 months) ──
+  const calEvents = {};
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const addCalEv = (dateStr, type, title) => {
+    if (!dateStr) return;
+    const d = String(dateStr).slice(0, 10);
+    if (d > todayIso) return;              // past only: nothing projected
+    (calEvents[d] = calEvents[d] || []).push({ type, title: title || type });
+  };
+  data.forEach(c => addCalEv(c.date, c.type || 'Other', c.title));
+  webinars.forEach(w => addCalEv(w.date, 'Webinar', w.title));
+  const calMonths = [];
+  { const now = new Date();
+    for (let i = 2; i >= 0; i--) calMonths.push(new Date(now.getFullYear(), now.getMonth() - i, 1)); }
+  const calHTML = calMonths.map(m0 => {
+    const y = m0.getFullYear(), mo = m0.getMonth();
+    const daysIn = new Date(y, mo + 1, 0).getDate();
+    const firstDow = (new Date(y, mo, 1).getDay() + 6) % 7;   // Monday-first grid
+    let cells = '';
+    for (let i = 0; i < firstDow; i++) cells += '<div class="cal-day empty"></div>';
+    for (let d = 1; d <= daysIn; d++) {
+      const key = y + '-' + String(mo + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+      const evs = calEvents[key] || [];
+      const tip = evs.map(e => e.type + ': ' + (e.title || '')).join(' | ').replace(/"/g, '&quot;');
+      const dots = evs.slice(0, 4).map(e => `<span class="cal-dot" style="background:${typeColors[e.type] || '#888'}"></span>`).join('');
+      cells += `<div class="cal-day${evs.length ? ' has-ev' : ''}"${evs.length ? ` title="${tip}"` : ''}><span class="cal-num">${d}</span><span class="cal-dots">${dots}${evs.length > 4 ? '<span class="cal-more">+' + (evs.length - 4) + '</span>' : ''}</span></div>`;
+    }
+    const monthName = m0.toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
+    return `<div class="cal-month"><div class="cal-month-title">${monthName}</div><div class="cal-grid"><div class="cal-dow">M</div><div class="cal-dow">T</div><div class="cal-dow">W</div><div class="cal-dow">T</div><div class="cal-dow">F</div><div class="cal-dow">S</div><div class="cal-dow">S</div>${cells}</div></div>`;
+  }).join('');
+  const calLegend = [...types, 'Other'].filter(t => Object.values(calEvents).some(evs => evs.some(e => e.type === t)))
+    .map(t => `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--tl)"><span class="cal-dot" style="background:${typeColors[t] || '#888'}"></span>${t}</span>`).join(' ');
+
   // ── CONTENT → PIPELINE ATTRIBUTION ────────────────────────────────────────
   // For each content piece, find deals created within 30 days after its publish date
   const ATTR_WINDOW = 30; // days
@@ -4221,95 +4403,14 @@ function renderMarketing(el) {
       </div>
     </div>
 
+    
+
+    <div class="mk-head">Webinar</div>
+
     ${cardsHTML([
-      ['LinkedIn impressions (latest week)', liImpLatest || null, null, null, latestW ? fmtDate(latestW.week) : null,
-        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total LinkedIn post impressions from the most recently entered Weekly Tracker row.<br><div class="calc-row">Sum of post impressions (latest week)</div>'],
-      ['EDM open rate', latestW?.edmOpen ?? null, null, '%', latestW ? fmtDate(latestW.week) : null,
-        '<span class="src-tag">Manual · Weekly Tracker</span><br>Email open rate from the <b>edmOpen</b> field of the latest Weekly Tracker row. Manually entered from the email platform (e.g. Mailchimp / HubSpot).'],
-      ['Webinar registrations', latestW?.wbReg ?? null, null, null, latestW ? fmtDate(latestW.week) : null,
-        '<span class="src-tag">Manual · Weekly Tracker</span><br>Number of webinar registrations from the <b>wbReg</b> field of the latest Weekly Tracker row. Covers the most recently run webinar promotion period.'],
-      ['Website visits', latestW?.websiteVisits ?? null, null, null, latestW ? fmtDate(latestW.week) : null,
-        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total website users (visits) from the <b>websiteVisits</b> field of the latest Weekly Tracker row. Manually entered from Google Analytics / Looker Studio.'],
+      ['Webinar registrations (latest week)', latestW?.wbReg ?? null, null, null, latestW ? fmtDate(latestW.week) : null,
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Number of webinar registrations from the latest Weekly Tracker row. Covers the most recently run webinar promotion period.'],
     ])}
-
-    <!-- ── LINKEDIN ── -->
-    <div class="box">
-      <div class="box-title">LinkedIn impressions: weekly total</div>
-      ${trackerRecent.length ? `<div class="chart-wrap" style="height:240px"><canvas id="li-chart"></canvas></div>` : '<div class="no-data">No tracker data yet.</div>'}
-      ${trackerRecent.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--acc);font-weight:500;padding:4px 0">Show data table</summary>
-        <div class="tbl-scroll" style="margin-top:8px"><table>
-          <thead><tr><th>Week</th><th>Total impressions</th></tr></thead>
-          <tbody>${[...trackerRecent].reverse().map(r => `<tr>
-            <td>${fmtDate(r.week)}</td>
-            <td><strong>${fmtNum(liImp(r) || 0)}</strong></td>
-          </tr>`).join('')}</tbody>
-        </table></div>
-      </details>` : ''}
-    </div>
-
-    <!-- ── EDM ── -->
-    <div class="box">
-      <div class="box-title">EDM email performance</div>
-      ${trackerRecent.length ? `<div class="chart-wrap" style="height:220px"><canvas id="edm-chart"></canvas></div>` : '<div class="no-data">No tracker data yet.</div>'}
-      ${trackerRecent.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--acc);font-weight:500;padding:4px 0">Show data table</summary>
-        <div class="tbl-scroll" style="margin-top:8px"><table>
-          <thead><tr><th>Week</th><th>Open Rate</th><th>CTR</th></tr></thead>
-          <tbody>${[...trackerRecent].reverse().map(r => `<tr>
-            <td>${fmtDate(r.week)}</td>
-            <td>${r.edmOpen != null ? fmtPct(r.edmOpen) : ':'}</td>
-            <td>${r.edmCtr != null ? fmtPct(r.edmCtr) : ':'}</td>
-          </tr>`).join('')}</tbody>
-        </table></div>
-      </details>` : ''}
-      <div class="review-only" style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px">
-        <div class="box-title" style="margin-bottom:10px">Campaign sends</div>
-        ${edms.length ? `<table class="conv-table">
-          <thead><tr><th>Date</th><th>Campaign</th><th>Recipients</th><th>Opens</th><th>Open rate</th><th>Clicks</th><th>Click rate</th><th>Unsubs</th></tr></thead>
-          <tbody>${edms.map(e => {
-            const or = pct(e.opens, e.recipients);
-            const cr = pct(e.edmclicks, e.opens);
-            return `<tr><td>${fmtDate(e.date)}</td><td>${e.title||':'}</td><td>${fmtNum(e.recipients)}</td>
-              <td>${fmtNum(e.opens)}</td><td><span class="conv-pct ${or>30?'good':or>20?'mid':'bad'}">${fmtPct(or)}</span></td>
-              <td>${fmtNum(e.edmclicks)}</td><td><span class="conv-pct ${cr>10?'good':cr>5?'mid':'bad'}">${fmtPct(cr)}</span></td>
-              <td>${fmtNum(e.unsub)}</td></tr>`;
-          }).join('')}</tbody>
-        </table>` : '<div class="no-data">No EDM campaigns logged yet. Add via the content form below and select "EDM" as type.</div>'}
-      </div>
-      <div class="review-only" style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px">
-        <div class="box-title" style="margin-bottom:10px">2-Month Growth Email: automated onboarding sequence
-          <span style="font-size:11px;color:var(--tl);font-weight:400;margin-left:4px">Sent to new users at 2-month mark</span>
-        </div>
-        ${growth2m.length ? `<table class="conv-table">
-          <thead><tr><th>Cohort date</th><th>Sent to</th><th>Open rate</th><th>Click rate</th><th>Notes</th><th></th></tr></thead>
-          <tbody>${[...growth2m].reverse().map(r => {
-            const or = Number(r.openRate);
-            const cr = Number(r.clickRate);
-            return `<tr><td>${fmtDate(r.date)}</td><td>${fmtNum(r.sent)}</td>
-              <td><span class="conv-pct ${or>30?'good':or>20?'mid':'bad'}">${fmtPct(or)}</span></td>
-              <td><span class="conv-pct ${cr>10?'good':cr>5?'mid':'bad'}">${fmtPct(cr)}</span></td>
-              <td style="color:var(--tl)">${r.notes||':'}</td>
-              <td><button class="btn-del" onclick="delRow('edm_2m','${r._id}','_id')">Delete</button></td>
-            </tr>`;
-          }).join('')}</tbody>
-        </table>` : '<div class="no-data">No 2M growth email data logged yet.</div>'}
-        <div style="margin-top:12px">
-          <button class="add-btn" onclick="toggleForm('edm2m-form')">+ Add 2M growth email cohort</button>
-          <div id="edm2m-form" style="display:none;margin-top:10px"><div class="form-box">
-            <div class="form-grid">
-              <div class="form-group"><label>Cohort send date</label><input type="date" id="edm2m-date"></div>
-              <div class="form-group"><label>Number sent to</label><input type="number" id="edm2m-sent"></div>
-              <div class="form-group"><label>Open rate (%)</label><input type="number" id="edm2m-open" step=".1"></div>
-              <div class="form-group"><label>Click-through rate (%)</label><input type="number" id="edm2m-ctr" step=".1"></div>
-              <div class="form-group"><label>Notes</label><input type="text" id="edm2m-notes"></div>
-            </div>
-            <div class="form-actions">
-              <button class="btn-save" onclick="save2MGrowth()">Save</button>
-              <button class="btn-cancel" onclick="toggleForm('edm2m-form')">Cancel</button>
-            </div>
-          </div></div>
-        </div>
-      </div>
-    </div>
 
     <!-- ── WEBINARS ── -->
     <div class="box">
@@ -4401,10 +4502,112 @@ function renderMarketing(el) {
       </details>` : ''}
     </div>
 
-    <!-- ── WEBSITE ── -->
+    <div class="mk-head">EDM</div>
+
+    ${cardsHTML([
+      ['EDM open rate (latest week)', latestW?.edmOpen ?? null, null, '%', latestW ? fmtDate(latestW.week) : null,
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Email open rate from the latest Weekly Tracker row. Entered from the Comms email platform results.'],
+      ['EDM clicks (latest campaign)', edmLast?.edmclicks ?? null, null, null, edmLast ? (edmLast.title || fmtDate(edmLast.date)) : 'no campaigns logged',
+        '<span class="src-tag">Manual · Content log (EDM)</span><br>Link clicks recorded on the most recent email campaign in the content log. Add campaigns via "All content" (review mode) with type EDM.'],
+      ['EDM recipients (latest campaign)', edmLast?.recipients ?? null, null, null, edmRecGrowth != null ? ((edmRecGrowth >= 0 ? '+' : '') + fmtNum(edmRecGrowth) + ' vs previous campaign') : (edmLast ? (edmLast.title || fmtDate(edmLast.date)) : 'no campaigns logged'),
+        '<span class="src-tag">Manual · Content log (EDM)</span><br>Recipient count of the most recent email campaign, with the change vs the campaign before it: a growing number means the mailing audience is growing.'],
+    ])}
+
+    <!-- ── EDM ── -->
     <div class="box">
-      <div class="box-title">Website</div>
-      <div id="website-inline"></div>
+      <div class="box-title">EDM email performance</div>
+      ${trackerRecent.length ? `<div class="chart-wrap" style="height:220px"><canvas id="edm-chart"></canvas></div>` : '<div class="no-data">No tracker data yet.</div>'}
+      ${trackerRecent.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--acc);font-weight:500;padding:4px 0">Show data table</summary>
+        <div class="tbl-scroll" style="margin-top:8px"><table>
+          <thead><tr><th>Week</th><th>Open Rate</th><th>CTR</th></tr></thead>
+          <tbody>${[...trackerRecent].reverse().map(r => `<tr>
+            <td>${fmtDate(r.week)}</td>
+            <td>${r.edmOpen != null ? fmtPct(r.edmOpen) : ':'}</td>
+            <td>${r.edmCtr != null ? fmtPct(r.edmCtr) : ':'}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </details>` : ''}
+      ${edmRec.length >= 2 ? `<div style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px">
+        <div class="box-title" style="margin-bottom:10px">EDM audience growth: recipients per campaign</div>
+        <div class="chart-wrap" style="height:180px"><canvas id="edm-rec-chart"></canvas></div>
+      </div>` : ''}
+      <div class="review-only" style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px">
+        <div class="box-title" style="margin-bottom:10px">Campaign sends</div>
+        ${edms.length ? `<table class="conv-table">
+          <thead><tr><th>Date</th><th>Campaign</th><th>Recipients</th><th>Opens</th><th>Open rate</th><th>Clicks</th><th>Click rate</th><th>Unsubs</th></tr></thead>
+          <tbody>${edms.map(e => {
+            const or = pct(e.opens, e.recipients);
+            const cr = pct(e.edmclicks, e.opens);
+            return `<tr><td>${fmtDate(e.date)}</td><td>${e.title||':'}</td><td>${fmtNum(e.recipients)}</td>
+              <td>${fmtNum(e.opens)}</td><td><span class="conv-pct ${or>30?'good':or>20?'mid':'bad'}">${fmtPct(or)}</span></td>
+              <td>${fmtNum(e.edmclicks)}</td><td><span class="conv-pct ${cr>10?'good':cr>5?'mid':'bad'}">${fmtPct(cr)}</span></td>
+              <td>${fmtNum(e.unsub)}</td></tr>`;
+          }).join('')}</tbody>
+        </table>` : '<div class="no-data">No EDM campaigns logged yet. Add via the content form below and select "EDM" as type.</div>'}
+      </div>
+      <div class="review-only" style="margin-top:14px;border-top:1px solid var(--bd);padding-top:14px">
+        <div class="box-title" style="margin-bottom:10px">2-Month Growth Email: automated onboarding sequence
+          <span style="font-size:11px;color:var(--tl);font-weight:400;margin-left:4px">Sent to new users at 2-month mark</span>
+        </div>
+        ${growth2m.length ? `<table class="conv-table">
+          <thead><tr><th>Cohort date</th><th>Sent to</th><th>Open rate</th><th>Click rate</th><th>Notes</th><th></th></tr></thead>
+          <tbody>${[...growth2m].reverse().map(r => {
+            const or = Number(r.openRate);
+            const cr = Number(r.clickRate);
+            return `<tr><td>${fmtDate(r.date)}</td><td>${fmtNum(r.sent)}</td>
+              <td><span class="conv-pct ${or>30?'good':or>20?'mid':'bad'}">${fmtPct(or)}</span></td>
+              <td><span class="conv-pct ${cr>10?'good':cr>5?'mid':'bad'}">${fmtPct(cr)}</span></td>
+              <td style="color:var(--tl)">${r.notes||':'}</td>
+              <td><button class="btn-del" onclick="delRow('edm_2m','${r._id}','_id')">Delete</button></td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>` : '<div class="no-data">No 2M growth email data logged yet.</div>'}
+        <div style="margin-top:12px">
+          <button class="add-btn" onclick="toggleForm('edm2m-form')">+ Add 2M growth email cohort</button>
+          <div id="edm2m-form" style="display:none;margin-top:10px"><div class="form-box">
+            <div class="form-grid">
+              <div class="form-group"><label>Cohort send date</label><input type="date" id="edm2m-date"></div>
+              <div class="form-group"><label>Number sent to</label><input type="number" id="edm2m-sent"></div>
+              <div class="form-group"><label>Open rate (%)</label><input type="number" id="edm2m-open" step=".1"></div>
+              <div class="form-group"><label>Click-through rate (%)</label><input type="number" id="edm2m-ctr" step=".1"></div>
+              <div class="form-group"><label>Notes</label><input type="text" id="edm2m-notes"></div>
+            </div>
+            <div class="form-actions">
+              <button class="btn-save" onclick="save2MGrowth()">Save</button>
+              <button class="btn-cancel" onclick="toggleForm('edm2m-form')">Cancel</button>
+            </div>
+          </div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mk-head">Posts and Events</div>
+
+    ${cardsHTML([
+      ['Posts this week', latestW?.postsWeek ?? null, null, null, latestW ? fmtDate(latestW.week) : null,
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total posts published this week, from the "Total Posts per Week" row of Lucy\'s tracker (re-import the CSV to fill history).'],
+      ['LinkedIn impressions (latest week)', liImpLatest || null, null, null, 'target: 2,000 per week',
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total LinkedIn post impressions from the most recent Weekly Tracker row. Weekly target is 2,000: see the chart below.<br><div class="calc-row">Sum of post impressions (latest week)</div>'],
+    ])}
+
+    <!-- ── LINKEDIN ── -->
+    <div class="box">
+      <div class="box-title">LinkedIn impressions: weekly total vs 2,000 target</div>
+      ${trackerRecent.length ? `<div class="chart-wrap" style="height:240px"><canvas id="li-chart"></canvas></div>` : '<div class="no-data">No tracker data yet.</div>'}
+      ${trackerRecent.length ? `<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--acc);font-weight:500;padding:4px 0">Show data table</summary>
+        <div class="tbl-scroll" style="margin-top:8px"><table>
+          <thead><tr><th>Week</th><th>Total impressions</th></tr></thead>
+          <tbody>${[...trackerRecent].reverse().map(r => `<tr>
+            <td>${fmtDate(r.week)}</td>
+            <td><strong>${fmtNum(liImp(r) || 0)}</strong></td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </details>` : ''}
+    </div>
+
+    <div class="box">
+      <div class="box-title">Posts and events calendar <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:6px">published/held only · last 3 months</span></div>
+      ${Object.keys(calEvents).length ? `<div class="cal-months">${calHTML}</div><div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px">${calLegend}</div>` : '<div class="no-data">No posts or events logged yet: entries come from the content log and webinar log.</div>'}
     </div>
 
     <!-- ── CONTENT LOG (review-only: draft/management view) ── -->
@@ -4561,6 +4764,14 @@ function renderMarketing(el) {
         ${(websiteData.length || data.length) ? '<canvas id="corr-chart"></canvas>' : '<div class="no-data">Add website data and content items to see the chart.</div>'}
       </div>
     </div>
+    <div class="mk-head">Website</div>
+
+    <!-- ── WEBSITE ── -->
+    <div class="box">
+      <div class="box-title">Website</div>
+      <div id="website-inline"></div>
+    </div>
+
   `;
 
   // Populate website inline section
@@ -4588,6 +4799,21 @@ function renderMarketing(el) {
     });
   }
 
+  // EDM audience growth: recipients per campaign over time
+  if (edmRec.length >= 2) {
+    makeChart('edm-rec-chart', {
+      type: 'line',
+      data: {
+        labels: edmRec.map(e => fmtDate(e.date).slice(0, 6)),
+        datasets: [{ label: 'Recipients', data: edmRec.map(e => e.recipients), borderColor: '#2a7a4b', backgroundColor: 'rgba(42,122,75,.08)', borderWidth: 2, pointRadius: 3, tension: .3, fill: true }]
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: axStyle, beginAtZero: true } }
+      }
+    });
+  }
+
   // LinkedIn weekly total (individual names removed: combined figure only)
   if (trackerRecent.length) {
     const liLabels = trackerRecent.map(r => fmtDate(r.week).slice(0,6));
@@ -4598,10 +4824,11 @@ function renderMarketing(el) {
         labels: liLabels,
         datasets: [
           { label: 'Total impressions', data: liTotals, backgroundColor: '#2e8bc0', borderRadius: 3 },
+          { type: 'line', label: 'Target: 2,000 / week', data: liTotals.map(() => 2000), borderColor: '#c0392b', borderDash: [6, 4], borderWidth: 1.5, pointRadius: 0, fill: false },
         ]
       },
       options: { responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } } },
         scales: {
           x: { grid: { display: false }, ticks: axStyle },
           y: { grid: gridStyle, ticks: axStyle }
@@ -4714,7 +4941,7 @@ function saveTrackerWeek() {
   const week = document.getElementById('tr2-week').value;
   if (!week) { toast('Select a week.'); return; }
   // Every form field except the legacy per-person LinkedIn splits.
-  const fields = ['jsImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
+  const fields = ['jsImp','postsWeek','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
   // Start from the existing row so we edit in place and keep its _id.
   const existing = load('weekly_tracker').find(r => r.week === week);
   const entry = { ...(existing || {}), _id: existing?._id || ('trk-' + Date.now()), week };
@@ -4737,7 +4964,7 @@ function saveTrackerWeek() {
 
 // Populate the add/edit form from an existing tracker week (or clear it for a new one).
 function loadTrackerWeek(week) {
-  const fields = ['edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
+  const fields = ['postsWeek','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = (val == null ? '' : val); };
   if (!week) { set('tr2-week', ''); set('tr2-jsImp', ''); fields.forEach(f => set('tr2-' + f, '')); return; }
   const rec = load('weekly_tracker').find(r => r.week === week) || {};
@@ -4757,7 +4984,7 @@ function cancelTrackerEdit() {
 }
 
 function saveTrackerEdit(id) {
-  const fields = ['jsImp','jmImp','lbImp','skImp','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
+  const fields = ['jsImp','jmImp','lbImp','skImp','postsWeek','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
   const arr = load('weekly_tracker');
   const idx = arr.findIndex(r => r._id === id);
   if (idx < 0) { toast('Row not found.'); return; }
@@ -4846,6 +5073,10 @@ function importTrackerCSV(input) {
           'jm post impressions': 'jmImp',
           'lb post impressions': 'lbImp',
           'sk post impressions': 'skImp',
+          'total posts per week': 'postsWeek',
+          'total posts':          'postsWeek',
+          'posts per week':       'postsWeek',
+          'number of posts':      'postsWeek',
         },
         edm: {
           'email open rate':     'edmOpen',
