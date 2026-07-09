@@ -247,6 +247,15 @@ body.review-mode .metric-hidden{opacity:.4;outline:1px dashed #c4c4c4;outline-of
 .kpi-band{background:var(--acc2);border:1px solid #cfe3f0;border-radius:10px;padding:12px 14px 2px;margin-bottom:22px}
 .kpi-band-head{font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--acc);margin:0 0 10px;display:flex;align-items:center;gap:7px}
 .kpi-band-head::before{content:'';width:12px;height:12px;border-radius:3px;background:var(--acc);display:inline-block;flex:none}
+/* Webinar conversion funnel (OPTI-MAX-style): stage bars scaled to the largest stage */
+.fn-wrap{min-width:520px}
+.fn-row{display:grid;grid-template-columns:132px 1fr 168px;align-items:center;gap:10px;margin-bottom:7px}
+.fn-label{font-size:12px;color:var(--tx);text-align:right;font-weight:500}
+.fn-track{background:var(--bg2);border-radius:4px;height:24px;overflow:hidden}
+.fn-bar{height:100%;border-radius:4px;display:flex;align-items:center;justify-content:flex-end;min-width:32px;transition:width .4s}
+.fn-val{color:#fff;font-size:11px;font-weight:700;padding-right:7px;white-space:nowrap}
+.fn-note{font-size:11px;color:var(--tl)}
+.fn-bridge{font-size:10.5px;color:var(--tl);border-top:1px dashed var(--bd);padding-top:6px;margin:2px 0 8px 142px}
 /* Review-only blocks: hidden for the everyday/exec view, revealed in review mode */
 .review-only{display:none}
 body.review-mode .review-only{display:block}
@@ -805,6 +814,7 @@ function importBackup(json) {
 let _metricFlags = {};
 let _hiddenMetrics = {};
 let _reviewMode  = false;
+let _wbFunnelSel = null;   // selected webinar id for the conversion funnel
 
 function flagKey(text) {
   return activeTab + '|' + text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 48);
@@ -909,6 +919,7 @@ const METRIC_DOCS = [
   ['linkedin impressions: weekly total', 'Manual · Weekly Tracker', 'SUM of logged LinkedIn post impressions per tracked week (combined total: no individual attribution).'],
   ['webinar email promotion', 'Manual · Weekly Tracker', 'Weekly promo-email sends vs the registrations they drove, straight from Lucy\'s tracker. Rough promotion volume only: the full, cleaner webinar funnel (open rate, click rate, reg-page, attendance, watch time) lives in the webinar performance table above.'],
   ['edm performance', 'Manual · Content log + Weekly Tracker', 'Email newsletter entries and their open/click rates as logged.'],
+  ['webinar conversion funnel', 'Manual · Webinar log (Teams + email platform)', 'The full flow for one webinar: emails sent → opened → clicked → reg-page visits → registered → attended → reactions, each with its count and stage conversion. Bars are scaled to the largest stage, so when reg-page visits exceed email clicks the funnel widens: that surplus arrived from non-email channels (social, EDM). Attendance rate = attended ÷ registered; reaction rate = reactions ÷ attended.'],
   ['posts and events timeline', 'Manual · Content log + Webinar log + planned events', 'Gantt-style timeline: week columns under month headers, one row per content type, dots placed in the week each item falls in. Past dots are logged posts/campaigns/events; future dots are manually locked-in planned events (solid ring = confirmed, hollow dashed = proposed). A planned event whose date passes drops off automatically and is flagged for cleanup in review mode.'],
   ['people trained per week', 'Manual training log + Pipedrive', 'Stacked weekly count: session attendees (non Self-serve) plus people granted access that week in Pipedrive, and Self-serve session attendees as the self-trained share.'],
   ['user proficiency self-score', 'Manual · proficiency audits', 'Average self-rated proficiency (1 to 5) per audit, e.g. calling a sample of users. Manual until the in-app pop-up ships.'],
@@ -4323,6 +4334,14 @@ function renderMarketing(el) {
   });
   const wbAvg = k => { const v = wbPerf.map(w => w[k]).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
   const wbTotAttended = wbPerf.reduce((s, w) => s + (w.attended || 0), 0);
+  // Webinar funnel selector: default to the current pick, else the most recent
+  // webinar that shows the multi-channel gap, else the most recent with any data.
+  const wbFunnelList = [...webinars].sort((a, b) => a.date > b.date ? 1 : -1);
+  const wbFunnelDefault =
+    (_wbFunnelSel && wbFunnelList.some(w => w._id === _wbFunnelSel)) ? _wbFunnelSel
+    : ([...wbFunnelList].reverse().find(w => w.regPageViews != null && w.emailsClicked != null && w.regPageViews > w.emailsClicked)?._id
+       || [...wbFunnelList].reverse().find(w => w.emailsSent != null || w.registered != null)?._id
+       || (wbFunnelList.length ? wbFunnelList[wbFunnelList.length - 1]._id : ''));
   window.editWebinar = (id) => {
     const w = load('webinars').find(x => x._id === id); if (!w) return;
     toggleForm('webinar-form');
@@ -4573,6 +4592,16 @@ function renderMarketing(el) {
           </div>
         </div></div>
       </div>
+    </div>
+
+    <div class="box">
+      <div class="box-title">Webinar conversion funnel ${infoBtn('Webinar conversion funnel',
+        '<span class="src-tag">Manual · Webinar log</span><br>Emails sent → opened → clicked → reg-page visits → registered → attended → reactions for one webinar. When reg-page visits run longer than email clicks, the surplus came from non-email channels (social, EDM).')}
+        ${wbFunnelList.length ? `<select onchange="renderWbFunnel(this.value)" style="margin-left:auto;font-size:12px;padding:3px 8px;border:1px solid var(--bd);border-radius:6px;font-family:inherit;color:var(--tx);background:var(--wh)">
+          ${wbFunnelList.map(w => `<option value="${w._id}"${w._id === wbFunnelDefault ? ' selected' : ''}>${fmtDate(w.date)}${w.title ? ': ' + w.title : ''}</option>`).join('')}
+        </select>` : ''}
+      </div>
+      <div id="wb-funnel-body">${wbFunnelList.length ? '' : '<div class="no-data">No webinars logged yet: add one above to see its funnel.</div>'}</div>
     </div>
 
     <!-- ── WEBINAR EMAIL PROMOTION (review-only: rough promo volume; real funnel is the table above) ── -->
@@ -4894,6 +4923,9 @@ function renderMarketing(el) {
 
   // Populate website inline section
   renderWebsite(document.getElementById('website-inline'));
+
+  // Webinar conversion funnel (initial paint for the selected event)
+  if (wbFunnelDefault) renderWbFunnel(wbFunnelDefault);
 
   // Content attribution bar chart
   if (attrTypes.length && _pd_deals.length) {
@@ -5317,6 +5349,69 @@ function importTrackerCSV(input) {
     },
     error: err => toast('CSV parse error: ' + err.message)
   });
+}
+
+// Webinar conversion funnel: the full flow from emails sent through to reactions,
+// with each stage's absolute count and stage-to-stage conversion. The bars are
+// scaled to the largest stage, so when reg-page visits exceed email clicks the
+// funnel visibly WIDENS: that surplus arrived from non-email channels (social,
+// EDM). Built to extend later with UTM source splits.
+function webinarFunnelHTML(w) {
+  if (!w) return '<div class="no-data">No webinar selected.</div>';
+  const openRate = pct(w.emailsOpened, w.emailsSent);
+  const clickRate = pct(w.emailsClicked, w.emailsSent);
+  const regConv = pct(w.registered, w.regPageViews);
+  const attRate = pct(w.attended, w.registered);
+  const reactRate = pct(w.reactions, w.attended);
+  const stages = [
+    { key:'sent',    label:'Emails sent',      value: w.emailsSent,    note: '', grp:'email' },
+    { key:'opened',  label:'Emails opened',    value: w.emailsOpened,  note: openRate  != null ? fmtPct(openRate)  + ' open rate'  : '', grp:'email' },
+    { key:'clicked', label:'Emails clicked',   value: w.emailsClicked, note: clickRate != null ? fmtPct(clickRate) + ' click rate' : '', grp:'email' },
+    { key:'regview', label:'Reg. page visits', value: w.regPageViews,  note: '', grp:'event' },
+    { key:'reg',     label:'Registered',       value: w.registered,    note: regConv != null ? fmtPct(regConv) + ' of page visits' : '', grp:'event' },
+    { key:'att',     label:'Attended',         value: w.attended,      note: attRate != null ? fmtPct(attRate) + ' of registered' : '', grp:'event' },
+    { key:'react',   label:'Reactions',        value: w.reactions,     note: reactRate != null ? fmtPct(reactRate) + ' of attendees' : '', grp:'event' },
+  ].filter(s => s.value != null);
+  if (!stages.length) return '<div class="no-data">No funnel data for this webinar yet: add emails sent, reg-page visits, registered and attended via Edit.</div>';
+  const maxVal = Math.max(...stages.map(s => s.value));
+  const grpColor = { email: '#6b9bc4', event: '#2e8bc0' };
+  const otherChannel = (w.regPageViews != null && w.emailsClicked != null && w.regPageViews > w.emailsClicked) ? w.regPageViews - w.emailsClicked : null;
+  const otherPct = (otherChannel != null && w.regPageViews) ? otherChannel / w.regPageViews * 100 : null;
+  let lastGrp = null;
+  const bars = stages.map(s => {
+    const bridge = (lastGrp === 'email' && s.grp === 'event')
+      ? '<div class="fn-bridge">↓ reaches the event page: email clicks + other channels (social, EDM)</div>' : '';
+    lastGrp = s.grp;
+    const wpc = maxVal ? Math.max(2.5, s.value / maxVal * 100) : 0;
+    const highlight = s.key === 'regview' && otherChannel != null;
+    const col = highlight ? '#c25a00' : grpColor[s.grp];
+    return bridge + `<div class="fn-row">
+      <div class="fn-label">${s.label}</div>
+      <div class="fn-track"><div class="fn-bar" style="width:${wpc}%;background:${col}"><span class="fn-val">${fmtNum(s.value)}</span></div></div>
+      <div class="fn-note">${s.note}</div>
+    </div>`;
+  }).join('');
+  let callout = '';
+  if (otherChannel != null) {
+    callout = `<div class="callout info" style="margin-top:14px">
+      <div class="callout-label">Not just email: other channels are driving this webinar</div>
+      <div class="callout-text">Only <b>${fmtNum(w.emailsClicked)}</b> people clicked the webinar email, yet <b>${fmtNum(w.regPageViews)}</b> reached the registration page. That gap of about <b>${fmtNum(otherChannel)}</b> visits (${fmtPct(otherPct)} of page visits) came from beyond the email: social posts and EDM. Email alone isn't carrying registrations.</div>
+    </div>`;
+  } else if (w.emailsClicked == null && w.regPageViews != null) {
+    callout = `<div style="font-size:11px;color:var(--tl);margin-top:10px">Add <b>promo emails clicked</b> via Edit to compare email clicks against reg-page visits and reveal how much traffic comes from other channels.</div>`;
+  }
+  return `<div class="fn-wrap">${bars}</div>${callout}
+    <div style="font-size:10.5px;color:var(--tl);margin-top:10px">Bars scaled to the largest stage. When "Reg. page visits" runs longer than "Emails clicked", the extra arrived from channels other than the email. UTM source splits (email / EDM / socials) can slot in here later.</div>`;
+}
+
+// Inject the funnel for a webinar id into its container (called on select change).
+function renderWbFunnel(id) {
+  _wbFunnelSel = id;
+  const body = document.getElementById('wb-funnel-body');
+  if (!body) return;
+  const w = load('webinars').find(x => x._id === id);
+  body.innerHTML = webinarFunnelHTML(w);
+  injectFlags(body);
 }
 
 // Planned (proposed/confirmed) future events for the posts-and-events calendar.
