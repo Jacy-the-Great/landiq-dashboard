@@ -231,16 +231,15 @@ body:not(.review-mode) .metric-hidden{display:none !important}
 body.review-mode .metric-hidden{opacity:.4;outline:1px dashed #c4c4c4;outline-offset:3px}
 /* Marketing section headings + posts/events calendar */
 .mk-head{font-size:15px;font-weight:700;color:var(--acc);margin:26px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--acc2);letter-spacing:.02em}
-.cal-months{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
-.cal-month-title{font-size:12px;font-weight:600;color:var(--tx);margin-bottom:6px}
-.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
-.cal-dow{font-size:9.5px;color:var(--tl);text-align:center;padding:2px 0;font-weight:600}
-.cal-day{min-height:34px;border:1px solid var(--bd);border-radius:4px;padding:2px 3px;font-size:10px;background:var(--wh)}
-.cal-day.empty{border:none;background:transparent}
-.cal-day.has-ev{background:var(--acc2)}
-.cal-num{color:var(--tl)}
-.cal-dots{display:flex;flex-wrap:wrap;gap:2px;margin-top:2px}
-.cal-dot{width:7px;height:7px;border-radius:50%;display:inline-block;box-sizing:border-box}
+.gantt{border-collapse:collapse;min-width:640px;width:100%}
+.gantt th,.gantt td{border:1px solid var(--bd);padding:3px 4px;text-align:center}
+.gantt .gc-type{text-align:left;font-size:11.5px;font-weight:600;color:var(--tx);white-space:nowrap;padding:4px 10px}
+.gantt .gc-month{font-size:10.5px;font-weight:700;color:var(--acc);background:var(--acc2);letter-spacing:.4px;white-space:nowrap}
+.gantt .gc-week{font-size:9.5px;color:var(--tl);min-width:34px;font-weight:500}
+.gantt .gc-cell{height:26px;min-width:34px}
+.gantt .gc-now{background:var(--acc2)}
+.gantt .gc-mstart{border-left:2px solid var(--acc)}
+.cal-dot{width:7px;height:7px;border-radius:50%;display:inline-block;box-sizing:border-box;margin:0 1px}
 .cal-dot.proposed{background:transparent !important;border:1.5px dashed currentColor}
 .cal-dot.confirmed{outline:1.5px solid var(--tx);outline-offset:1px}
 .cal-more{font-size:8px;color:var(--tl)}
@@ -906,7 +905,7 @@ const METRIC_DOCS = [
   ['linkedin impressions: weekly total', 'Manual · Weekly Tracker', 'SUM of logged LinkedIn post impressions per tracked week (combined total: no individual attribution).'],
   ['webinar email promotion', 'Manual · Weekly Tracker', 'Weekly promo-email sends vs the registrations they drove, straight from Lucy\'s tracker. Rough promotion volume only: the full, cleaner webinar funnel (open rate, click rate, reg-page, attendance, watch time) lives in the webinar performance table above.'],
   ['edm performance', 'Manual · Content log + Weekly Tracker', 'Email newsletter entries and their open/click rates as logged.'],
-  ['posts and events calendar', 'Manual · Content log + Webinar log + planned events', 'Past dots are logged posts/campaigns/events on the day they were published or held. Future dots are manually locked-in planned events: solid ring = confirmed, hollow dashed = proposed. A planned event whose date passes drops off automatically and is flagged for cleanup in review mode.'],
+  ['posts and events timeline', 'Manual · Content log + Webinar log + planned events', 'Gantt-style timeline: week columns under month headers, one row per content type, dots placed in the week each item falls in. Past dots are logged posts/campaigns/events; future dots are manually locked-in planned events (solid ring = confirmed, hollow dashed = proposed). A planned event whose date passes drops off automatically and is flagged for cleanup in review mode.'],
   ['people trained per week', 'Manual training log + Pipedrive', 'Stacked weekly count: session attendees (non Self-serve) plus people granted access that week in Pipedrive, and Self-serve session attendees as the self-trained share.'],
   ['user proficiency self-score', 'Manual · proficiency audits', 'Average self-rated proficiency (1 to 5) per audit, e.g. calling a sample of users. Manual until the in-app pop-up ships.'],
   ['edm audience growth', 'Manual · Content log (EDM campaigns)', 'Recipient count of each logged email campaign over time: shows whether the mailing audience is growing.'],
@@ -4348,32 +4347,55 @@ function renderMarketing(el) {
   const plannedUpcoming = planned.filter(p => p.date >= todayIso);
   const plannedStale = planned.filter(p => p.date < todayIso);
   plannedUpcoming.forEach(p => addCalEv(p.date, p.type || 'Other', p.title, p.status || 'proposed'));
-  const calMonths = [];
-  { const now = new Date();
-    for (let i = 2; i >= -1; i--) calMonths.push(new Date(now.getFullYear(), now.getMonth() - i, 1)); }
-  const calHTML = calMonths.map(m0 => {
-    const y = m0.getFullYear(), mo = m0.getMonth();
-    const daysIn = new Date(y, mo + 1, 0).getDate();
-    const firstDow = (new Date(y, mo, 1).getDay() + 6) % 7;   // Monday-first grid
-    let cells = '';
-    for (let i = 0; i < firstDow; i++) cells += '<div class="cal-day empty"></div>';
-    for (let d = 1; d <= daysIn; d++) {
-      const key = y + '-' + String(mo + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
-      const evs = calEvents[key] || [];
-      const tip = evs.map(e => e.type + (e.status ? ' (' + e.status + ')' : '') + ': ' + (e.title || '')).join(' | ').replace(/"/g, '&quot;');
-      const dots = evs.slice(0, 4).map(e => {
-        const col = typeColors[e.type] || '#888';
-        if (e.status === 'proposed')  return `<span class="cal-dot proposed" style="border-color:${col}"></span>`;
-        if (e.status === 'confirmed') return `<span class="cal-dot confirmed" style="background:${col}"></span>`;
-        return `<span class="cal-dot" style="background:${col}"></span>`;
-      }).join('');
-      cells += `<div class="cal-day${evs.length ? ' has-ev' : ''}"${evs.length ? ` title="${tip}"` : ''}><span class="cal-num">${d}</span><span class="cal-dots">${dots}${evs.length > 4 ? '<span class="cal-more">+' + (evs.length - 4) + '</span>' : ''}</span></div>`;
-    }
-    const monthName = m0.toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
-    return `<div class="cal-month"><div class="cal-month-title">${monthName}</div><div class="cal-grid"><div class="cal-dow">M</div><div class="cal-dow">T</div><div class="cal-dow">W</div><div class="cal-dow">T</div><div class="cal-dow">F</div><div class="cal-dow">S</div><div class="cal-dow">S</div>${cells}</div></div>`;
-  }).join('');
-  const calLegend = [...types, 'Other'].filter(t => Object.values(calEvents).some(evs => evs.some(e => e.type === t)))
-    .map(t => `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--tl)"><span class="cal-dot" style="background:${typeColors[t] || '#888'}"></span>${t}</span>`).join(' ');
+  // Gantt-style timeline: week columns with month headers spanning above, one row
+  // per content type. Range: previous 2 months through the end of next month.
+  const partsDate = s => { const [yy, mm, dd] = s.split('-').map(Number); return new Date(yy, mm - 1, dd); };
+  const ymdG = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const wkStartG = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
+  const gWeeks = [];
+  { const gEnd = new Date(_td.getFullYear(), _td.getMonth() + 2, 0);   // end of next month
+    for (let w = wkStartG(new Date(_td.getFullYear(), _td.getMonth() - 2, 1)); w <= gEnd; w.setDate(w.getDate() + 7)) gWeeks.push(ymdG(w)); }
+  const nowWk = ymdG(wkStartG(_td));
+  // Month header spans: each week belongs to the month its Monday falls in
+  const gMonths = [];
+  gWeeks.forEach(w => {
+    const lbl = partsDate(w).toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
+    if (gMonths.length && gMonths[gMonths.length - 1].lbl === lbl) gMonths[gMonths.length - 1].span++;
+    else gMonths.push({ lbl, span: 1 });
+  });
+  const gMonthStarts = new Set();
+  { let acc = 0; gMonths.forEach(m => { gMonthStarts.add(acc); acc += m.span; }); }
+  // Events grouped: type → week-start → list
+  const gRows = {};
+  Object.entries(calEvents).forEach(([d, evs]) => {
+    const w = ymdG(wkStartG(partsDate(d)));
+    evs.forEach(e => {
+      const t = e.type || 'Other';
+      ((gRows[t] = gRows[t] || {})[w] = gRows[t][w] || []).push({ ...e, date: d });
+    });
+  });
+  const gTypes = [...types, 'Other'].filter(t => gRows[t]);
+  const gDot = e => {
+    const col = typeColors[e.type] || '#888';
+    if (e.status === 'proposed')  return `<span class="cal-dot proposed" style="border-color:${col}"></span>`;
+    if (e.status === 'confirmed') return `<span class="cal-dot confirmed" style="background:${col}"></span>`;
+    return `<span class="cal-dot" style="background:${col}"></span>`;
+  };
+  const calHTML = gTypes.length ? `<table class="gantt">
+    <thead>
+      <tr><th class="gc-type"></th>${gMonths.map(m => `<th class="gc-month" colspan="${m.span}">${m.lbl}</th>`).join('')}</tr>
+      <tr><th class="gc-type" style="font-weight:400;color:var(--tl);font-size:10px">week starting</th>${gWeeks.map((w, i) =>
+        `<th class="gc-week${w === nowWk ? ' gc-now' : ''}${gMonthStarts.has(i) ? ' gc-mstart' : ''}">${partsDate(w).getDate()}${w === nowWk ? '<div style="font-size:8px;color:var(--acc);font-weight:700">now</div>' : ''}</th>`).join('')}</tr>
+    </thead>
+    <tbody>${gTypes.map(t => `<tr>
+      <td class="gc-type">${t}</td>
+      ${gWeeks.map((w, i) => {
+        const evs = (gRows[t] && gRows[t][w]) || [];
+        const tip = evs.map(e => fmtDate(e.date) + (e.status ? ' (' + e.status + ')' : '') + ': ' + (e.title || e.type)).join(' | ').replace(/"/g, '&quot;');
+        return `<td class="gc-cell${w === nowWk ? ' gc-now' : ''}${gMonthStarts.has(i) ? ' gc-mstart' : ''}"${evs.length ? ` title="${tip}"` : ''}>${evs.slice(0, 3).map(gDot).join('')}${evs.length > 3 ? '<span class="cal-more">+' + (evs.length - 3) + '</span>' : ''}</td>`;
+      }).join('')}
+    </tr>`).join('')}</tbody>
+  </table>` : '';
 
   // ── CONTENT → PIPELINE ATTRIBUTION ────────────────────────────────────────
   // For each content piece, find deals created within 30 days after its publish date
@@ -4644,10 +4666,10 @@ function renderMarketing(el) {
     </div>
 
     <div class="box">
-      <div class="box-title">Posts and events calendar <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:6px">past = published/held · future = locked-in planned events</span></div>
-      ${Object.keys(calEvents).length ? `<div class="cal-months">${calHTML}</div>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;align-items:center">${calLegend}
-          <span style="font-size:11px;color:var(--tl);margin-left:auto;display:inline-flex;gap:12px">
+      <div class="box-title">Posts and events timeline <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:6px">weeks along the top · past = published/held · future = locked-in planned events</span></div>
+      ${Object.keys(calEvents).length ? `<div class="tbl-scroll" style="margin-top:4px">${calHTML}</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;align-items:center">
+          <span style="font-size:11px;color:var(--tl);display:inline-flex;gap:12px">
             <span style="display:inline-flex;align-items:center;gap:4px"><span class="cal-dot" style="background:#888"></span>held/published</span>
             <span style="display:inline-flex;align-items:center;gap:4px"><span class="cal-dot confirmed" style="background:#888"></span>confirmed</span>
             <span style="display:inline-flex;align-items:center;gap:4px"><span class="cal-dot proposed" style="border-color:#888"></span>proposed</span>
