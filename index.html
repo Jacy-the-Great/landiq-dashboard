@@ -243,6 +243,10 @@ body.review-mode .metric-hidden{opacity:.4;outline:1px dashed #c4c4c4;outline-of
 .cal-dot.proposed{background:transparent !important;border:1.5px dashed currentColor}
 .cal-dot.confirmed{outline:1.5px solid var(--tx);outline-offset:1px}
 .cal-more{font-size:8px;color:var(--tl)}
+/* KPI band: the headline metrics, pinned to the top of a tab so they read as "the KPIs" */
+.kpi-band{background:var(--acc2);border:1px solid #cfe3f0;border-radius:10px;padding:12px 14px 2px;margin-bottom:22px}
+.kpi-band-head{font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--acc);margin:0 0 10px;display:flex;align-items:center;gap:7px}
+.kpi-band-head::before{content:'';width:12px;height:12px;border-radius:3px;background:var(--acc);display:inline-block;flex:none}
 /* Review-only blocks: hidden for the everyday/exec view, revealed in review mode */
 .review-only{display:none}
 body.review-mode .review-only{display:block}
@@ -1245,6 +1249,15 @@ function cardHTML(label, value, prev, type, sub, info) {
 
 function cardsHTML(items) {
   return `<div class="cards">${items.map(i => cardHTML(...i)).join('')}</div>`;
+}
+
+// KPI band: wraps the headline KPI cards in a labelled, tinted band pinned to the
+// top of a tab so they're unmistakably "the KPIs".
+function kpiBand(cardsHtml, note) {
+  return `<div class="kpi-band">
+    <div class="kpi-band-head">Key Performance Indicators${note ? `<span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--tl);font-size:11px;margin-left:2px">· ${note}</span>` : ''}</div>
+    <div class="cards">${cardsHtml}</div>
+  </div>`;
 }
 
 // KPI card: a highlighted card for metrics with an agreed goal. Same treatment as
@@ -2783,17 +2796,21 @@ function renderActivity(el) {
 
     ${statusHTML}
 
-    ${cardsHTML([
-      ['Active users: SDK (weekly)', wauVal, null, null, phLive ? 'live · PostHog (Giraffe)' : (gLast ? 'week of '+fmtDate(gLast.week) : 'no data yet'),
+    ${kpiBand(
+      kpiCardHTML('Active users: SDK (weekly)', wauVal, null, null, null, phLive ? 'live · PostHog (Giraffe)' : (gLast ? 'week of '+fmtDate(gLast.week) : 'no data yet'),
         phLive
           ? '<span class="src-tag">Live · PostHog</span><br>Users who triggered at least one event in Land iQ (Giraffe/SDK) in the most recent 7-day window. Pulled from the <b>ph_weekly_stats()</b> materialized view, refreshed nightly at 3am.<br><div class="calc-row">ph_weekly_stats() → active_users, latest week</div>'
-          : '<span class="src-tag">Manual · Activity log</span><br>Manually entered <b>active users</b> from the most recent Giraffe weekly record. Run the SQL migration to enable live PostHog data.'],
-      ['Weekly SDK events', phLive ? (phWLast?.total_events ?? null) : null, null, null, phLive ? 'live · PostHog (Giraffe)' : 'run SQL migration to enable',
-        '<span class="src-tag">Live · PostHog</span><br>Total events triggered in Land iQ (Giraffe/SDK) in the most recent 7-day window.<br><div class="calc-row">ph_weekly_stats() → total_events, latest week</div>'],
-      ['Active users: Labs (weekly)', lLast?.active_users ?? null, null, null, lLast ? 'week of ' + fmtDate(lLast.week) + ' · manual' : 'no Labs data logged yet',
-        '<span class="src-tag">Manual · Labs weekly snapshot</span><br>Active users from the most recent manually entered Labs weekly record (Labs is not in PostHog yet). Add snapshots in the Giraffe sub-tab below.'],
-      ['Weekly Labs sessions', lLast?.sessions ?? null, null, null, lLast ? 'week of ' + fmtDate(lLast.week) + ' · manual' : 'no Labs data logged yet',
-        '<span class="src-tag">Manual · Labs weekly snapshot</span><br>Session count from the most recent manually entered Labs weekly record: the closest available stand-in for weekly Labs events until Labs joins PostHog.'],
+          : '<span class="src-tag">Manual · Activity log</span><br>Manually entered <b>active users</b> from the most recent Giraffe weekly record. Run the SQL migration to enable live PostHog data.') +
+      kpiCardHTML('Weekly SDK events', phLive ? (phWLast?.total_events ?? null) : null, null, null, null, phLive ? 'live · PostHog (Giraffe)' : 'run SQL migration to enable',
+        '<span class="src-tag">Live · PostHog</span><br>Total events triggered in Land iQ (Giraffe/SDK) in the most recent 7-day window.<br><div class="calc-row">ph_weekly_stats() → total_events, latest week</div>') +
+      kpiCardHTML('Active users: Labs (weekly)', lLast?.active_users ?? null, null, null, null, lLast ? 'week of ' + fmtDate(lLast.week) + ' · manual' : 'no Labs data logged yet',
+        '<span class="src-tag">Manual · Labs weekly snapshot</span><br>Active users from the most recent manually entered Labs weekly record (Labs is not in PostHog yet). Add snapshots in the Giraffe sub-tab below.') +
+      kpiCardHTML('Weekly Labs sessions', lLast?.sessions ?? null, null, null, null, lLast ? 'week of ' + fmtDate(lLast.week) + ' · manual' : 'no Labs data logged yet',
+        '<span class="src-tag">Manual · Labs weekly snapshot</span><br>Session count from the most recent manually entered Labs weekly record: the closest available stand-in for weekly Labs events until Labs joins PostHog.'),
+      'User engagement'
+    )}
+
+    ${cardsHTML([
       ['Total users (all time)', totalUsers, null, null, phLive ? 'all time · PostHog' : 'run SQL migration to enable',
         phLive
           ? '<span class="src-tag">Live · PostHog</span><br>Distinct users who have ever triggered an event in Land iQ, from the <b>ph_summary()</b> materialized view.<br><div class="calc-row">ph_summary() → total_users</div>'
@@ -3741,6 +3758,18 @@ function renderTraining(el) {
       <a class="src-link" href="https://app.pipedrive.com" target="_blank">↗ Pipedrive</a>
     </div>
 
+    ${kpiBand(
+      kpiCardHTML('Trained this week', (pdTrained.length || data.length) ? trainedThisWeek : null, null, null, null, 'week of ' + fmtDate(thisWk),
+        '<span class="src-tag">Manual training log + Pipedrive</span><br>Session attendees logged this week (excluding Self-serve) plus people whose access was granted this week in Pipedrive. Zero means no sessions or new access this week. See the weekly chart below.') +
+      kpiCardHTML('Self-trained this week', data.length ? selfThisWeek : null, null, null, null, 'manual: "Self-serve" sessions',
+        '<span class="src-tag">Manual training log</span><br>Attendees of sessions logged with type <b>Self-serve</b> this week. Manual entry until Labs self-service training tracking is live.') +
+      kpiCardHTML('User base trained (last year)', pctTrainedYr, '%', 80, '80%', 'trained and competent',
+        '<span class="src-tag">Pipedrive + training log ÷ PostHog user base</span><br>People given access or trained in the last 365 days, divided by the total user base (PostHog all-time users' + (userBase ? ': ' + fmtNum(userBase) : '') + '). <b>Approximate</b>: attendee counts can include repeat attendees. The goal is 80%+ of users onboarded, trained and competent.<br><div class="calc-row">(access granted + session attendees, last 365 days) ÷ total users × 100</div>') +
+      kpiCardHTML('Avg proficiency self-score', profLatest ? profLatest.score : null, null, null, null, profLatest ? ('of 5 · audited ' + fmtDate(profLatest.date)) : 'manual audits: log below',
+        '<span class="src-tag">Manual · proficiency audits</span><br>Average self-rated proficiency (1 to 5) from the most recent audit, where users are asked to rate their own Land iQ proficiency. Manual (e.g. phone audits) until the in-app pop-up ships.'),
+      'Training'
+    )}
+
     ${cardsHTML([
       ['New access granted (this month)', trainedThisMonth || null, null, null, null,
         '<span class="src-tag">Pipedrive · People</span><br>Count of people with <b>Date Access Granted</b> in the current calendar month. All licence types included (Paid, Trial, Centrally Funded).<br><div class="calc-row">COUNT where Date Access Granted month = current month</div>Falls back to manually entered training session attendees if Pipedrive is not loaded.'],
@@ -3752,18 +3781,7 @@ function renderTraining(el) {
         '<span class="src-tag">Pipedrive · General Onboarding Pipeline</span><br>Deals at the <b>2 Month Growth Period</b> stage. These customers have completed initial training and are in the post-training follow-up phase.<br><div class="calc-row">Stage = "2 Month Growth Period"</div>'],
       ['Active trials', trialActive + trialMid || null, null, null, 'Pipedrive: Trial Pipeline',
         '<span class="src-tag">Pipedrive · Trial Pipeline</span><br>Deals at <b>Trial in Progress</b> (' + trialActive + ') plus <b>Trial Mid Point</b> (' + trialMid + ') stages. Both stages represent active, ongoing trials.<br><div class="calc-row">Stage = "Trial in Progress" OR "Trial Mid Point"</div>'],
-      ['Trained this week', (pdTrained.length || data.length) ? trainedThisWeek : null, null, null, 'week of ' + fmtDate(thisWk),
-        '<span class="src-tag">Manual training log + Pipedrive</span><br>Session attendees logged this week (excluding Self-serve) plus people whose access was granted this week in Pipedrive. Zero means no sessions or new access this week. See the weekly chart below.'],
-      ['Self-trained this week', data.length ? selfThisWeek : null, null, null, 'manual: "Self-serve" sessions',
-        '<span class="src-tag">Manual training log</span><br>Attendees of sessions logged with type <b>Self-serve</b> this week. Manual entry until Labs self-service training tracking is live.'],
     ])}
-
-    <div class="cards">
-      ${kpiCardHTML('User base trained (last year)', pctTrainedYr, '%', 80, '80%', 'trained and competent',
-        '<span class="src-tag">Pipedrive + training log ÷ PostHog user base</span><br>People given access or trained in the last 365 days, divided by the total user base (PostHog all-time users' + (userBase ? ': ' + fmtNum(userBase) : '') + '). <b>Approximate</b>: attendee counts can include repeat attendees. The goal is 80%+ of users onboarded, trained and competent.<br><div class="calc-row">(access granted + session attendees, last 365 days) ÷ total users × 100</div>')}
-      ${kpiCardHTML('Avg proficiency self-score', profLatest ? profLatest.score : null, null, null, null, profLatest ? ('of 5 · audited ' + fmtDate(profLatest.date)) : 'manual audits: log below',
-        '<span class="src-tag">Manual · proficiency audits</span><br>Average self-rated proficiency (1 to 5) from the most recent audit, where users are asked to rate their own Land iQ proficiency. Manual (e.g. phone audits) until the in-app pop-up ships.')}
-    </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
       <div class="box">
@@ -4465,6 +4483,20 @@ function renderMarketing(el) {
 
     
 
+    ${kpiBand(
+      kpiCardHTML('Posts per week', latestW?.postsWeek ?? null, null, null, null, latestW ? 'week of ' + fmtDate(latestW.week) : null,
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total posts published this week, from the "Total Posts per Week" row of Lucy\'s tracker (re-import the CSV to fill history).') +
+      kpiCardHTML('Post impressions (latest week)', liImpLatest || null, null, 2000, '2,000/WK', latestW ? 'week of ' + fmtDate(latestW.week) : null,
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total LinkedIn post impressions from the most recent Weekly Tracker row. Weekly target is 2,000: the bar shows progress toward it, and the chart below tracks it week by week.<br><div class="calc-row">Sum of post impressions (latest week)</div>') +
+      kpiCardHTML('EDM open rate (latest week)', latestW?.edmOpen ?? null, '%', null, null, latestW ? 'week of ' + fmtDate(latestW.week) : null,
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Email open rate from the latest Weekly Tracker row. Entered from the Comms email platform results.') +
+      kpiCardHTML('EDM clicks (latest campaign)', edmLast?.edmclicks ?? null, null, null, null, edmLast ? (edmLast.title || fmtDate(edmLast.date)) : 'log campaigns under All content (review mode)',
+        '<span class="src-tag">Manual · Content log (EDM)</span><br>Link clicks recorded on the most recent email campaign in the content log. Add campaigns via "All content" (review mode) with type EDM, using the Comms email platform results.') +
+      kpiCardHTML('EDM audience (latest campaign)', edmLast?.recipients ?? null, null, null, null, edmRecGrowth != null ? ((edmRecGrowth >= 0 ? '+' : '') + fmtNum(edmRecGrowth) + ' vs previous campaign') : (edmLast ? (edmLast.title || fmtDate(edmLast.date)) : 'log campaigns under All content (review mode)'),
+        '<span class="src-tag">Manual · Content log (EDM)</span><br>Recipient count of the most recent email campaign, with the change vs the campaign before it: a growing number means the mailing audience is growing.'),
+      'Marketing'
+    )}
+
     <div class="mk-head">Webinar</div>
 
     ${cardsHTML([
@@ -4564,15 +4596,6 @@ function renderMarketing(el) {
 
     <div class="mk-head">EDM</div>
 
-    <div class="cards">
-      ${kpiCardHTML('EDM open rate (latest week)', latestW?.edmOpen ?? null, '%', null, null, latestW ? 'week of ' + fmtDate(latestW.week) : null,
-        '<span class="src-tag">Manual · Weekly Tracker</span><br>Email open rate from the latest Weekly Tracker row. Entered from the Comms email platform results.')}
-      ${kpiCardHTML('EDM clicks (latest campaign)', edmLast?.edmclicks ?? null, null, null, null, edmLast ? (edmLast.title || fmtDate(edmLast.date)) : 'log campaigns under All content (review mode)',
-        '<span class="src-tag">Manual · Content log (EDM)</span><br>Link clicks recorded on the most recent email campaign in the content log. Add campaigns via "All content" (review mode) with type EDM, using the Comms email platform results.')}
-      ${kpiCardHTML('EDM audience (latest campaign)', edmLast?.recipients ?? null, null, null, null, edmRecGrowth != null ? ((edmRecGrowth >= 0 ? '+' : '') + fmtNum(edmRecGrowth) + ' vs previous campaign') : (edmLast ? (edmLast.title || fmtDate(edmLast.date)) : 'log campaigns under All content (review mode)'),
-        '<span class="src-tag">Manual · Content log (EDM)</span><br>Recipient count of the most recent email campaign, with the change vs the campaign before it: a growing number means the mailing audience is growing.')}
-    </div>
-
     <!-- ── EDM ── -->
     <div class="box">
       <div class="box-title">EDM email performance</div>
@@ -4642,13 +4665,6 @@ function renderMarketing(el) {
     </div>
 
     <div class="mk-head">Posts and Events</div>
-
-    <div class="cards">
-      ${kpiCardHTML('Posts per week', latestW?.postsWeek ?? null, null, null, null, latestW ? 'week of ' + fmtDate(latestW.week) : null,
-        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total posts published this week, from the "Total Posts per Week" row of Lucy\'s tracker (re-import the CSV to fill history).')}
-      ${kpiCardHTML('Post impressions (latest week)', liImpLatest || null, null, 2000, '2,000/WK', latestW ? 'week of ' + fmtDate(latestW.week) : null,
-        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total LinkedIn post impressions from the most recent Weekly Tracker row. Weekly target is 2,000: the bar shows progress toward it, and the chart below tracks it week by week.<br><div class="calc-row">Sum of post impressions (latest week)</div>')}
-    </div>
 
     <!-- ── LINKEDIN ── -->
     <div class="box">
