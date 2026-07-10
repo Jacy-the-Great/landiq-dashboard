@@ -881,6 +881,9 @@ const METRIC_DOCS = [
   ['won deals by owner', 'Pipedrive · Deals', 'Won deals grouped by <b>Deal Owner</b>.'],
   ['pipeline stage snapshot', 'Pipedrive · Deals', 'Every deal\'s CURRENT stage, split by status (open / won / lost). Snapshot: not date-filtered.'],
   ['sales conversion funnel :', 'Pipedrive · Deals', 'Deals created in the selected period that <b>reached each stage or beyond</b> (won deals count as having reached every stage). Stage % = this stage ÷ previous stage.'],
+  ['sales funnel conversion by month', 'Pipedrive · Deals', 'Each cell: of the deals <b>created that month</b> that reached the earlier stage, the share that also reached the next stage. Reads month-on-month change in each stage-to-stage conversion. Recent months understate later stages (deals still in flight); low-volume months read noisily.'],
+  ['sales performance over time', 'Pipedrive · Deals + People', 'Deals won (by Won time) and licences won (paid people by Date Access Granted) per week / month / quarter, plus average won deal value per period, each against its target. Deals & licences target 3/week · 12/month · 36/quarter; average deal value target $14,000.'],
+  ['sales kpis', 'Pipedrive · Deals + People', 'Cadence scorecard: deals won and paid licences activated this week and month vs targets (3/week, 12/month), and average won deal value vs the $14,000 target, each shown against the running average and the previous period.'],
   ['stage conversion rates', 'Pipedrive · Deals', 'Same reached-stage funnel as above, shown as a table: each stage\'s count and its % of the previous stage. "Won (total)" % = Won ÷ Contact Made.'],
   ['sales velocity', 'Pipedrive · Deals', 'Days from <b>Deal created</b> to <b>Won time</b> per won deal: bucket distribution plus the share won within 30 days, by month.'],
   ['all won deals', 'Pipedrive · Deals', 'Raw table of every won deal in the selected range: title, org, owner, source, value, won date, cycle days. No calculations beyond cycle = won − created.'],
@@ -5685,6 +5688,7 @@ function pdRangeMonths(range) {
 }
 
 function setPdRange(r) { activeSub.pd_range = r; renderPipedrive(); }
+function setPdKpiGran(g) { activeSub.pd_kpi_gran = g; renderPipedrive(); }
 
 // List of selectable calendar months (newest first), from the earliest deal/person date to now.
 function pdMonthOptions() {
@@ -7254,8 +7258,108 @@ function renderPdSales(sc) {
     try { return JSON.parse(localStorage.getItem('liq_optimax')||'{}').avg_cycle_target ?? 45; } catch { return 45; }
   })();
 
+  // ── SALES KPIs (cadence: deals & licences 3/wk · 12/mo · 36/qtr; avg deal value $14k) ──
+  const KPI_TGT = { won:{week:3,month:12,quarter:36}, lic:{week:3,month:12,quarter:36}, avgVal:14000 };
+  const FUNNEL_SHORT = ['Contact','Meeting','Negotiation','Order Form','Signed OFR','Invoice','Payment'];
+  const kpiWonDeals = salesDeals.filter(d => d['Deal - Status'] === 'Won' && pdValidDate(pdParseDate(d['Deal - Won time'])));
+  // Licences won = paid licence activations: paid people by Date Access Granted (org-wide, not pipeline-scoped)
+  const kpiPaid = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription' && pdValidDate(pdParseDate(p['Person - Date Access Granted'])));
+  const kpiWkStart = dd => { const x = new Date(dd); x.setHours(0,0,0,0); x.setDate(x.getDate() - ((x.getDay()+6)%7)); return x; };
+  function kpiPeriods(gran, n) {
+    const now = new Date(); now.setHours(0,0,0,0);
+    const out = [];
+    for (let i = n-1; i >= 0; i--) {
+      let start, end, label;
+      if (gran === 'week') {
+        start = kpiWkStart(now); start.setDate(start.getDate() - i*7);
+        end = new Date(start); end.setDate(end.getDate()+6); end.setHours(23,59,59,999);
+        label = start.getDate() + ' ' + start.toLocaleDateString('en-AU',{month:'short'});
+      } else if (gran === 'quarter') {
+        start = new Date(now.getFullYear(), Math.floor(now.getMonth()/3)*3 - i*3, 1);
+        end = new Date(start.getFullYear(), start.getMonth()+3, 0, 23,59,59,999);
+        label = 'Q' + (Math.floor(start.getMonth()/3)+1) + " '" + String(start.getFullYear()).slice(2);
+      } else {
+        start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        end = new Date(start.getFullYear(), start.getMonth()+1, 0, 23,59,59,999);
+        label = start.toLocaleDateString('en-AU',{month:'short', year:'2-digit'});
+      }
+      out.push({ start, end, label });
+    }
+    return out;
+  }
+  function kpiSeries(gran, n) {
+    return kpiPeriods(gran, n).map(p => {
+      const won = kpiWonDeals.filter(d => { const t = pdParseDate(d['Deal - Won time']); return t >= p.start && t <= p.end; });
+      const lic = kpiPaid.filter(pp => { const t = pdParseDate(pp['Person - Date Access Granted']); return t >= p.start && t <= p.end; });
+      const wonVal = won.reduce((s,d)=>s+(parseFloat(d['Deal - Value'])||0),0);
+      return { ...p, won: won.length, lic: lic.length, avgVal: won.length ? wonVal/won.length : null };
+    });
+  }
+  const kMonths = kpiSeries('month', 13), kWeeks = kpiSeries('week', 13);   // 12 completed + current
+  const kCur = a => a[a.length-1] || {}, kPrev = a => a[a.length-2] || {};
+  // Average over completed periods from the first active one onward (ignores the
+  // empty pre-launch runway so the "average" reflects typical performance).
+  const kAvg = (a, key) => {
+    const v = a.slice(0, -1).map(p => p[key]);
+    const start = v.findIndex(x => x != null && x > 0);
+    if (start < 0) return null;
+    const seg = v.slice(start).filter(x => x != null);
+    return seg.length ? seg.reduce((x, y) => x + y, 0) / seg.length : null;
+  };
+  const avgDealAll = kpiWonDeals.length ? kpiWonDeals.reduce((s,d)=>s+(parseFloat(d['Deal - Value'])||0),0)/kpiWonDeals.length : null;
+  const arw = (c,p) => (p==null||c==null)?'':(c>p?'▲ ':c<p?'▼ ':'· ');
+  const r1 = x => x==null ? ':' : Math.round(x*10)/10;
+  // Chart series honouring the granularity toggle
+  const kpiGran = activeSub.pd_kpi_gran || 'month';
+  const kpiN = kpiGran==='week' ? 12 : kpiGran==='quarter' ? 8 : 12;
+  const kSeries = kpiSeries(kpiGran, kpiN);
+  const kTgtWon = KPI_TGT.won[kpiGran], kTgtLic = KPI_TGT.lic[kpiGran];
+  const gLabel = { week:'week', month:'month', quarter:'quarter' }[kpiGran];
+
+  const salesKpiBand = kpiBand(
+    kpiCardHTML('Deals won (this month)', kCur(kMonths).won ?? null, null, KPI_TGT.won.month, '12/MO',
+      `avg ${r1(kAvg(kMonths,'won'))}/mo · ${arw(kCur(kMonths).won, kPrev(kMonths).won)}last month ${kPrev(kMonths).won ?? ':'}`,
+      '<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Deals with <b>Status = Won</b> and Won time in the current calendar month, vs the target of 12/month. Sub shows the trailing average and last month.') +
+    kpiCardHTML('Deals won (this week)', kCur(kWeeks).won ?? null, null, KPI_TGT.won.week, '3/WK',
+      `avg ${r1(kAvg(kWeeks,'won'))}/wk · ${arw(kCur(kWeeks).won, kPrev(kWeeks).won)}last week ${kPrev(kWeeks).won ?? ':'}`,
+      '<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Won deals with Won time in the current week (Mon–Sun), vs the target of 3/week.') +
+    kpiCardHTML('Licences won (this month)', kCur(kMonths).lic ?? null, null, KPI_TGT.lic.month, '12/MO',
+      `avg ${r1(kAvg(kMonths,'lic'))}/mo · ${arw(kCur(kMonths).lic, kPrev(kMonths).lic)}last month ${kPrev(kMonths).lic ?? ':'}`,
+      '<span class="src-tag">Pipedrive · People</span><br>Paid licence activations: people with <b>Customer Type = Paid Subscription</b> and <b>Date Access Granted</b> in the current month, vs the target of 12/month.') +
+    kpiCardHTML('Licences won (this week)', kCur(kWeeks).lic ?? null, null, KPI_TGT.lic.week, '3/WK',
+      `avg ${r1(kAvg(kWeeks,'lic'))}/wk · ${arw(kCur(kWeeks).lic, kPrev(kWeeks).lic)}last week ${kPrev(kWeeks).lic ?? ':'}`,
+      '<span class="src-tag">Pipedrive · People</span><br>Paid licence activations (paid people by Date Access Granted) in the current week, vs the target of 3/week.') +
+    kpiCardHTML('Avg deal value (this month)', kCur(kMonths).avgVal ?? null, '$', KPI_TGT.avgVal, '$14K',
+      `all-time avg ${avgDealAll!=null?fmtCur(avgDealAll):':'} · ${arw(kCur(kMonths).avgVal, kPrev(kMonths).avgVal)}last month ${kPrev(kMonths).avgVal!=null?fmtCur(kPrev(kMonths).avgVal):':'}`,
+      '<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Average <b>Deal Value</b> across deals won this month, vs the $14,000 target. Sub shows the all-time average won deal value.') +
+    kpiCardHTML('Avg deal value (this week)', kCur(kWeeks).avgVal ?? null, '$', KPI_TGT.avgVal, '$14K',
+      `all-time avg ${avgDealAll!=null?fmtCur(avgDealAll):':'} · ${arw(kCur(kWeeks).avgVal, kPrev(kWeeks).avgVal)}last week ${kPrev(kWeeks).avgVal!=null?fmtCur(kPrev(kWeeks).avgVal):':'}`,
+      '<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Average <b>Deal Value</b> across deals won this week, vs the $14,000 target.'),
+    'Sales'
+  );
+
   sc.innerHTML = `
     ${!wonDeals.length && !_pd_deals.length ? '<div class="callout warn"><div class="callout-label">No data</div><div class="callout-text">Import your Pipedrive deals CSV first.</div></div>' : ''}
+
+    ${salesKpiBand}
+
+    <div class="box">
+      <div class="box-title">Sales performance over time ${infoBtn('Sales performance over time',
+        '<span class="src-tag">Pipedrive · Deals + People</span><br>Deals won, licences won (paid activations) and average won deal value per period, each against its target. Toggle weeks / months / quarters.')}
+        <div class="range-toggle" style="margin-left:auto">
+          ${['week','month','quarter'].map(g => `<button class="range-btn${kpiGran===g?' active':''}" onclick="setPdKpiGran('${g}')">${{week:'Weeks',month:'Months',quarter:'Quarters'}[g]}</button>`).join('')}
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div><div style="font-size:11.5px;font-weight:500;color:var(--navy);margin-bottom:6px">Deals won per ${gLabel} <span style="color:var(--tl);font-weight:400">· target ${kTgtWon}</span></div>
+          <div class="chart-wrap" style="height:190px"><canvas id="pd-kpi-deals"></canvas></div></div>
+        <div><div style="font-size:11.5px;font-weight:500;color:var(--navy);margin-bottom:6px">Licences won per ${gLabel} <span style="color:var(--tl);font-weight:400">· target ${kTgtLic}</span></div>
+          <div class="chart-wrap" style="height:190px"><canvas id="pd-kpi-lic"></canvas></div></div>
+      </div>
+      <div style="margin-top:14px"><div style="font-size:11.5px;font-weight:500;color:var(--navy);margin-bottom:6px">Average deal value per ${gLabel} <span style="color:var(--tl);font-weight:400">· target $14k</span></div>
+        <div class="chart-wrap" style="height:190px"><canvas id="pd-kpi-value"></canvas></div></div>
+    </div>
+
     <div class="cards" style="margin-bottom:18px">
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Won deals (${range.label})${infoBtn('Won deals (total)','<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Count of deals with <b>Status = Won</b> and Won time within the selected date range.<br><div class="calc-row">Status = "Won" AND Won time in '+range.label+'</div>')}</div><div class="card-value">${wonDeals.length || 0}</div><div class="card-sub">${pipelineLabel}</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Closed same month${infoBtn('Closed same month','<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Won deals where the <b>Deal created</b> month equals the <b>Won time</b> month: i.e. opened and closed in the same calendar month.<br><div class="calc-row">monthKey(Deal created) === monthKey(Won time)</div>')}</div>
@@ -7367,6 +7471,22 @@ function renderPdSales(sc) {
     </div>
 
     <div class="box" style="margin-top:14px">
+      <div class="box-title">Sales funnel conversion by month ${infoBtn('Sales funnel conversion by month',
+        '<span class="src-tag">Pipedrive · Deals</span><br>Each cell: of the deals <b>created that month</b> that reached the earlier stage, the share that also reached the next stage. Reads month-on-month change per stage transition.<br><div class="calc-row">cell = deals reaching next stage ÷ deals reaching this stage (created that month)</div>Recent months understate later stages (deals still in flight); low-volume months read noisily.')}
+        <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">${range.label}</span>
+      </div>
+      ${months12.length ? `<div class="tbl-scroll"><table class="conv-table" style="min-width:${140 + months12.length * 62}px">
+        <thead><tr><th style="text-align:left;position:sticky;left:0;background:var(--wh)">Stage transition</th>${months12.map(m => `<th style="text-align:center;white-space:nowrap">${monthLabel(m)}</th>`).join('')}</tr></thead>
+        <tbody>
+          ${FUNNEL_SHORT.slice(1).map((s, si) => `<tr>
+            <td style="text-align:left;white-space:nowrap;font-weight:500;position:sticky;left:0;background:var(--wh)">${FUNNEL_SHORT[si]} → ${s}</td>
+            ${stageConvByMonth[si].map(v => `<td style="text-align:center">${v != null ? `<span class="conv-pct ${v>=70?'good':v>=50?'mid':'bad'}">${fmtPct(v)}</span>` : '<span style="color:#ccc">:</span>'}</td>`).join('')}
+          </tr>`).join('')}
+        </tbody>
+      </table></div>` : '<div class="no-data">No deals in this range.</div>'}
+    </div>
+
+    <div class="box" style="margin-top:14px">
       <div class="box-title">Sales velocity: time from deal creation to won</div>
       <div class="cards" style="margin-bottom:14px">
         ${within30Pct!=null ? `<div class="card"><div class="card-label">Won within 30 days</div><div class="card-value">${fmtPct(within30Pct)}</div><div class="card-sub">${within30Cnt} of ${wonDeals.length} won deals · target ${velTarget30}%</div></div>`
@@ -7457,6 +7577,28 @@ function renderPdSales(sc) {
         scales: { x: { grid: gridStyle, ticks: { ...axStyle, stepSize: 1 }, beginAtZero: true }, y: { grid: { display: false }, ticks: { ...axStyle, font: { family: 'DM Sans', size: 10 } } } }
       }
     });
+  }
+
+  // ── Sales KPI trend charts (respond to the weeks/months/quarters toggle) ──
+  if (kSeries.length) {
+    const kLabels = kSeries.map(p => p.label);
+    const tgtLine = (v, lbl) => ({ type:'line', label:lbl, data: kLabels.map(()=>v), borderColor:'#c0392b', borderDash:[6,4], borderWidth:1.5, pointRadius:0, fill:false });
+    const barOpts = { responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
+      scales:{ x:{ grid:{display:false}, ticks:axStyle }, y:{ grid:gridStyle, ticks:{...axStyle, precision:0}, beginAtZero:true } } };
+    makeChart('pd-kpi-deals', { type:'bar', data:{ labels:kLabels, datasets:[
+      { type:'bar', label:'Deals won', data:kSeries.map(p=>p.won), backgroundColor:'#2e8bc0', borderRadius:3 },
+      tgtLine(kTgtWon, 'Target '+kTgtWon) ]}, options:barOpts });
+    makeChart('pd-kpi-lic', { type:'bar', data:{ labels:kLabels, datasets:[
+      { type:'bar', label:'Licences won', data:kSeries.map(p=>p.lic), backgroundColor:'#2a7a4b', borderRadius:3 },
+      tgtLine(kTgtLic, 'Target '+kTgtLic) ]}, options:barOpts });
+    makeChart('pd-kpi-value', { type:'line', data:{ labels:kLabels, datasets:[
+      { label:'Avg deal value', data:kSeries.map(p=>p.avgVal), borderColor:'#1a3c5e', backgroundColor:'rgba(26,60,94,.08)', borderWidth:2, pointRadius:3, tension:.3, fill:true, spanGaps:true },
+      tgtLine(KPI_TGT.avgVal, 'Target $14k') ]},
+      options:{ responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } },
+          tooltip:{ callbacks:{ label: c => c.dataset.label + ': ' + (c.parsed.y!=null?fmtDollar(Math.round(c.parsed.y)):'no data') } } },
+        scales:{ x:{ grid:{display:false}, ticks:axStyle }, y:{ grid:gridStyle, ticks:{...axStyle, callback:v=>fmtCur(v)}, beginAtZero:true } } } });
   }
 
   if (wonDeals.length) {
