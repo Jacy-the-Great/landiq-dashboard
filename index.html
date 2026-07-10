@@ -4161,6 +4161,7 @@ function renderWeeklyTracker(el) {
       { key: 'postsWeek', label: 'Total Posts per Week', fmt: 'num' },
     ]},
     { label: 'EDM', key: 'edm', rows: [
+      { key: 'edmSend',        label: 'Email Send (recipients)', fmt: 'num' },
       { key: 'edmOpen',        label: 'Email Open Rate',       fmt: 'pct' },
       { key: 'edmCtr',         label: 'Click through Rate',    fmt: 'pct' },
     ]},
@@ -4524,7 +4525,10 @@ function renderMarketing(el) {
     
 
     ${(() => {
-      const posts = mkLatest('postsWeek'), imp = mkLatestImp(), edmOpen = mkLatest('edmOpen'), edmCtr = mkLatest('edmCtr');
+      const posts = mkLatest('postsWeek'), imp = mkLatestImp(), edmOpen = mkLatest('edmOpen'), edmCtr = mkLatest('edmCtr'), edmSend = mkLatest('edmSend');
+      const edmSendWeeks = tracker.filter(w => w.edmSend != null && w.edmSend !== '');
+      const edmSendPrev = edmSendWeeks.length >= 2 ? edmSendWeeks[edmSendWeeks.length - 2].edmSend : null;
+      const edmSendGrowth = (edmSend.val != null && edmSendPrev != null) ? edmSend.val - edmSendPrev : null;
       return kpiBand(
       kpiCardHTML('Posts per week', posts.val, null, null, null, posts.week ? mkSub(posts.week) : 'add a "Total posts per week" row to the tracker',
         '<span class="src-tag">Manual · Weekly Tracker</span><br>Total posts published in the most recent week that has a value, from the <b>Total Posts per Week</b> row of Lucy\'s tracker. Blank means that row isn\'t in the imported CSV yet.') +
@@ -4534,17 +4538,17 @@ function renderMarketing(el) {
         '<span class="src-tag">Manual · Weekly Tracker</span><br>Email open rate from the most recent week that has an EDM value (EDM sends run less often than posts, so this can be an earlier week than the impressions card). Entered from the Comms email platform.') +
       kpiCardHTML('EDM click-through rate', edmCtr.val, '%', null, null, mkSub(edmCtr.week),
         '<span class="src-tag">Manual · Weekly Tracker</span><br>Email click-through rate from the most recent week with an EDM value, from the <b>Click through Rate</b> row of the tracker. Entered from the Comms email platform.') +
-      kpiCardHTML('EDM audience (latest campaign)', edmLast?.recipients ?? null, null, null, null, edmRecGrowth != null ? ((edmRecGrowth >= 0 ? '+' : '') + fmtNum(edmRecGrowth) + ' vs previous campaign') : (edmLast ? (edmLast.title || fmtDate(edmLast.date)) : 'needs recipient counts (not in the tracker yet)'),
-        '<span class="src-tag">Manual · Content log (EDM)</span><br>Recipient count of the most recent EDM campaign logged under "All content" (review mode), with the change vs the previous campaign. <b>Lucy\'s tracker only has rates, not recipient counts</b>, so this stays blank until campaigns are logged or a recipients row is added.'),
+      kpiCardHTML('EDM audience (recipients)', edmSend.val, null, null, null, edmSendGrowth != null ? ((edmSendGrowth >= 0 ? '+' : '') + fmtNum(edmSendGrowth) + ' vs previous send') : (edmSend.week ? mkSub(edmSend.week) : 'add an EDM "Email Send" row to the tracker'),
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Recipients on the most recent EDM send, from the <b>Email Send</b> row of the tracker\'s EDM block, with the change vs the previous send (receiver growth). Blank until that row is filled in Lucy\'s sheet.'),
       'Marketing'
     ); })()}
 
     <div class="mk-head">Webinar</div>
 
-    ${cardsHTML([
-      ['Webinar registrations (latest week)', latestW?.wbReg ?? null, null, null, latestW ? fmtDate(latestW.week) : null,
-        '<span class="src-tag">Manual · Weekly Tracker</span><br>Number of webinar registrations from the latest Weekly Tracker row. Covers the most recently run webinar promotion period.'],
-    ])}
+    ${(() => { const wbr = mkLatest('wbReg'); return cardsHTML([
+      ['Webinar registrations', wbr.val, null, null, mkSub(wbr.week),
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Webinar registrations from the most recent week that has a value (webinars run less often than posts, so this is usually an earlier week than the impressions figure).'],
+    ]); })()}
 
     <!-- ── WEBINARS ── -->
     <div class="box">
@@ -5114,7 +5118,7 @@ function saveTrackerWeek() {
   const week = document.getElementById('tr2-week').value;
   if (!week) { toast('Select a week.'); return; }
   // Every form field except the legacy per-person LinkedIn splits.
-  const fields = ['jsImp','postsWeek','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
+  const fields = ['jsImp','postsWeek','edmSend','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
   // Start from the existing row so we edit in place and keep its _id.
   const existing = load('weekly_tracker').find(r => r.week === week);
   const entry = { ...(existing || {}), _id: existing?._id || ('trk-' + Date.now()), week };
@@ -5137,7 +5141,7 @@ function saveTrackerWeek() {
 
 // Populate the add/edit form from an existing tracker week (or clear it for a new one).
 function loadTrackerWeek(week) {
-  const fields = ['postsWeek','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
+  const fields = ['postsWeek','edmSend','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = (val == null ? '' : val); };
   if (!week) { set('tr2-week', ''); set('tr2-jsImp', ''); fields.forEach(f => set('tr2-' + f, '')); return; }
   const rec = load('weekly_tracker').find(r => r.week === week) || {};
@@ -5157,7 +5161,7 @@ function cancelTrackerEdit() {
 }
 
 function saveTrackerEdit(id) {
-  const fields = ['jsImp','jmImp','lbImp','skImp','postsWeek','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
+  const fields = ['jsImp','jmImp','lbImp','skImp','postsWeek','edmSend','edmOpen','edmCtr','wbEmailSend','wbEmailOpen','wbEmailCtr','wbRegPage','wbReg','websiteVisits','websiteViews','purchaseEnq','eoiTickets','trialsStarted'];
   const arr = load('weekly_tracker');
   const idx = arr.findIndex(r => r._id === id);
   if (idx < 0) { toast('Row not found.'); return; }
@@ -5252,6 +5256,9 @@ function importTrackerCSV(input) {
           'number of posts':      'postsWeek',
         },
         edm: {
+          'email send':          'edmSend',
+          'email sends':         'edmSend',
+          'recipients':          'edmSend',
           'email open rate':     'edmOpen',
           'open rate':           'edmOpen',
           'click through rate':  'edmCtr',
@@ -5312,11 +5319,12 @@ function importTrackerCSV(input) {
         const label = String(row[0] || '').trim();
         if (!label) continue;
 
-        // "Total posts per week" can sit under any section header in the sheet (or
-        // none), so map it globally before the section logic rather than relying on
-        // it landing inside the LinkedIn block.
+        // A "posts per week" row can sit under any section header in the sheet (or
+        // none) and be labelled loosely ("Total Posts", "Posts published", "No. of
+        // posts"...). Map any row that mentions posts as a COUNT to postsWeek,
+        // excluding the "... Post Impressions" rows.
         const _ln = label.toLowerCase().replace(/\s+/g, ' ').trim();
-        if (/^(total posts|posts|number of posts)( per week)?$/.test(_ln)) {
+        if (/\bposts?\b/.test(_ln) && !_ln.includes('impression')) {
           for (let c = 1; c < row.length; c++) {
             const dk = dateKeys[c - 1]; if (!dk) continue;
             const raw = String(row[c] || '').trim().replace(/%/g, '').replace(/,/g, '');
