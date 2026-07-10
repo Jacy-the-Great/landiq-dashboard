@@ -882,8 +882,8 @@ const METRIC_DOCS = [
   ['pipeline stage snapshot', 'Pipedrive · Deals', 'Every deal\'s CURRENT stage, split by status (open / won / lost). Snapshot: not date-filtered.'],
   ['sales conversion funnel :', 'Pipedrive · Deals', 'Deals created in the selected period that <b>reached each stage or beyond</b> (won deals count as having reached every stage). Stage % = this stage ÷ previous stage.'],
   ['sales funnel conversion by month', 'Pipedrive · Deals', 'Each cell: of the deals <b>created that month</b> that reached the earlier stage, the share that also reached the next stage. Reads month-on-month change in each stage-to-stage conversion. Recent months understate later stages (deals still in flight); low-volume months read noisily.'],
-  ['sales performance over time', 'Pipedrive · Deals + People', 'Deals won (by Won time) and licences won (paid people by Date Access Granted) per week / month / quarter, plus average won deal value per period, each against its target. Deals & licences target 3/week · 12/month · 36/quarter; average deal value target $14,000.'],
-  ['sales kpis', 'Pipedrive · Deals + People', 'Cadence scorecard: deals won and paid licences activated this week and month vs targets (3/week, 12/month), and average won deal value vs the $14,000 target, each shown against the running average and the previous period.'],
+  ['sales performance over time', 'Pipedrive · Deals', 'Deals won and licences won (Σ Deal - Product quantity), both by Won time, per week / month / quarter, plus average won deal value per period, each against its target. Deals & licences target 3/week · 12/month · 36/quarter; average deal value target $14,000.'],
+  ['sales kpis', 'Pipedrive · Deals', 'Cadence scorecard: deals won and licences won (sum of Product quantity on won deals) this week and month vs targets (3/week, 12/month), and average won deal value vs the $14,000 target, each shown against the running average and the previous period.'],
   ['stage conversion rates', 'Pipedrive · Deals', 'Same reached-stage funnel as above, shown as a table: each stage\'s count and its % of the previous stage. "Won (total)" % = Won ÷ Contact Made.'],
   ['sales velocity', 'Pipedrive · Deals', 'Days from <b>Deal created</b> to <b>Won time</b> per won deal: bucket distribution plus the share won within 30 days, by month.'],
   ['all won deals', 'Pipedrive · Deals', 'Raw table of every won deal in the selected range: title, org, owner, source, value, won date, cycle days. No calculations beyond cycle = won − created.'],
@@ -5583,6 +5583,7 @@ function pdNormaliseDeals(rows) {
     'Deal - Lost time':      find('Deal - Lost time', 'Lost time', 'Lost date'),
     'Deal - Deal created':   find('Deal - Deal created', 'Deal created', 'Created', 'Add time'),
     'Deal - Category':       find('Deal - Category', 'Category', 'Label'),
+    'Deal - Product quantity': find('Deal - Product quantity', 'Product quantity', 'Licence quantity', 'Licences'),
     'Deal - Owner':          find('Deal - Owner', 'Owner', 'Deal owner'),
     'Deal - Source channel': find('Deal - Source channel', 'Source channel', 'Source'),
     'Deal - Lost reason':    find('Deal - Lost reason', 'Lost reason'),
@@ -7297,8 +7298,11 @@ function renderPdSales(sc) {
   const KPI_TGT = { won:{week:3,month:12,quarter:36}, lic:{week:3,month:12,quarter:36}, avgVal:14000 };
   const FUNNEL_SHORT = ['Contact','Meeting','Negotiation','Order Form','Signed OFR','Invoice','Payment'];
   const kpiWonDeals = salesDeals.filter(d => d['Deal - Status'] === 'Won' && pdValidDate(pdParseDate(d['Deal - Won time'])));
-  // Licences won = paid licence activations: paid people by Date Access Granted (org-wide, not pipeline-scoped)
-  const kpiPaid = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription' && pdValidDate(pdParseDate(p['Person - Date Access Granted'])));
+  // Licences won = sum of licence counts on won deals. Licences are Products on the
+  // deal ("Full Platform Access"); the count lives in the "Deal - Product quantity"
+  // column of the deals export (verified: 195 licences across 52 won deals, unit
+  // price splits cleanly at $4k / $8k). Bucketed by Won time, like deals won.
+  const dealQty = d => { const n = parseFloat(String(d['Deal - Product quantity'] ?? '').replace(/[^0-9.\-]/g, '')); return isNaN(n) ? 0 : n; };
   const kpiWkStart = dd => { const x = new Date(dd); x.setHours(0,0,0,0); x.setDate(x.getDate() - ((x.getDay()+6)%7)); return x; };
   function kpiPeriods(gran, n) {
     const now = new Date(); now.setHours(0,0,0,0);
@@ -7325,9 +7329,9 @@ function renderPdSales(sc) {
   function kpiSeries(gran, n) {
     return kpiPeriods(gran, n).map(p => {
       const won = kpiWonDeals.filter(d => { const t = pdParseDate(d['Deal - Won time']); return t >= p.start && t <= p.end; });
-      const lic = kpiPaid.filter(pp => { const t = pdParseDate(pp['Person - Date Access Granted']); return t >= p.start && t <= p.end; });
+      const lic = won.reduce((s, d) => s + dealQty(d), 0);   // licences = Σ Product quantity over won deals
       const wonVal = won.reduce((s,d)=>s+(parseFloat(d['Deal - Value'])||0),0);
-      return { ...p, won: won.length, lic: lic.length, avgVal: won.length ? wonVal/won.length : null };
+      return { ...p, won: won.length, lic, avgVal: won.length ? wonVal/won.length : null };
     });
   }
   const kMonths = kpiSeries('month', 13), kWeeks = kpiSeries('week', 13);   // 12 completed + current
@@ -7360,10 +7364,10 @@ function renderPdSales(sc) {
       '<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Won deals with Won time in the current week (Mon–Sun), vs the target of 3/week.') +
     kpiCardHTML('Licences won (this month)', kCur(kMonths).lic ?? null, null, KPI_TGT.lic.month, '12/MO',
       `avg ${r1(kAvg(kMonths,'lic'))}/mo · ${arw(kCur(kMonths).lic, kPrev(kMonths).lic)}last month ${kPrev(kMonths).lic ?? ':'}`,
-      '<span class="src-tag">Pipedrive · People</span><br>Paid licence activations: people with <b>Customer Type = Paid Subscription</b> and <b>Date Access Granted</b> in the current month, vs the target of 12/month.') +
+      '<span class="src-tag">Pipedrive · Deals</span><br>Licence count sold: the sum of <b>Deal - Product quantity</b> (the licence quantity on each deal\'s "Full Platform Access" product) across deals won this month. One deal can carry many licences, so this runs higher than deals won.<br><div class="calc-row">Σ Product quantity where Status = Won AND Won time in this month</div>') +
     kpiCardHTML('Licences won (this week)', kCur(kWeeks).lic ?? null, null, KPI_TGT.lic.week, '3/WK',
       `avg ${r1(kAvg(kWeeks,'lic'))}/wk · ${arw(kCur(kWeeks).lic, kPrev(kWeeks).lic)}last week ${kPrev(kWeeks).lic ?? ':'}`,
-      '<span class="src-tag">Pipedrive · People</span><br>Paid licence activations (paid people by Date Access Granted) in the current week, vs the target of 3/week.') +
+      '<span class="src-tag">Pipedrive · Deals</span><br>Sum of <b>Deal - Product quantity</b> across deals won this week, vs the target of 3/week.') +
     kpiCardHTML('Avg deal value (this month)', kCur(kMonths).avgVal ?? null, '$', KPI_TGT.avgVal, '$14K',
       `all-time avg ${avgDealAll!=null?fmtCur(avgDealAll):':'} · ${arw(kCur(kMonths).avgVal, kPrev(kMonths).avgVal)}last month ${kPrev(kMonths).avgVal!=null?fmtCur(kPrev(kMonths).avgVal):':'}`,
       '<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Average <b>Deal Value</b> across deals won this month, vs the $14,000 target. Sub shows the all-time average won deal value.') +
