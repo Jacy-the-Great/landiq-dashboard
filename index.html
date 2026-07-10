@@ -4310,6 +4310,24 @@ function renderMarketing(el) {
   const tracker = load('weekly_tracker').sort((a,b) => a.week > b.week ? 1 : -1);
   const latestW = tracker.length ? tracker[tracker.length - 1] : null;
   const liImpLatest = liImp(latestW);
+  // Most recent week that actually HAS a value for a field. The globally-latest week
+  // often lacks a given metric (e.g. LinkedIn impressions run later than EDM data),
+  // which would leave that KPI blank even though recent data exists.
+  const mkLatest = (field) => {
+    for (let i = tracker.length - 1; i >= 0; i--) {
+      const v = tracker[i][field];
+      if (v != null && v !== '') return { val: v, week: tracker[i].week };
+    }
+    return { val: null, week: null };
+  };
+  const mkLatestImp = () => {
+    for (let i = tracker.length - 1; i >= 0; i--) {
+      const v = liImp(tracker[i]);
+      if (v != null) return { val: v, week: tracker[i].week };
+    }
+    return { val: null, week: null };
+  };
+  const mkSub = (w) => w ? 'week of ' + fmtDate(w) : 'no data yet';
 
   // Last 12 tracker weeks for charts
   const trackerRecent = tracker.slice(-12);
@@ -4505,19 +4523,21 @@ function renderMarketing(el) {
 
     
 
-    ${kpiBand(
-      kpiCardHTML('Posts per week', latestW?.postsWeek ?? null, null, null, null, latestW ? 'week of ' + fmtDate(latestW.week) : null,
-        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total posts published this week, from the "Total Posts per Week" row of Lucy\'s tracker (re-import the CSV to fill history).') +
-      kpiCardHTML('Post impressions (latest week)', liImpLatest || null, null, 2000, '2,000/WK', latestW ? 'week of ' + fmtDate(latestW.week) : null,
-        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total LinkedIn post impressions from the most recent Weekly Tracker row. Weekly target is 2,000: the bar shows progress toward it, and the chart below tracks it week by week.<br><div class="calc-row">Sum of post impressions (latest week)</div>') +
-      kpiCardHTML('EDM open rate (latest week)', latestW?.edmOpen ?? null, '%', null, null, latestW ? 'week of ' + fmtDate(latestW.week) : null,
-        '<span class="src-tag">Manual · Weekly Tracker</span><br>Email open rate from the latest Weekly Tracker row. Entered from the Comms email platform results.') +
-      kpiCardHTML('EDM clicks (latest campaign)', edmLast?.edmclicks ?? null, null, null, null, edmLast ? (edmLast.title || fmtDate(edmLast.date)) : 'log campaigns under All content (review mode)',
-        '<span class="src-tag">Manual · Content log (EDM)</span><br>Link clicks recorded on the most recent email campaign in the content log. Add campaigns via "All content" (review mode) with type EDM, using the Comms email platform results.') +
-      kpiCardHTML('EDM audience (latest campaign)', edmLast?.recipients ?? null, null, null, null, edmRecGrowth != null ? ((edmRecGrowth >= 0 ? '+' : '') + fmtNum(edmRecGrowth) + ' vs previous campaign') : (edmLast ? (edmLast.title || fmtDate(edmLast.date)) : 'log campaigns under All content (review mode)'),
-        '<span class="src-tag">Manual · Content log (EDM)</span><br>Recipient count of the most recent email campaign, with the change vs the campaign before it: a growing number means the mailing audience is growing.'),
+    ${(() => {
+      const posts = mkLatest('postsWeek'), imp = mkLatestImp(), edmOpen = mkLatest('edmOpen'), edmCtr = mkLatest('edmCtr');
+      return kpiBand(
+      kpiCardHTML('Posts per week', posts.val, null, null, null, posts.week ? mkSub(posts.week) : 'add a "Total posts per week" row to the tracker',
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total posts published in the most recent week that has a value, from the <b>Total Posts per Week</b> row of Lucy\'s tracker. Blank means that row isn\'t in the imported CSV yet.') +
+      kpiCardHTML('Post impressions (latest week)', imp.val || null, null, 2000, '2,000/WK', mkSub(imp.week),
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Total LinkedIn post impressions from the most recent week with data. Weekly target is 2,000: the bar shows progress, and the chart below tracks it week by week.<br><div class="calc-row">Sum of post impressions (latest week with data)</div>') +
+      kpiCardHTML('EDM open rate', edmOpen.val, '%', null, null, mkSub(edmOpen.week),
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Email open rate from the most recent week that has an EDM value (EDM sends run less often than posts, so this can be an earlier week than the impressions card). Entered from the Comms email platform.') +
+      kpiCardHTML('EDM click-through rate', edmCtr.val, '%', null, null, mkSub(edmCtr.week),
+        '<span class="src-tag">Manual · Weekly Tracker</span><br>Email click-through rate from the most recent week with an EDM value, from the <b>Click through Rate</b> row of the tracker. Entered from the Comms email platform.') +
+      kpiCardHTML('EDM audience (latest campaign)', edmLast?.recipients ?? null, null, null, null, edmRecGrowth != null ? ((edmRecGrowth >= 0 ? '+' : '') + fmtNum(edmRecGrowth) + ' vs previous campaign') : (edmLast ? (edmLast.title || fmtDate(edmLast.date)) : 'needs recipient counts (not in the tracker yet)'),
+        '<span class="src-tag">Manual · Content log (EDM)</span><br>Recipient count of the most recent EDM campaign logged under "All content" (review mode), with the change vs the previous campaign. <b>Lucy\'s tracker only has rates, not recipient counts</b>, so this stays blank until campaigns are logged or a recipients row is added.'),
       'Marketing'
-    )}
+    ); })()}
 
     <div class="mk-head">Webinar</div>
 
@@ -5291,6 +5311,21 @@ function importTrackerCSV(input) {
         const row = rows[ri];
         const label = String(row[0] || '').trim();
         if (!label) continue;
+
+        // "Total posts per week" can sit under any section header in the sheet (or
+        // none), so map it globally before the section logic rather than relying on
+        // it landing inside the LinkedIn block.
+        const _ln = label.toLowerCase().replace(/\s+/g, ' ').trim();
+        if (/^(total posts|posts|number of posts)( per week)?$/.test(_ln)) {
+          for (let c = 1; c < row.length; c++) {
+            const dk = dateKeys[c - 1]; if (!dk) continue;
+            const raw = String(row[c] || '').trim().replace(/%/g, '').replace(/,/g, '');
+            if (!raw || raw === '-' || raw === ':') continue;
+            const num = parseFloat(raw);
+            if (!isNaN(num)) dataMap[dk].postsWeek = num;
+          }
+          continue;
+        }
 
         // Switch section when a row names one. Don't skip the row afterwards: in
         // Lucy's sheet some rows are BOTH the section marker and a data row (e.g.
