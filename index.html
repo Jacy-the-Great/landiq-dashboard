@@ -1675,7 +1675,7 @@ function renderExec(el) {
   // Activity (PostHog)
   const phWeekly = (_ph.weekly || []).slice(-1)[0] || {};
   const phWeeklyPrev = (_ph.weekly || []).slice(-2,-1)[0] || {};
-  const dauMau = (_ph.daumau || []).slice(-1)[0] || {};
+  const dauMau = (_ph.dauMau || []).slice(-1)[0] || {};
   const segments = _ph.segments || [];
 
   // Training
@@ -4307,10 +4307,8 @@ function renderMarketing(el) {
   const types = ['LinkedIn','YouTube','EDM','Viva Engage','Webinar','Blog','Speaking'];
   const typeColors = { LinkedIn:'#0a66c2', YouTube:'#c0392b', EDM:'#2a7a4b', 'Viva Engage':'#c25a00', Webinar:'#3949ab', Blog:'#7b1fa2', Speaking:'#00796b' };
 
-  // Summary cards from latest tracker week
+  // Summary cards from the weekly tracker
   const tracker = load('weekly_tracker').sort((a,b) => a.week > b.week ? 1 : -1);
-  const latestW = tracker.length ? tracker[tracker.length - 1] : null;
-  const liImpLatest = liImp(latestW);
   // Most recent week that actually HAS a value for a field. The globally-latest week
   // often lacks a given metric (e.g. LinkedIn impressions run later than EDM data),
   // which would leave that KPI blank even though recent data exists.
