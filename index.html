@@ -8679,6 +8679,7 @@ function renderPdOptimax(sc) {
     avg_cycle_target: 45,
     show_imp: 1,            // Stage 0 (Total impressions) row visible?
     contact_target: 0,      // monthly Contact Made target used as the projection base when impressions is hidden
+    show_s4: 1,             // Stage 4 (transaction value: upsell + price) included?
   };
 
   function loadOM() { try { return {...OM_DEF,...JSON.parse(localStorage.getItem(OM_KEY)||'{}')}; } catch { return {...OM_DEF}; } }
@@ -8687,9 +8688,11 @@ function renderPdOptimax(sc) {
   window.omReset = () => { localStorage.removeItem(OM_KEY); renderPdOptimax(sc); };
   window.setOmView = (v) => { activeSub.om_view = v; renderPdOptimax(sc); };
   window.omToggleImp = () => { const o=loadOM(); o.show_imp = o.show_imp!==0 ? 0 : 1; localStorage.setItem(OM_KEY,JSON.stringify(o)); renderPdOptimax(sc); };
+  window.omToggleS4  = () => { const o=loadOM(); o.show_s4  = o.show_s4 !==0 ? 0 : 1; localStorage.setItem(OM_KEY,JSON.stringify(o)); renderPdOptimax(sc); };
   const t = loadOM();
   const omView = activeSub.om_view || 'deals';
   const showImp = t.show_imp !== 0;   // false = hide impressions, funnel starts at Contact Made
+  const showS4  = t.show_s4  !== 0;   // false = Stage 4 rows hidden AND excluded from Stage 5 / projections
 
   // ── Pipedrive actuals (all-time) ─────────────────────────────────────────
   const sDeals = _pd_deals.filter(d => d['Deal - Pipeline']==='2026 Sales');
@@ -8754,16 +8757,25 @@ function renderPdOptimax(sc) {
 
   // First deal date for rate calc
   const firstDealDt = sDeals.reduce((min,d)=>{const dt=pdParseDate(d['Deal - Deal created']);return pdValidDate(dt)&&(!min||dt<min)?dt:min;},null);
-  const monthsElapsed = firstDealDt ? Math.max(1,(new Date()-firstDealDt)/(1000*60*60*24*30.44)) : 12;
+  // Months of data = calendar months from the first deal's month through the current
+  // month, inclusive. ONE denominator everywhere (model + month-by-month charts) so
+  // the averages reconcile exactly. The current partial month counts, which slightly
+  // understates averages mid-month.
+  const monthsElapsed = firstDealDt ? Math.max(1, (new Date().getFullYear() - firstDealDt.getFullYear()) * 12 + (new Date().getMonth() - firstDealDt.getMonth()) + 1) : 12;
+  const perMo = v => v / monthsElapsed;                       // all-time count → per-month average
+  const fmt1  = v => (Math.round(v * 10) / 10).toLocaleString();
 
   // ── Month-by-month stage volumes: validate the per-month averages, monitor progress ──
   // Bucketed by deal CREATION month. "Reached stage i" = current stage index ≥ i or Won,
   // so this is a cohort view: recent months' later stages are still maturing.
+  // Continuous month range from the first deal's month through now (gaps filled
+  // with 0), so the number of buckets equals monthsElapsed and the chart averages
+  // reconcile exactly with the per-month figures in the model table.
   const omMonoMonths = (() => {
-    const keys = new Set();
-    sDeals.forEach(d => { const dt = pdParseDate(d['Deal - Deal created']); if (pdValidDate(dt)) keys.add(monthKey(dt.toISOString())); });
-    const arr = [...keys].sort();
-    return arr.length > 15 ? arr.slice(-15) : arr;
+    if (!firstDealDt) return [];
+    const out = []; const dd = new Date(firstDealDt.getFullYear(), firstDealDt.getMonth(), 1); const _n = new Date();
+    while (dd <= _n) { out.push(dd.getFullYear() + '-' + String(dd.getMonth() + 1).padStart(2, '0')); dd.setMonth(dd.getMonth() + 1); }
+    return out;
   })();
   const omMonoLabel = mk => { const [y, m] = mk.split('-'); return new Date(+y, +m - 1, 1).toLocaleDateString('en-AU', { month: 'short', year: '2-digit' }); };
   const omCreatedIn = mk => sDeals.filter(d => { const dt = pdParseDate(d['Deal - Deal created']); return pdValidDate(dt) && monthKey(dt.toISOString()) === mk; });
@@ -8801,7 +8813,7 @@ function renderPdOptimax(sc) {
   // NOTE: Invoice currPct uses Order Form Sent (index 3) as denominator: not Signed OFR (index 4)
   // This avoids the 100% bug from Signed OFR → Invoice being 41/41=100%.
   // Contact Made target used when impressions is hidden (it becomes the funnel entry).
-  const contactTarget = (t.contact_target && t.contact_target > 0) ? t.contact_target : currCnts[0];
+  const contactTarget = (t.contact_target && t.contact_target > 0) ? t.contact_target : Math.max(1, Math.round(perMo(currCnts[0])));
   const ROWS = [
     { isHdr:true, label: showImp ? 'STAGE 1: INCREASE LEADS & DRIVE MORE TRAFFIC' : 'STAGE 1: LEADS INTO THE PIPELINE' },
     ...(showImp ? [{ id:'leads',
@@ -8857,6 +8869,7 @@ function renderPdOptimax(sc) {
       curr: wonCurr,
       currPct: currCnts[5]>0 ? pct(wonCurr, currCnts[5]) : null,
       tgtPct: t.won_pct_target },
+    ...(showS4 ? [
     { isHdr:true, label:'STAGE 4: INCREASE TRANSACTION VALUE' },
     { id:'upsell',
       label:'Upsell rate',
@@ -8872,6 +8885,7 @@ function renderPdOptimax(sc) {
       currEditable:true, currKey:'price_curr', currStep:10, currPrefix:'$', isCurrCount:true,
       tgtKey:'price_target',
       curr: t.price_curr||0, tgt: t.price_target||0, currPct:null },
+    ] : []),
   ];
 
   // ── Build projections ────────────────────────────────────────────────────
@@ -8888,39 +8902,52 @@ function renderPdOptimax(sc) {
     else if (r.id==='won')     { proj.won     = Math.round(prevProj*t.won_pct_target/100);       prevProj=proj.won; }
     else proj[r.id] = null;
   }
-  const projWon    = proj.won;
-  const projImpPct = wonCurr>0&&projWon!=null ? Math.round((projWon-wonCurr)/wonCurr*100) : null;
+  const projWon = proj.won;   // per-month projection (chained from a per-month entry target)
 
-  // ── Stage 5: Total Impact calculations ───────────────────────────────────
-  // Per-stage uplifts (projected vs current, as %)
+  // ── Unit discipline: currents from Pipedrive are ALL-TIME counts; targets and
+  // projections are PER-MONTH. Convert every current to per-month (÷ monthsElapsed)
+  // before any comparison, so "projected vs current" is per-month vs per-month.
+  const currMoRate = perMo(wonCurr);   // current won per month
+  const projImpPct = currMoRate>0&&projWon!=null ? Math.round((projWon-currMoRate)/currMoRate*100) : null;
+
+  // ── Stage 4 → Stage 5 wiring: transaction-value uplift multipliers ─────────
+  // Upsell: moving the share of clients taking extra licences from current% to
+  // target% scales revenue per deal by (1+target)/(1+current).
+  // Price: a $X/licence/year increase scales revenue by X ÷ current avg licence cost.
+  // Excluded entirely when Stage 4 is toggled off.
+  const upliftUpsell = showS4 ? (1 + (t.upsell_pct_target || 0) / 100) / (1 + (t.upsell_pct_curr || 0) / 100) : 1;
+  const upliftPrice  = (showS4 && avgLicWonCost > 0) ? 1 + ((t.price_target || 0) - (t.price_curr || 0)) / avgLicWonCost : 1;
+  const valueUplift  = upliftUpsell * upliftPrice;
+
+  // ── Stage 5: Total Impact calculations (all per-month) ────────────────────
   const stageUpliftPairs = [
-    ...(showImp ? [{ curr: totalImpressions, prj: t.leads_target }] : []),
-    { curr: currCnts[0],   prj: proj.contact },
-    { curr: currCnts[1],   prj: proj.meeting },
-    { curr: currCnts[2],   prj: proj.neg },
-    { curr: currCnts[3],   prj: proj.order },
-    { curr: currCnts[5],   prj: proj.invoice },
-    { curr: wonCurr,       prj: proj.won },
+    ...(showImp ? [{ curr: perMo(totalImpressions), prj: t.leads_target }] : []),
+    { curr: perMo(currCnts[0]), prj: proj.contact },
+    { curr: perMo(currCnts[1]), prj: proj.meeting },
+    { curr: perMo(currCnts[2]), prj: proj.neg },
+    { curr: perMo(currCnts[3]), prj: proj.order },
+    { curr: perMo(currCnts[5]), prj: proj.invoice },
+    { curr: currMoRate,         prj: proj.won },
   ];
   const stageUplifts = stageUpliftPairs
     .map(x => (x.curr>0 && x.prj!=null) ? (x.prj - x.curr) / x.curr * 100 : null)
     .filter(v => v !== null);
-  const avgUpliftPct     = stageUplifts.length ? stageUplifts.reduce((a,b)=>a+b,0)/stageUplifts.length : 0;
-  // Cumulative = actual end-to-end improvement in won deals (leads → won, chained)
-  // NOT a product of individual stage uplifts (that would double-count the chain effects)
-  const cumulativeUplift = wonCurr>0 && projWon!=null ? (projWon - wonCurr) / wonCurr * 100 : 0;
-  // Monthly and annual revenue
-  const currRevMonth = monthsElapsed>0 ? Math.round(wonCurr / monthsElapsed * avgDealVal) : 0;
-  const projRevMonth = projWon!=null   ? Math.round(projWon  / monthsElapsed * avgDealVal) : currRevMonth;
+  const avgUpliftPct = stageUplifts.length ? stageUplifts.reduce((a,b)=>a+b,0)/stageUplifts.length : 0;
+  // Monthly and annual revenue: current = real run-rate from the data (Stage 4's
+  // current state is already baked into real deal values); projected = projected
+  // won/month × avg deal value × Stage 4 value uplift.
+  const currRevMonth = Math.round(currMoRate * avgDealVal);
+  const projRevMonth = projWon!=null ? Math.round(projWon * avgDealVal * valueUplift) : currRevMonth;
   const currRevYear  = currRevMonth * 12;
   const projRevYear  = projRevMonth * 12;
+  // Cumulative = end-to-end revenue improvement (volume chain × Stage 4 value uplift)
+  const cumulativeUplift = currRevMonth>0 ? (projRevMonth - currRevMonth) / currRevMonth * 100 : 0;
 
   // ── Revenue projection (36-month ARR trajectory) ─────────────────────────
-  const currMoRate = wonCurr / monthsElapsed;
-  const projMoRate = projWon!=null ? projWon/monthsElapsed : currMoRate;
+  const projMoRate = projWon!=null ? projWon : currMoRate;   // projWon is already per-month
   const proj36M    = Array.from({length:36},(_,i)=>i+1);
   const currCumARR = proj36M.map(m => currMoRate * m * avgDealVal);
-  const targCumARR = proj36M.map(m => projMoRate * m * avgDealVal);
+  const targCumARR = proj36M.map(m => projMoRate * m * avgDealVal * valueUplift);
   const currARR1y  = Math.round(currCumARR[11]);
   const targARR1y  = Math.round(targCumARR[11]);
   const currARR3y  = Math.round(currCumARR[35]);
@@ -8940,13 +8967,15 @@ function renderPdOptimax(sc) {
     // Others: Pipedrive count (read-only display)
     let currCell;
     if (r.id === 'leads') {
-      currCell = `<span style="font-weight:600">${totalImpressions.toLocaleString()}</span>`;   // auto from marketing data
+      currCell = `<span style="font-weight:600" title="${totalImpressions.toLocaleString()} all time ÷ ${monthsElapsed} months">${fmt1(perMo(totalImpressions))}</span><div style="font-size:9px;color:var(--tl)">${totalImpressions.toLocaleString()} all time</div>`;
     } else if (r.id === 'upsell') {
       currCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="100" step="1" value="${t[r.currKey]||0}" onchange="omSave('${r.currKey}',this.value)"><span style="font-size:11px;color:var(--tl)">%</span></div>`;
     } else if (r.id === 'price') {
       currCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><span style="font-size:11px;color:var(--tl)">$</span><input class="om-input" type="number" min="0" step="10" value="${t[r.currKey]||0}" onchange="omSave('${r.currKey}',this.value)"><span style="font-size:10px;color:var(--tl)">/yr</span></div>`;
     } else {
-      currCell = `<span style="font-weight:500">${r.curr!=null?r.curr.toLocaleString():':'}</span>`;
+      currCell = r.curr != null
+        ? `<span style="font-weight:500" title="${r.curr.toLocaleString()} all time ÷ ${monthsElapsed} months of data">${fmt1(perMo(r.curr))}</span><div style="font-size:9px;color:var(--tl)">${r.curr.toLocaleString()} all time</div>`
+        : '<span style="font-weight:500">:</span>';
     }
 
     // ── Col 3: Current % (conversion rate from Pipedrive) ───────────────────
@@ -9000,9 +9029,9 @@ function renderPdOptimax(sc) {
     // Price: (target_$ - curr_$) relative to avg deal value
     let actualPct;
     if (r.id === 'leads') {
-      actualPct = totalImpressions > 0 ? +((t.leads_target - totalImpressions) / totalImpressions * 100).toFixed(1) : null;
+      actualPct = totalImpressions > 0 ? +((t.leads_target - perMo(totalImpressions)) / perMo(totalImpressions) * 100).toFixed(1) : null;
     } else if (r.id === 'contact' && r.isEntry) {
-      actualPct = currCnts[0] > 0 ? +((contactTarget - currCnts[0]) / currCnts[0] * 100).toFixed(1) : null;
+      actualPct = currCnts[0] > 0 ? +((contactTarget - perMo(currCnts[0])) / perMo(currCnts[0]) * 100).toFixed(1) : null;
     } else if (r.id === 'upsell') {
       actualPct = +((t.upsell_pct_target||0) - (t.upsell_pct_curr||0)).toFixed(1);
     } else if (r.id === 'price') {
@@ -9026,7 +9055,7 @@ function renderPdOptimax(sc) {
     } else if (r.id === 'upsell' || r.id === 'price') {
       cumulativePct = null;
     } else {
-      const currBase = r.id === 'won' ? wonCurr : r.curr;
+      const currBase = perMo(r.id === 'won' ? wonCurr : r.curr);   // per-month vs per-month projection
       cumulativePct = (currBase > 0 && prj != null) ? +((prj - currBase) / currBase * 100).toFixed(1) : null;
     }
     const cumulativeHTML = cumulativePct != null
@@ -9051,7 +9080,7 @@ function renderPdOptimax(sc) {
     <tr style="background:#f0f7ff">
       <td>
         <div style="font-weight:600;color:var(--navy)">Total Revenue Per Month</div>
-        <div style="font-size:11px;color:var(--tl);margin-top:2px">Won ${unitLabel}/mo × avg deal value · model projection</div>
+        <div style="font-size:11px;color:var(--tl);margin-top:2px">Won ${unitLabel}/mo × avg deal value${showS4 ? ' × Stage 4 value uplift (upsell ×' + upliftUpsell.toFixed(2) + ' · price ×' + upliftPrice.toFixed(2) + ')' : ' · Stage 4 excluded'} · model projection</div>
       </td>
       <td style="text-align:right;font-weight:600">${fmtDollar(currRevMonth)}<span style="font-size:10px;color:var(--tl)">/mo</span></td>
       <td style="text-align:center;color:var(--tl)">→</td>
@@ -9078,13 +9107,13 @@ function renderPdOptimax(sc) {
   <div class="box">
     <div class="box-title">OPTI-MAX Sales Growth Model
       <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">
-        Stage 1 = per month targets · Stages 2–4 = all-time Pipedrive actuals · edits save automatically
+        all figures per month · currents = Pipedrive actuals ÷ ${monthsElapsed} months of data · edits save automatically
       </span>
     </div>
     <p style="font-size:12px;color:var(--tm);margin-bottom:12px;line-height:1.5">
       Small % improvements at each stage <strong>compound</strong> into significantly more won ${unitLabel} <strong>per month</strong>.
-      Stage 1 (leads) and targets are set per-month. Stages 2–3 conversion rates are live from Pipedrive all-time data.
-      <span style="color:var(--acc);font-weight:500">Blue input fields</span> are editable: projections update instantly.
+      Every figure is per month: Current # is the monthly average over the ${monthsElapsed} months since the first deal (hover for the all-time count, shown underneath).
+      Conversion %s are live from Pipedrive. <span style="color:var(--acc);font-weight:500">Blue input fields</span> are editable: projections update instantly.
     </p>
 
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
@@ -9100,6 +9129,13 @@ function renderPdOptimax(sc) {
         <button class="range-btn${!showImp?' active':''}" onclick="${showImp?'omToggleImp()':''}">Hidden</button>
       </div>
       <span style="font-size:11px;color:var(--tl)">${showImp ? 'funnel starts at Total impressions' : 'funnel starts at Contact Made · impressions hidden while the data is verified'}</span>
+      <span style="width:1px;height:20px;background:var(--bd);margin:0 4px"></span>
+      <span style="font-size:12px;font-weight:500;color:var(--navy)">Stage 4 (transaction value):</span>
+      <div class="range-toggle">
+        <button class="range-btn${showS4?' active':''}" onclick="${showS4?'':'omToggleS4()'}">Included</button>
+        <button class="range-btn${!showS4?' active':''}" onclick="${showS4?'omToggleS4()':''}">Excluded</button>
+      </div>
+      <span style="font-size:11px;color:var(--tl)">${showS4 ? 'upsell + price uplift feed Stage 5' : 'Stage 4 hidden and left out of Stage 5 / projections'}</span>
       ${isLic ? `<span style="font-size:11px;color:var(--tl)">Licences = Product quantity where recorded, else deal value ÷ ${licCostFromData ? '<b>'+fmtDollar(avgLicWonCost)+'</b> (real avg from data)' : 'fallback price below'}</span>
         ${licCostFromData ? '' : `<div style="display:flex;align-items:center;gap:4px;margin-left:8px">
           <span style="font-size:11px;color:var(--tl)">Fallback lic price: $</span>
@@ -9108,9 +9144,9 @@ function renderPdOptimax(sc) {
     </div>
 
     <div class="cards" style="margin-bottom:18px">
-      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Won ${unitLabel} (all time)${infoBtn('Won '+unitLabel,'<span class="src-tag">Pipedrive · 2026 Sales</span><br>Count of '+unitLabel+' with Status = Won.<br><div class="calc-row">'+(isLic?'SUM(Product quantity of won deals)':'COUNT(Won deals)')+'</div>')}</div><div class="card-value">${wonCurr}</div><div class="card-sub">2026 Sales pipeline</div></div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Won ${unitLabel} (all time)${infoBtn('Won '+unitLabel,'<span class="src-tag">Pipedrive · 2026 Sales</span><br>Count of '+unitLabel+' with Status = Won.<br><div class="calc-row">'+(isLic?'SUM(Product quantity of won deals)':'COUNT(Won deals)')+'</div>')}</div><div class="card-value">${wonCurr}</div><div class="card-sub">2026 Sales pipeline · ${fmt1(currMoRate)}/mo avg</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Avg licence won cost${infoBtn('Average licence won cost','<span class="src-tag">Pipedrive · Won Deals</span><br>The real average price per licence once discounts are factored in.<br><div class="calc-row">Total won revenue ÷ total licences sold (Product quantity)<br>'+(licCostFromData?fmtDollar(qtyWonValue)+' ÷ '+totalLicencesSold.toLocaleString()+' = '+fmtDollar(avgLicWonCost):'no Product quantity yet: assumed')+'</div>')}</div><div class="card-value">${fmtDollar(avgLicWonCost)}</div><div class="card-sub">${licCostFromData?totalLicencesSold.toLocaleString()+' licences sold':'assumed: add Product quantity'}</div></div>
-      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Projected won / month${infoBtn('Projected won / month','<span class="src-tag">Calculated</span><br>Won '+unitLabel+' per month if every target conversion rate is hit.<br><div class="calc-row">Target impressions × chained target % at each stage</div>')}</div><div class="card-value" style="color:var(--gr)">${projWon??':'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">+${projImpPct}% improvement</div>`:''}</div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Projected won / month${infoBtn('Projected won / month','<span class="src-tag">Calculated</span><br>Won '+unitLabel+' per month if every target conversion rate is hit.<br><div class="calc-row">Target impressions × chained target % at each stage</div>')}</div><div class="card-value" style="color:var(--gr)">${projWon??':'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">${projImpPct>=0?'+':''}${projImpPct}% vs ${fmt1(currMoRate)}/mo current</div>`:''}</div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Revenue / month (current)${infoBtn('Revenue / month (current)','<span class="src-tag">Pipedrive · Won Deals</span><br>Current won run-rate × average deal value.<br><div class="calc-row">(Won deals ÷ months since first deal) × avg deal value ('+fmtDollar(avgDealVal)+')</div>')}</div><div class="card-value">${fmtDollar(currRevMonth)}</div><div class="card-sub">${fmtDollar(currRevYear)}/yr at current rate</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Revenue / month (target)${infoBtn('Revenue / month (target)','<span class="src-tag">Calculated</span><br>Projected won run-rate × average deal value.<br><div class="calc-row">(Projected won ÷ months) × avg deal value</div>')}</div><div class="card-value" style="color:var(--gr)">${fmtDollar(projRevMonth)}</div><div class="card-sub" style="color:var(--gr)">+${fmtDollar(projRevMonth-currRevMonth)}/mo uplift</div></div>
     </div>
@@ -9163,7 +9199,7 @@ function renderPdOptimax(sc) {
         <td style="text-align:right;color:var(--tl)">${s.isImp ? fmtNum(s.lastMonth) : s.lastMonth}</td>
       </tr>`).join('')}</tbody>
     </table>
-    <div style="font-size:10.5px;color:var(--tl);margin-top:6px">"All-time total" matches the Current # column in the model above · "This month" is the current (partial) month.</div>` : '<div class="no-data">No dated deals in the 2026 Sales pipeline yet.</div>'}
+    <div style="font-size:10.5px;color:var(--tl);margin-top:6px">"All-time total" ÷ ${omMonoMonths.length} months = "Avg / month", which is exactly the Current # per month shown in the model above · "This month" is the current (partial) month.</div>` : '<div class="no-data">No dated deals in the 2026 Sales pipeline yet.</div>'}
   </div>
 
   <!-- Revenue projection chart -->
@@ -9171,7 +9207,7 @@ function renderPdOptimax(sc) {
     <div class="box-title">Revenue trajectory: current vs OPTI-MAX target (3-year projection)</div>
     <p style="font-size:12px;color:var(--tm);margin-bottom:12px;line-height:1.5">
       Cumulative annual contract value: ${currMoRate.toFixed(1)} won ${unitLabel}/month (current) vs ${projMoRate.toFixed(1)}/month (target).
-      Annual licence at avg ${fmtDollar(avgDealVal)} · 0% churn assumption.
+      Annual licence at avg ${fmtDollar(avgDealVal)}${showS4 && valueUplift !== 1 ? ' · ×' + valueUplift.toFixed(2) + ' Stage 4 value uplift on the target line' : ''} · 0% churn assumption.
     </p>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">
       <div class="card" style="margin:0"><div class="card-label">Year 1 · current</div><div class="card-value" style="font-size:20px">${fmtM(currARR1y)}</div></div>
