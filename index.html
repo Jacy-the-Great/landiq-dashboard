@@ -8716,14 +8716,13 @@ function renderPdOptimax(sc) {
     order_pct_target: 82,
     invoice_pct_target: 90,
     won_pct_target: 90,
-    upsell_pct_curr: 5, upsell_pct_target: 10,
-    price_curr: 0,      price_target: 42,
+    dealval_pct_target: 15,   // Stage 4: target % increase on the average deal value
     avg_lic_price: 8000,
     cycle_30d_target: 50,
     avg_cycle_target: 45,
     show_imp: 1,            // Stage 0 (Total impressions) row visible?
     contact_target: 0,      // monthly Contact Made target used as the projection base when impressions is hidden
-    show_s4: 1,             // Stage 4 (transaction value: upsell + price) included?
+    show_s4: 1,             // Stage 4 (increase average deal value) included?
   };
 
   function loadOM() { try { return {...OM_DEF,...JSON.parse(localStorage.getItem(OM_KEY)||'{}')}; } catch { return {...OM_DEF}; } }
@@ -8845,6 +8844,13 @@ function renderPdOptimax(sc) {
   });
   const omMonoR1 = v => Math.round(v * 10) / 10;
 
+  // Average deal value by month (won deals, by close month): the Stage 4 indicator
+  const omDealValByMonth = omMonoMonths.map(mk => {
+    const vals = sDeals.filter(d => d['Deal - Status'] === 'Won' && (() => { const dt = pdParseDate(d['Deal - Won time']); return pdValidDate(dt) && monthKey(dt.toISOString()) === mk; })())
+      .map(d => parseFloat(d['Deal - Value']) || 0).filter(v => v > 0);
+    return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+  });
+
   // ── Decide which view to show ─────────────────────────────────────────────
   // Deals view: deal counts. Licences view: licence counts derived from deal value.
   const isLic   = omView === 'licences';
@@ -8914,21 +8920,13 @@ function renderPdOptimax(sc) {
       currPct: currCnts[5]>0 ? pct(wonCurr, currCnts[5]) : null,
       tgtPct: t.won_pct_target },
     ...(showS4 ? [
-    { isHdr:true, label:'STAGE 4: INCREASE TRANSACTION VALUE' },
-    { id:'upsell',
-      label:'Upsell rate',
-      desc:`${t.upsell_pct_curr}% of clients currently take additional licences · edit current below`,
-      calc: '<span class="src-tag">Manual entry</span><br>Share of existing clients who take additional licences. Enter the current rate in the Current column and the target in the Target column.',
-      currEditable:true, currKey:'upsell_pct_curr', currStep:1, currMax:100, isCurrPct:true,
-      tgtKey:'upsell_pct_target',
-      curr: null, currPct: t.upsell_pct_curr||null, tgtPct: t.upsell_pct_target },
-    { id:'price',
-      label:'Increase average price per licence (by reducing public sector discounts)',
-      desc:`Avg licence won cost today: <b>${fmtDollar(avgLicWonCost)}</b>${licCostFromData?'':' (assumed)'} · set the price-increase target below`,
-      calc: '<span class="src-tag">Pipedrive · Won Deals</span><br>Average licence won cost = total won revenue ÷ total licences sold (from Product quantity): the real average once discounts are factored in.<br><div class="calc-row">' + (licCostFromData ? fmtDollar(qtyWonValue) + ' ÷ ' + totalLicencesSold.toLocaleString() + ' licences = ' + fmtDollar(avgLicWonCost) : 'No Product quantity in the data yet: assumed ' + fmtDollar(avgLicWonCost)) + '</div>The Current / Target here are the $/licence/year price increase you aim to achieve.',
-      currEditable:true, currKey:'price_curr', currStep:10, currPrefix:'$', isCurrCount:true,
-      tgtKey:'price_target',
-      curr: t.price_curr||0, tgt: t.price_target||0, currPct:null },
+    { isHdr:true, label:'STAGE 4: INCREASE AVERAGE DEAL VALUE' },
+    { id:'dealval',
+      label:'Increase average deal value',
+      desc:`Baseline from Pipedrive: <b>${fmtDollar(avgDealVal)}</b> avg won deal · lift it with more licences per deal and fewer discounts · set the % increase target`,
+      calc: '<span class="src-tag">Pipedrive · Won Deals</span><br>Current = the average value of won deals in the data (the baseline). Target = the % increase you aim for: more licences sold per deal, and smaller public-sector discounts. It scales projected revenue by (1 + target%).<br><div class="calc-row">Target avg deal value = ' + fmtDollar(avgDealVal) + ' × (1 + target%) = ' + fmtDollar(Math.round(avgDealVal * (1 + (t.dealval_pct_target||0)/100))) + '</div>',
+      currEditable:false, tgtKey:'dealval_pct_target', isDealVal:true,
+      curr: avgDealVal, currPct:null, tgtPct: t.dealval_pct_target },
     ] : []),
   ];
 
@@ -8954,14 +8952,12 @@ function renderPdOptimax(sc) {
   const currMoRate = perMo(wonCurr);   // current won per month
   const projImpPct = currMoRate>0&&projWon!=null ? Math.round((projWon-currMoRate)/currMoRate*100) : null;
 
-  // ── Stage 4 → Stage 5 wiring: transaction-value uplift multipliers ─────────
-  // Upsell: moving the share of clients taking extra licences from current% to
-  // target% scales revenue per deal by (1+target)/(1+current).
-  // Price: a $X/licence/year increase scales revenue by X ÷ current avg licence cost.
+  // ── Stage 4 → Stage 5 wiring: average-deal-value uplift ────────────────────
+  // A +X% lift on the average deal value scales projected revenue by (1 + X/100).
   // Excluded entirely when Stage 4 is toggled off.
-  const upliftUpsell = showS4 ? (1 + (t.upsell_pct_target || 0) / 100) / (1 + (t.upsell_pct_curr || 0) / 100) : 1;
-  const upliftPrice  = (showS4 && avgLicWonCost > 0) ? 1 + ((t.price_target || 0) - (t.price_curr || 0)) / avgLicWonCost : 1;
-  const valueUplift  = upliftUpsell * upliftPrice;
+  const dealValTargetPct = t.dealval_pct_target || 0;
+  const dealValTarget    = Math.round(avgDealVal * (1 + dealValTargetPct / 100));
+  const valueUplift      = showS4 ? (1 + dealValTargetPct / 100) : 1;
 
   // ── Stage 5: Total Impact calculations (all per-month) ────────────────────
   const stageUpliftPairs = [
@@ -9012,10 +9008,8 @@ function renderPdOptimax(sc) {
     let currCell;
     if (r.id === 'leads') {
       currCell = `<span style="font-weight:600" title="${totalImpressions.toLocaleString()} all time ÷ ${monthsElapsed} months">${fmt1(perMo(totalImpressions))}</span><div style="font-size:9px;color:var(--tl)">${totalImpressions.toLocaleString()} all time</div>`;
-    } else if (r.id === 'upsell') {
-      currCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="100" step="1" value="${t[r.currKey]||0}" onchange="omSave('${r.currKey}',this.value)"><span style="font-size:11px;color:var(--tl)">%</span></div>`;
-    } else if (r.id === 'price') {
-      currCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><span style="font-size:11px;color:var(--tl)">$</span><input class="om-input" type="number" min="0" step="10" value="${t[r.currKey]||0}" onchange="omSave('${r.currKey}',this.value)"><span style="font-size:10px;color:var(--tl)">/yr</span></div>`;
+    } else if (r.id === 'dealval') {
+      currCell = `<span style="font-weight:600" title="Average value of won deals in the data">${fmtDollar(avgDealVal)}</span><div style="font-size:9px;color:var(--tl)">avg won deal · baseline</div>`;
     } else {
       currCell = r.curr != null
         ? `<span style="font-weight:500" title="${r.curr.toLocaleString()} all time ÷ ${monthsElapsed} months of data">${fmt1(perMo(r.curr))}</span><div style="font-size:9px;color:var(--tl)">${r.curr.toLocaleString()} all time</div>`
@@ -9024,11 +9018,10 @@ function renderPdOptimax(sc) {
 
     // ── Col 3: Current % (conversion rate from Pipedrive) ───────────────────
     // Stage 1: no prior stage, show :
-    // Upsell: upsell% is already in col 2, show: here
-    // Price: no %, show :
+    // Deal value: no conversion %, show :
     // Conv stages: from Pipedrive actuals
     let currPctCell;
-    if (r.id === 'leads' || r.id === 'upsell' || r.id === 'price' || r.isEntry) {
+    if (r.id === 'leads' || r.id === 'dealval' || r.isEntry) {
       currPctCell = r.isEntry ? '<span style="color:var(--tl)" title="Entry point of the funnel: no upstream stage">entry</span>' : '<span style="color:var(--tl)">:</span>';
     } else {
       const label = (r.id === 'contact' && showImp) ? '<div style="font-size:9px;color:var(--tl)">of impressions</div>' : '';
@@ -9047,23 +9040,21 @@ function renderPdOptimax(sc) {
       tgtCountCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input om-input-wide" type="number" min="0" step="1000" value="${t[r.tgtKey]||0}" onchange="omSave('${r.tgtKey}',this.value)"></div>`;
     } else if (r.id === 'contact' && r.isEntry) {
       tgtCountCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" step="1" value="${contactTarget}" onchange="omSave('contact_target',this.value)" title="Monthly Contact Made target: the projection base while impressions is hidden"></div>`;
-    } else if (r.id === 'price') {
-      tgtCountCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><span style="font-size:11px;color:var(--tl)">$</span><input class="om-input" type="number" min="0" step="10" value="${t[r.tgtKey]||0}" onchange="omSave('${r.tgtKey}',this.value)"><span style="font-size:10px;color:var(--tl)">/yr</span></div>`;
-    } else if (r.id === 'upsell') {
-      tgtCountCell = '<span style="color:var(--tl)">:</span>';
+    } else if (r.id === 'dealval') {
+      tgtCountCell = `<span style="font-weight:600;color:var(--gr)" title="${fmtDollar(avgDealVal)} × (1 + ${dealValTargetPct}%)">${fmtDollar(dealValTarget)}</span><div style="font-size:9px;color:var(--tl)">target avg deal</div>`;
     } else {
       tgtCountCell = `<span style="font-weight:600;color:var(--gr)">${prj!=null?prj.toLocaleString():':'}</span>`;
     }
 
     // ── Col 5: Target % (editable input) ────────────────────────────────────
-    // Stage 1, Price: no conversion %, show :
-    // Conv stages + upsell: editable % input
+    // Stage 1: no conversion %, show :
+    // Conv stages + deal value: editable % input (deal value allows >100%)
     let tgtPctCell;
-    if (r.id === 'leads' || r.id === 'price' || r.isEntry) {
+    if (r.id === 'leads' || r.isEntry) {
       tgtPctCell = '<span style="color:var(--tl)">:</span>';
     } else {
-      const step = r.id === 'upsell' ? (r.currStep||1) : 1;
-      tgtPctCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="100" step="${step}" value="${r.tgtPct||0}" onchange="omSave('${r.tgtKey}',this.value)"><span style="font-size:11px;color:var(--tl)">%</span></div>`;
+      const maxP = r.id === 'dealval' ? 500 : 100;
+      tgtPctCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="${maxP}" step="1" value="${r.tgtPct||0}" onchange="omSave('${r.tgtKey}',this.value)"><span style="font-size:11px;color:var(--tl)">%</span></div>`;
     }
 
     // ── Col 6: Actual % Increase ─────────────────────────────────────────────
@@ -9076,10 +9067,8 @@ function renderPdOptimax(sc) {
       actualPct = totalImpressions > 0 ? +((t.leads_target - perMo(totalImpressions)) / perMo(totalImpressions) * 100).toFixed(1) : null;
     } else if (r.id === 'contact' && r.isEntry) {
       actualPct = currCnts[0] > 0 ? +((contactTarget - perMo(currCnts[0])) / perMo(currCnts[0]) * 100).toFixed(1) : null;
-    } else if (r.id === 'upsell') {
-      actualPct = +((t.upsell_pct_target||0) - (t.upsell_pct_curr||0)).toFixed(1);
-    } else if (r.id === 'price') {
-      actualPct = avgDealVal > 0 && (t.price_target||0) > 0 ? +((t.price_target - (t.price_curr||0)) / avgDealVal * 100).toFixed(1) : null;
+    } else if (r.id === 'dealval') {
+      actualPct = +(dealValTargetPct).toFixed(1);
     } else {
       // Absolute pp improvement in conversion rate (target% - current%)
       actualPct = (r.currPct != null && r.tgtPct != null) ? +((r.tgtPct||0) - r.currPct).toFixed(1) : null;
@@ -9096,8 +9085,8 @@ function renderPdOptimax(sc) {
     let cumulativePct;
     if (r.id === 'leads') {
       cumulativePct = actualPct;
-    } else if (r.id === 'upsell' || r.id === 'price') {
-      cumulativePct = null;
+    } else if (r.id === 'dealval') {
+      cumulativePct = null;   // a value multiplier, not part of the volume chain
     } else {
       const currBase = perMo(r.id === 'won' ? wonCurr : r.curr);   // per-month vs per-month projection
       cumulativePct = (currBase > 0 && prj != null) ? +((prj - currBase) / currBase * 100).toFixed(1) : null;
@@ -9124,7 +9113,7 @@ function renderPdOptimax(sc) {
     <tr style="background:#f0f7ff">
       <td>
         <div style="font-weight:600;color:var(--navy)">Total Revenue Per Month</div>
-        <div style="font-size:11px;color:var(--tl);margin-top:2px">Won ${unitLabel}/mo × avg deal value${showS4 ? ' × Stage 4 value uplift (upsell ×' + upliftUpsell.toFixed(2) + ' · price ×' + upliftPrice.toFixed(2) + ')' : ' · Stage 4 excluded'} · model projection</div>
+        <div style="font-size:11px;color:var(--tl);margin-top:2px">Won ${unitLabel}/mo × avg deal value${showS4 ? ' × Stage 4 uplift (+' + dealValTargetPct + '% deal value = ×' + valueUplift.toFixed(2) + ')' : ' · Stage 4 excluded'} · model projection</div>
       </td>
       <td style="text-align:right;font-weight:600">${fmtDollar(currRevMonth)}<span style="font-size:10px;color:var(--tl)">/mo</span></td>
       <td style="text-align:center;color:var(--tl)">→</td>
@@ -9181,7 +9170,7 @@ function renderPdOptimax(sc) {
         <button class="range-btn${showS4?' active':''}" onclick="${showS4?'':'omToggleS4()'}">Included</button>
         <button class="range-btn${!showS4?' active':''}" onclick="${showS4?'omToggleS4()':''}">Excluded</button>
       </div>
-      <span style="font-size:11px;color:var(--tl)">${showS4 ? 'upsell + price uplift feed Stage 5' : 'hidden and left out of Stage 5 / projections'}</span>
+      <span style="font-size:11px;color:var(--tl)">${showS4 ? 'deal-value uplift feeds Stage 5' : 'hidden and left out of Stage 5 / projections'}</span>
       </div>
       ${isLic ? `<span style="font-size:11px;color:var(--tl)">Licences = Product quantity where recorded, else deal value ÷ ${licCostFromData ? '<b>'+fmtDollar(avgLicWonCost)+'</b> (real avg from data)' : 'fallback price below'}</span>
         ${licCostFromData ? '' : `<div style="display:flex;align-items:center;gap:4px;margin-left:8px">
@@ -9247,6 +9236,19 @@ function renderPdOptimax(sc) {
       </tr>`).join('')}</tbody>
     </table>
     <div style="font-size:10.5px;color:var(--tl);margin-top:6px">"All-time total" ÷ ${omMonoMonths.length} months = "Avg / month", which is exactly the Current # per month shown in the model above · "This month" is the current (partial) month.</div>` : '<div class="no-data">No dated deals in the 2026 Sales pipeline yet.</div>'}
+  </div>
+
+  <!-- Average deal value by month (Stage 4 indicator) -->
+  <div class="box">
+    <div class="box-title">Average deal value by month ${infoBtn('Average deal value by month',
+      '<span class="src-tag">Pipedrive · Won Deals</span><br>Average Deal Value of the deals won each month (by Won time).<br><div class="calc-row">SUM(Deal Value of won deals in month) ÷ count</div>Baseline (amber) is the all-time average, ' + fmtDollar(avgDealVal) + '. Target (green) is +' + dealValTargetPct + '% = ' + fmtDollar(dealValTarget) + ', set in the Stage 4 row. Lift it by selling more licences per deal and reducing discounts.')}
+      <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">won deals · by close month</span>
+    </div>
+    <p style="font-size:12px;color:var(--tm);margin:0 0 12px;line-height:1.5">
+      Baseline <strong>${fmtDollar(avgDealVal)}</strong> (amber dashed) · Stage 4 target <strong style="color:var(--gr)">${fmtDollar(dealValTarget)}</strong> = +${dealValTargetPct}% (green dashed).
+      Grow this with more licences per deal and fewer public-sector discounts.
+    </p>
+    ${omMonoMonths.length ? `<div class="chart-wrap" style="height:220px"><canvas id="pd-om-dealval"></canvas></div>` : '<div class="no-data">No won deals with dates yet.</div>'}
   </div>
 
   <!-- Revenue projection chart -->
@@ -9369,6 +9371,21 @@ function renderPdOptimax(sc) {
           }
         }
       });
+    });
+
+    // Average deal value by month, with baseline + Stage 4 target lines
+    makeChart('pd-om-dealval', {
+      type: 'bar',
+      data: { labels: monoLabels, datasets: [
+        { type: 'bar', label: 'Avg deal value', data: omDealValByMonth, backgroundColor: '#1a3c5e', borderRadius: 2 },
+        { type: 'line', label: 'Baseline (' + fmtDollar(avgDealVal) + ')', data: monoLabels.map(() => avgDealVal), borderColor: '#8a5a00', borderDash: [4, 3], borderWidth: 1.3, pointRadius: 0, fill: false },
+        ...(showS4 ? [{ type: 'line', label: 'Target (+' + dealValTargetPct + '%)', data: monoLabels.map(() => dealValTarget), borderColor: '#2a7a4b', borderDash: [6, 4], borderWidth: 1.6, pointRadius: 0, fill: false }] : []),
+      ] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'DM Sans', size: 11 }, boxWidth: 12 } },
+          tooltip: { callbacks: { label: c => c.dataset.label.split(' (')[0] + ': ' + (c.parsed.y != null ? fmtDollar(c.parsed.y) : 'no wins') } } },
+        scales: { x: { grid: { display: false }, ticks: axStyle }, y: { grid: gridStyle, ticks: { ...axStyle, callback: v => fmtCur(v) }, beginAtZero: true } }
+      }
     });
   }
 }
