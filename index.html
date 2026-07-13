@@ -8677,6 +8677,8 @@ function renderPdOptimax(sc) {
     avg_lic_price: 8000,
     cycle_30d_target: 50,
     avg_cycle_target: 45,
+    show_imp: 1,            // Stage 0 (Total impressions) row visible?
+    contact_target: 0,      // monthly Contact Made target used as the projection base when impressions is hidden
   };
 
   function loadOM() { try { return {...OM_DEF,...JSON.parse(localStorage.getItem(OM_KEY)||'{}')}; } catch { return {...OM_DEF}; } }
@@ -8684,8 +8686,10 @@ function renderPdOptimax(sc) {
   window.omSave  = saveOM;
   window.omReset = () => { localStorage.removeItem(OM_KEY); renderPdOptimax(sc); };
   window.setOmView = (v) => { activeSub.om_view = v; renderPdOptimax(sc); };
+  window.omToggleImp = () => { const o=loadOM(); o.show_imp = o.show_imp!==0 ? 0 : 1; localStorage.setItem(OM_KEY,JSON.stringify(o)); renderPdOptimax(sc); };
   const t = loadOM();
   const omView = activeSub.om_view || 'deals';
+  const showImp = t.show_imp !== 0;   // false = hide impressions, funnel starts at Contact Made
 
   // ── Pipedrive actuals (all-time) ─────────────────────────────────────────
   const sDeals = _pd_deals.filter(d => d['Deal - Pipeline']==='2026 Sales');
@@ -8752,6 +8756,39 @@ function renderPdOptimax(sc) {
   const firstDealDt = sDeals.reduce((min,d)=>{const dt=pdParseDate(d['Deal - Deal created']);return pdValidDate(dt)&&(!min||dt<min)?dt:min;},null);
   const monthsElapsed = firstDealDt ? Math.max(1,(new Date()-firstDealDt)/(1000*60*60*24*30.44)) : 12;
 
+  // ── Month-by-month stage volumes: validate the per-month averages, monitor progress ──
+  // Bucketed by deal CREATION month. "Reached stage i" = current stage index ≥ i or Won,
+  // so this is a cohort view: recent months' later stages are still maturing.
+  const omMonoMonths = (() => {
+    const keys = new Set();
+    sDeals.forEach(d => { const dt = pdParseDate(d['Deal - Deal created']); if (pdValidDate(dt)) keys.add(monthKey(dt.toISOString())); });
+    const arr = [...keys].sort();
+    return arr.length > 15 ? arr.slice(-15) : arr;
+  })();
+  const omMonoLabel = mk => { const [y, m] = mk.split('-'); return new Date(+y, +m - 1, 1).toLocaleDateString('en-AU', { month: 'short', year: '2-digit' }); };
+  const omCreatedIn = mk => sDeals.filter(d => { const dt = pdParseDate(d['Deal - Deal created']); return pdValidDate(dt) && monthKey(dt.toISOString()) === mk; });
+  const omStageMonthly = idx => omMonoMonths.map(mk => omCreatedIn(mk).filter(d => reached(d, idx)).length);
+  const omWonMonthly = omMonoMonths.map(mk => omCreatedIn(mk).filter(d => d['Deal - Status'] === 'Won').length);
+  const omImpMonthly = omMonoMonths.map(mk => {
+    const w = _trk.filter(r => { const dd = new Date(r.week); return !isNaN(dd) && monthKey(dd.toISOString()) === mk; }).reduce((s, r) => s + (liImp(r) || 0), 0);
+    const c = _content.filter(x => { const dd = new Date(x.date || ''); return !isNaN(dd) && monthKey(dd.toISOString()) === mk; }).reduce((s, x) => s + (x.impressions || 0) + (x.ytviews || 0) + (x.vivaviews || 0) + (x.recipients || 0), 0);
+    return w + c;
+  });
+  const omMono = [
+    ...(showImp ? [{ key: 'imp', label: 'Total impressions', data: omImpMonthly, color: '#7b1fa2', isImp: true }] : []),
+    { key: 's0', label: 'Contact Made', data: omStageMonthly(0), color: '#2e8bc0' },
+    { key: 's1', label: 'Meetings Scheduled', data: omStageMonthly(1), color: '#1a6fa3' },
+    { key: 's2', label: 'Negotiations', data: omStageMonthly(2), color: '#c25a00' },
+    { key: 's3', label: 'Order Form Sent', data: omStageMonthly(3), color: '#8a5a00' },
+    { key: 's5', label: 'Invoice Sent', data: omStageMonthly(5), color: '#5a3a8a' },
+    { key: 'won', label: 'Won', data: omWonMonthly, color: '#2a7a4b' },
+  ].map(s => {
+    const total = s.data.reduce((a, b) => a + b, 0);
+    const avg = omMonoMonths.length ? total / omMonoMonths.length : 0;
+    return { ...s, total, avg, thisMonth: s.data[s.data.length - 1] ?? 0, lastMonth: s.data[s.data.length - 2] ?? 0 };
+  });
+  const omMonoR1 = v => Math.round(v * 10) / 10;
+
   // ── Decide which view to show ─────────────────────────────────────────────
   // Deals view: deal counts. Licences view: licence counts derived from deal value.
   const isLic   = omView === 'licences';
@@ -8763,20 +8800,27 @@ function renderPdOptimax(sc) {
   // ── OPTI-MAX model rows ──────────────────────────────────────────────────
   // NOTE: Invoice currPct uses Order Form Sent (index 3) as denominator: not Signed OFR (index 4)
   // This avoids the 100% bug from Signed OFR → Invoice being 41/41=100%.
+  // Contact Made target used when impressions is hidden (it becomes the funnel entry).
+  const contactTarget = (t.contact_target && t.contact_target > 0) ? t.contact_target : currCnts[0];
   const ROWS = [
-    { isHdr:true, label:'STAGE 1: INCREASE LEADS & DRIVE MORE TRAFFIC' },
-    { id:'leads',
+    { isHdr:true, label: showImp ? 'STAGE 1: INCREASE LEADS & DRIVE MORE TRAFFIC' : 'STAGE 1: LEADS INTO THE PIPELINE' },
+    ...(showImp ? [{ id:'leads',
       label:'Total impressions',
       desc:`${totalImpressions.toLocaleString()} marketing impressions logged · auto from content log + weekly tracker`,
       calc: '<span class="src-tag">Content log + Weekly Tracker</span><br>Total top-of-funnel reach across all logged marketing.<br><div class="calc-row">SUM(LinkedIn post impressions) + content-log (post impressions + YouTube views + Viva views + EDM recipients)</div>Content: ' + impContent.toLocaleString() + ' · LinkedIn: ' + impLinkedIn.toLocaleString() + '. Set the target impressions in the Target column.',
-      currEditable:false, tgtKey:'leads_target',
-      curr: totalImpressions, tgt: t.leads_target, currPct:null },
+      currEditable:false, tgtKey:'leads_target', isEntry:true,
+      curr: totalImpressions, tgt: t.leads_target, currPct:null }] : []),
     { id:'contact',
       label:'Contact Made / Discovery',
       desc:`${currCnts[0].toLocaleString()} ${unitLabel} entered the CRM since pipeline start · live from Pipedrive`,
-      calc: '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals that reached the Contact Made / Discovery stage or beyond.<br><div class="calc-row">Current % = Contact Made ' + unitLabel + ' ÷ Total impressions</div>',
-      currEditable:false, tgtKey:'contact_pct_target',
-      curr: currCnts[0], currPct: totalImpressions>0?pct(currCnts[0],totalImpressions):null, tgtPct: t.contact_pct_target },
+      calc: showImp
+        ? '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals that reached the Contact Made / Discovery stage or beyond.<br><div class="calc-row">Current % = Contact Made ' + unitLabel + ' ÷ Total impressions</div>'
+        : '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Top of the funnel: deals that reached Contact Made / Discovery or beyond. Impressions (Stage 0) are hidden, so this is the entry point and has no upstream conversion %.',
+      currEditable:false, isEntry: !showImp,
+      ...(showImp
+        ? { tgtKey:'contact_pct_target', currPct: totalImpressions>0?pct(currCnts[0],totalImpressions):null, tgtPct: t.contact_pct_target }
+        : { tgtKey:'contact_target', currPct: null }),
+      curr: currCnts[0] },
     { isHdr:true, label:'STAGE 2: INCREASE EFFECTIVENESS OF SALES PROCESS' },
     { id:'meeting',
       label:'Meetings Scheduled',
@@ -8836,7 +8880,7 @@ function renderPdOptimax(sc) {
   for (const r of ROWS) {
     if (r.isHdr) continue;
     if      (r.id==='leads')   { proj.leads   = t.leads_target;                                  prevProj=proj.leads; }
-    else if (r.id==='contact') { proj.contact = Math.round(prevProj*t.contact_pct_target/100);   prevProj=proj.contact; }
+    else if (r.id==='contact') { proj.contact = showImp ? Math.round(prevProj*t.contact_pct_target/100) : contactTarget; prevProj=proj.contact; }
     else if (r.id==='meeting') { proj.meeting = Math.round(prevProj*t.meeting_pct_target/100);   prevProj=proj.meeting; }
     else if (r.id==='neg')     { proj.neg     = Math.round(prevProj*t.neg_pct_target/100);       prevProj=proj.neg; }
     else if (r.id==='order')   { proj.order   = Math.round(prevProj*t.order_pct_target/100);     prevProj=proj.order; }
@@ -8850,7 +8894,7 @@ function renderPdOptimax(sc) {
   // ── Stage 5: Total Impact calculations ───────────────────────────────────
   // Per-stage uplifts (projected vs current, as %)
   const stageUpliftPairs = [
-    { curr: totalImpressions, prj: t.leads_target },
+    ...(showImp ? [{ curr: totalImpressions, prj: t.leads_target }] : []),
     { curr: currCnts[0],   prj: proj.contact },
     { curr: currCnts[1],   prj: proj.meeting },
     { curr: currCnts[2],   prj: proj.neg },
@@ -8911,10 +8955,10 @@ function renderPdOptimax(sc) {
     // Price: no %, show :
     // Conv stages: from Pipedrive actuals
     let currPctCell;
-    if (r.id === 'leads' || r.id === 'upsell' || r.id === 'price') {
-      currPctCell = '<span style="color:var(--tl)">:</span>';
+    if (r.id === 'leads' || r.id === 'upsell' || r.id === 'price' || r.isEntry) {
+      currPctCell = r.isEntry ? '<span style="color:var(--tl)" title="Entry point of the funnel: no upstream stage">entry</span>' : '<span style="color:var(--tl)">:</span>';
     } else {
-      const label = r.id === 'contact' ? '<div style="font-size:9px;color:var(--tl)">of impressions</div>' : '';
+      const label = (r.id === 'contact' && showImp) ? '<div style="font-size:9px;color:var(--tl)">of impressions</div>' : '';
       currPctCell = r.currPct!=null
         ? `<span class="conv-pct ${r.currPct>=70?'good':r.currPct>=40?'mid':'bad'}">${fmtPct(r.currPct)}</span>${label}`
         : ':';
@@ -8928,6 +8972,8 @@ function renderPdOptimax(sc) {
     let tgtCountCell;
     if (r.id === 'leads') {
       tgtCountCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input om-input-wide" type="number" min="0" step="1000" value="${t[r.tgtKey]||0}" onchange="omSave('${r.tgtKey}',this.value)"></div>`;
+    } else if (r.id === 'contact' && r.isEntry) {
+      tgtCountCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" step="1" value="${contactTarget}" onchange="omSave('contact_target',this.value)" title="Monthly Contact Made target: the projection base while impressions is hidden"></div>`;
     } else if (r.id === 'price') {
       tgtCountCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><span style="font-size:11px;color:var(--tl)">$</span><input class="om-input" type="number" min="0" step="10" value="${t[r.tgtKey]||0}" onchange="omSave('${r.tgtKey}',this.value)"><span style="font-size:10px;color:var(--tl)">/yr</span></div>`;
     } else if (r.id === 'upsell') {
@@ -8940,7 +8986,7 @@ function renderPdOptimax(sc) {
     // Stage 1, Price: no conversion %, show :
     // Conv stages + upsell: editable % input
     let tgtPctCell;
-    if (r.id === 'leads' || r.id === 'price') {
+    if (r.id === 'leads' || r.id === 'price' || r.isEntry) {
       tgtPctCell = '<span style="color:var(--tl)">:</span>';
     } else {
       const step = r.id === 'upsell' ? (r.currStep||1) : 1;
@@ -8955,6 +9001,8 @@ function renderPdOptimax(sc) {
     let actualPct;
     if (r.id === 'leads') {
       actualPct = totalImpressions > 0 ? +((t.leads_target - totalImpressions) / totalImpressions * 100).toFixed(1) : null;
+    } else if (r.id === 'contact' && r.isEntry) {
+      actualPct = currCnts[0] > 0 ? +((contactTarget - currCnts[0]) / currCnts[0] * 100).toFixed(1) : null;
     } else if (r.id === 'upsell') {
       actualPct = +((t.upsell_pct_target||0) - (t.upsell_pct_curr||0)).toFixed(1);
     } else if (r.id === 'price') {
@@ -9039,12 +9087,19 @@ function renderPdOptimax(sc) {
       <span style="color:var(--acc);font-weight:500">Blue input fields</span> are editable: projections update instantly.
     </p>
 
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
       <span style="font-size:12px;font-weight:500;color:var(--navy)">View as:</span>
       <div class="range-toggle">
         <button class="range-btn${!isLic?' active':''}" onclick="setOmView('deals')">Deals</button>
         <button class="range-btn${isLic?' active':''}" onclick="setOmView('licences')">Licences</button>
       </div>
+      <span style="width:1px;height:20px;background:var(--bd);margin:0 4px"></span>
+      <span style="font-size:12px;font-weight:500;color:var(--navy)">Stage 0 (impressions):</span>
+      <div class="range-toggle">
+        <button class="range-btn${showImp?' active':''}" onclick="${showImp?'':'omToggleImp()'}">Shown</button>
+        <button class="range-btn${!showImp?' active':''}" onclick="${showImp?'omToggleImp()':''}">Hidden</button>
+      </div>
+      <span style="font-size:11px;color:var(--tl)">${showImp ? 'funnel starts at Total impressions' : 'funnel starts at Contact Made · impressions hidden while the data is verified'}</span>
       ${isLic ? `<span style="font-size:11px;color:var(--tl)">Licences = Product quantity where recorded, else deal value ÷ ${licCostFromData ? '<b>'+fmtDollar(avgLicWonCost)+'</b> (real avg from data)' : 'fallback price below'}</span>
         ${licCostFromData ? '' : `<div style="display:flex;align-items:center;gap:4px;margin-left:8px">
           <span style="font-size:11px;color:var(--tl)">Fallback lic price: $</span>
@@ -9080,6 +9135,35 @@ function renderPdOptimax(sc) {
     <div style="margin-top:14px">
       <button class="btn-cancel" onclick="omReset()">↺ Reset all to defaults</button>
     </div>
+  </div>
+
+  <!-- Month-by-month stage volumes -->
+  <div class="box">
+    <div class="box-title">Stage volume, month by month ${infoBtn('Stage volume, month by month',
+      '<span class="src-tag">Pipedrive · 2026 Sales</span><br>For each funnel stage, the number of deals per month that reached that stage or beyond, bucketed by the month the deal was <b>created</b>.<br><div class="calc-row">count(deals created in month · reached stage ≥ i)</div>It is a cohort view: deals created in recent months have not had time to progress, so later stages read low for the newest months. Sums across months equal the all-time totals in the table above, so the dashed line is the true average per month you can validate against.')}
+      <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">by deal creation month · last ${omMonoMonths.length} months</span>
+    </div>
+    <p style="font-size:12px;color:var(--tm);margin:0 0 12px;line-height:1.5">
+      One chart per stage so you can see real month-on-month movement and check the average (dashed red line) is right.
+      Bucketed by the month each deal was <strong>created</strong>: a cohort view, so the newest months' later stages are still maturing.
+    </p>
+    ${omMonoMonths.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px">
+      ${omMono.map(s => `<div>
+        <div style="font-size:12px;font-weight:600;color:${s.color}">${s.label}<span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:6px">avg ${s.isImp ? fmtNum(Math.round(s.avg)) : omMonoR1(s.avg)}/mo</span></div>
+        <div class="chart-wrap" style="height:120px"><canvas id="pd-om-mono-${s.key}"></canvas></div>
+      </div>`).join('')}
+    </div>
+    <div style="overflow-x:auto;margin-top:16px"><table class="conv-table">
+      <thead><tr><th>Stage</th><th style="text-align:right">All-time total</th><th style="text-align:right">Avg / month</th><th style="text-align:right">This month</th><th style="text-align:right">Last month</th></tr></thead>
+      <tbody>${omMono.map(s => `<tr>
+        <td><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${s.color};margin-right:6px"></span>${s.label}</td>
+        <td style="text-align:right;font-weight:600">${s.isImp ? fmtNum(s.total) : s.total.toLocaleString()}</td>
+        <td style="text-align:right">${s.isImp ? fmtNum(Math.round(s.avg)) : omMonoR1(s.avg)}</td>
+        <td style="text-align:right">${s.isImp ? fmtNum(s.thisMonth) : s.thisMonth}</td>
+        <td style="text-align:right;color:var(--tl)">${s.isImp ? fmtNum(s.lastMonth) : s.lastMonth}</td>
+      </tr>`).join('')}</tbody>
+    </table>
+    <div style="font-size:10.5px;color:var(--tl);margin-top:6px">"All-time total" matches the Current # column in the model above · "This month" is the current (partial) month.</div>` : '<div class="no-data">No dated deals in the 2026 Sales pipeline yet.</div>'}
   </div>
 
   <!-- Revenue projection chart -->
@@ -9183,6 +9267,27 @@ function renderPdOptimax(sc) {
       scales:{ x:{ grid:gridStyle, ticks:{...axStyle,callback:v=>v+'d'}, min:0, max:Math.ceil(maxCB) }, y:{grid:{display:false},ticks:axStyle} }
     }
   });
+
+  // Month-by-month per-stage mini charts (one per stage) with the average line
+  if (omMonoMonths.length) {
+    const monoLabels = omMonoMonths.map(omMonoLabel);
+    omMono.forEach(s => {
+      makeChart('pd-om-mono-' + s.key, {
+        type: 'bar',
+        data: { labels: monoLabels, datasets: [
+          { type: 'bar', label: s.label, data: s.data, backgroundColor: s.color, borderRadius: 2 },
+          { type: 'line', label: 'avg', data: s.data.map(() => s.avg), borderColor: '#c0392b', borderDash: [4, 3], borderWidth: 1.3, pointRadius: 0, fill: false },
+        ] },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => c.dataset.type === 'line' ? 'avg ' + omMonoR1(s.avg) : s.label + ': ' + fmtNum(c.parsed.y) } } },
+          scales: {
+            x: { grid: { display: false }, ticks: { ...axStyle, maxRotation: 0, autoSkip: true, maxTicksLimit: 6, font: { family: 'DM Sans', size: 9 } } },
+            y: { grid: gridStyle, ticks: { ...axStyle, precision: 0, maxTicksLimit: 4, font: { family: 'DM Sans', size: 9 } }, beginAtZero: true }
+          }
+        }
+      });
+    });
+  }
 }
 
 // ── CUSTOMER HEALTH SCORE ─────────────────────────────────────────────────────
