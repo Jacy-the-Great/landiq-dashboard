@@ -7405,7 +7405,9 @@ function renderPdSales(sc) {
     if (d['Deal - Status'] === 'Won') return true;
     let stg = d['Deal - Stage'] || '';
     if (stg === 'Contact Made') stg = 'Contact Made/Discovery';
-    const di = funnelSIdx[stg]; return di != null && di >= idx;
+    const di = funnelSIdx[stg];
+    if (di != null) return di >= idx;
+    return idx === 0;   // Lost/unknown stage: the deal still entered the pipeline (reached Contact Made)
   }
   // Use deals created in current range for funnel
   const funnelDeals = salesDeals.filter(d =>
@@ -8744,9 +8746,16 @@ function renderPdOptimax(sc) {
   function reached(d, idx) {
     if (d['Deal - Status']==='Won') return true;
     let stg=d['Deal - Stage']||''; if(stg==='Contact Made')stg='Contact Made/Discovery';
-    const di=fsIdx[stg]; return di!=null&&di>=idx;
+    const di=fsIdx[stg];
+    if (di!=null) return di>=idx;
+    return idx===0;   // Lost/unknown stage: the deal still entered the pipeline (reached Contact Made)
   }
   const fCnts  = FSALL.map((_,i) => sDeals.filter(d=>reached(d,i)).length);
+  // Lost deals in this pipeline: the CSV export only carries their CURRENT stage
+  // ("Closed Lost"), so their reached-stage history is not available — they can
+  // only be counted at entry. Pipedrive's live funnel places each at its furthest
+  // reached stage, so its intermediate stages read higher than here.
+  const lostCnt = sDeals.filter(d => d['Deal - Status']==='Lost').length;
   const fRates = FSALL.map((_,i) => i===0?null:(fCnts[i-1]>0?pct(fCnts[i],fCnts[i-1]):null));
   const wonAll = sDeals.filter(d=>d['Deal - Status']==='Won');
 
@@ -9148,6 +9157,9 @@ function renderPdOptimax(sc) {
       Every figure is per month: Current # is the monthly average over the ${monthsElapsed} months since the first deal (hover for the all-time count, shown underneath).
       Conversion %s are live from Pipedrive. <span style="color:var(--acc);font-weight:500">Blue input fields</span> are editable: projections update instantly.
     </p>
+    ${lostCnt ? `<div class="callout" style="background:#fdf6e9;border:1px solid #f0d9a8;margin-bottom:12px"><div style="font-size:11.5px;color:#8a5a00;line-height:1.5">
+      <b>Reconciling with Pipedrive:</b> this pipeline has <b>${fCnts[0]}</b> deals in total (${wonAll.length} won · ${sDeals.filter(d=>d['Deal - Status']==='Open').length} open · ${lostCnt} lost), which matches Pipedrive's "reached Contact Made". Pipedrive's Conversion report uses each deal's full <b>stage-change history</b>, so it places a lost deal at the furthest stage it reached. This CSV export only carries each deal's <b>current</b> stage, and a lost deal's stage is just "Closed Lost" — so the ${lostCnt} lost deals are counted at entry only, and the intermediate stages here read <b>lower than Pipedrive by up to ${lostCnt}</b>. Won and open counts match. Overall win rate (Won ÷ entered = ${fmtPct(pct(wonAll.length, fCnts[0]))}) matches Pipedrive.
+    </div></div>` : ''}
 
     <div style="background:var(--acc2);border:1px solid #cfe3f0;border-radius:8px;padding:10px 14px;margin-bottom:16px">
       <div style="font-size:10.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--acc);margin-bottom:8px">Display options</div>
