@@ -1014,6 +1014,27 @@ function injectFlags(root) {
     el.appendChild(eye);
     if (isHidden && el.parentElement) el.parentElement.classList.add('metric-hidden');
   });
+
+  // Sub-tab hide toggles: every .sub-tab button (any tab) gets a review-mode
+  // toggle so a whole sub-tab (e.g. Health Score) can be curated out of the
+  // everyday view. Idempotent: skips buttons already wrapped.
+  root.querySelectorAll('.sub-tabs .sub-tab').forEach(btn => {
+    if (btn.parentElement && btn.parentElement.hasAttribute('data-hide-container')) return;
+    const hk = subHideKey(activeTab, btn.textContent);
+    const hidden = !!_hiddenMetrics[hk];
+    const wrap = document.createElement('span');
+    wrap.setAttribute('data-hide-container', '');
+    wrap.className = hidden ? 'metric-hidden' : '';
+    wrap.style.cssText = 'display:inline-flex;align-items:center';
+    btn.replaceWith(wrap);
+    wrap.appendChild(btn);
+    const eye = document.createElement('span');
+    eye.className = 'hide-toggle';
+    eye.dataset.hk = hk;
+    eye.textContent = hidden ? 'show' : 'hide';
+    eye.title = hidden ? 'Sub-tab hidden from the everyday view: click to show' : 'Hide this whole sub-tab from the everyday view';
+    wrap.appendChild(eye);
+  });
 }
 
 document.addEventListener('click', e => {
@@ -1037,7 +1058,9 @@ document.addEventListener('click', e => {
   const k = eye.dataset.hk;
   if (_hiddenMetrics[k]) delete _hiddenMetrics[k]; else _hiddenMetrics[k] = 1;
   const nowHidden = !!_hiddenMetrics[k];
-  const container = eye.parentElement && eye.parentElement.parentElement;  // title → container
+  // Container to hide: an explicit [data-hide-container] wrapper (nav tabs,
+  // sub-tabs) wins; else the default title → container two-hop.
+  const container = eye.closest('[data-hide-container]') || (eye.parentElement && eye.parentElement.parentElement);
   if (container) container.classList.toggle('metric-hidden', nowHidden);
   eye.textContent = nowHidden ? 'show' : 'hide';
   eye.title = nowHidden ? 'Hidden from the everyday view: click to show' : 'Click to hide this from the everyday view';
@@ -1218,11 +1241,20 @@ const TABS = [
 let activeTab = 'home';
 let activeSub = {};
 
+// Stable (not tab-scoped) hide keys for whole tabs and sub-tabs
+const navHideKey = id => 'nav|' + id;
+const subHideKey = (tab, label) => 'subtab|' + tab + '|' + String(label).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
 function buildNav() {
   const nav = document.getElementById('main-nav');
-  nav.innerHTML = TABS.map(t =>
-    `<button class="nav-btn${t.id === activeTab ? ' active' : ''}" onclick="switchTab('${t.id}')">${t.label}</button>`
-  ).join('');
+  nav.innerHTML = TABS.map(t => {
+    const hk = navHideKey(t.id);
+    const hidden = !!_hiddenMetrics[hk];
+    return `<span data-hide-container class="${hidden ? 'metric-hidden' : ''}" style="display:inline-flex;align-items:center">
+      <button class="nav-btn${t.id === activeTab ? ' active' : ''}" onclick="switchTab('${t.id}')">${t.label}</button>
+      <span class="hide-toggle" data-hk="${hk}" title="${hidden ? 'Tab hidden from the everyday view: click to show' : 'Hide this whole tab from the everyday view'}">${hidden ? 'show' : 'hide'}</span>
+    </span>`;
+  }).join('');
 }
 
 function switchTab(id) {
@@ -1232,6 +1264,11 @@ function switchTab(id) {
 }
 
 function renderTab(id) {
+  // A hidden tab shouldn't stay on screen outside review mode (e.g. hide Training
+  // while viewing it, then leave review mode) — bounce to Home.
+  if (!_reviewMode && id !== 'home' && _hiddenMetrics[navHideKey(id)]) {
+    activeTab = 'home'; id = 'home'; buildNav();
+  }
   const mc = document.getElementById('main-content');
   destroyAllCharts();
   const renderers = { home: renderHome, workstreams: renderWorkstreams, exec: renderExec, pipedrive: renderPipedrive, team: renderTeam, training: renderTraining, marketing: renderMarketing, tracker: renderWeeklyTracker, activity: renderActivity };
@@ -6553,7 +6590,14 @@ function renderTeam(el) {
 
 function renderPipedrive(el) {
   el = el || document.getElementById('main-content');
-  const sub = activeSub.pd_sub || 'sales';
+  const PD_SUB_LABELS = { import: 'Import Data', revenue: 'Revenue', sales: 'Sales', users: 'Users & Licences', churn: 'Churn', trials: 'Trial Pipeline', optimax: 'OPTI-MAX', health: 'Health Score' };
+  let sub = activeSub.pd_sub || 'sales';
+  // A hidden sub-tab shouldn't stay on screen outside review mode: fall back to
+  // the first visible one.
+  if (!_reviewMode && _hiddenMetrics[subHideKey('pipedrive', PD_SUB_LABELS[sub])]) {
+    sub = ['revenue','sales','users','churn','trials','optimax','health','import'].find(s => !_hiddenMetrics[subHideKey('pipedrive', PD_SUB_LABELS[s])]) || 'sales';
+    activeSub.pd_sub = sub;
+  }
   const range = pdGetRange();
 
   // Pipeline toggle state
@@ -9116,26 +9160,29 @@ function renderPdOptimax(sc) {
       Conversion %s are live from Pipedrive. <span style="color:var(--acc);font-weight:500">Blue input fields</span> are editable: projections update instantly.
     </p>
 
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-      <span style="font-size:12px;font-weight:500;color:var(--navy)">View as:</span>
+    <div style="background:var(--acc2);border:1px solid #cfe3f0;border-radius:8px;padding:10px 14px;margin-bottom:16px">
+      <div style="font-size:10.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--acc);margin-bottom:8px">Display options</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;row-gap:8px">
+      <span style="font-size:12px;font-weight:600;color:var(--navy)">View as:</span>
       <div class="range-toggle">
         <button class="range-btn${!isLic?' active':''}" onclick="setOmView('deals')">Deals</button>
         <button class="range-btn${isLic?' active':''}" onclick="setOmView('licences')">Licences</button>
       </div>
       <span style="width:1px;height:20px;background:var(--bd);margin:0 4px"></span>
-      <span style="font-size:12px;font-weight:500;color:var(--navy)">Stage 0 (impressions):</span>
+      <span style="font-size:12px;font-weight:600;color:var(--navy)">Stage 0 · Total impressions:</span>
       <div class="range-toggle">
         <button class="range-btn${showImp?' active':''}" onclick="${showImp?'':'omToggleImp()'}">Shown</button>
         <button class="range-btn${!showImp?' active':''}" onclick="${showImp?'omToggleImp()':''}">Hidden</button>
       </div>
-      <span style="font-size:11px;color:var(--tl)">${showImp ? 'funnel starts at Total impressions' : 'funnel starts at Contact Made · impressions hidden while the data is verified'}</span>
+      <span style="font-size:11px;color:var(--tl)">${showImp ? 'funnel starts at Total impressions' : 'funnel starts at Contact Made · impressions parked while the data is verified'}</span>
       <span style="width:1px;height:20px;background:var(--bd);margin:0 4px"></span>
-      <span style="font-size:12px;font-weight:500;color:var(--navy)">Stage 4 (transaction value):</span>
+      <span style="font-size:12px;font-weight:600;color:var(--navy)">Stage 4 · transaction value:</span>
       <div class="range-toggle">
         <button class="range-btn${showS4?' active':''}" onclick="${showS4?'':'omToggleS4()'}">Included</button>
         <button class="range-btn${!showS4?' active':''}" onclick="${showS4?'omToggleS4()':''}">Excluded</button>
       </div>
-      <span style="font-size:11px;color:var(--tl)">${showS4 ? 'upsell + price uplift feed Stage 5' : 'Stage 4 hidden and left out of Stage 5 / projections'}</span>
+      <span style="font-size:11px;color:var(--tl)">${showS4 ? 'upsell + price uplift feed Stage 5' : 'hidden and left out of Stage 5 / projections'}</span>
+      </div>
       ${isLic ? `<span style="font-size:11px;color:var(--tl)">Licences = Product quantity where recorded, else deal value ÷ ${licCostFromData ? '<b>'+fmtDollar(avgLicWonCost)+'</b> (real avg from data)' : 'fallback price below'}</span>
         ${licCostFromData ? '' : `<div style="display:flex;align-items:center;gap:4px;margin-left:8px">
           <span style="font-size:11px;color:var(--tl)">Fallback lic price: $</span>
