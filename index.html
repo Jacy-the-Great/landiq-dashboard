@@ -5302,6 +5302,7 @@ function importTrackerCSV(input) {
           'open rate':               'wbEmailOpen',
           'click through rate':      'wbEmailCtr',
           'click-through rate':      'wbEmailCtr',
+          'click rate':              'wbEmailCtr',
           'ctr':                     'wbEmailCtr',
           'event registration page': 'wbRegPage',
           'registration page':       'wbRegPage',
@@ -5355,6 +5356,10 @@ function importTrackerCSV(input) {
         // excluding the "... Post Impressions" rows.
         const _ln = label.toLowerCase().replace(/\s+/g, ' ').trim();
         if (/\bposts?\b/.test(_ln) && !_ln.includes('impression')) {
+          // The row may ALSO name a section (e.g. "LinkedIn Posts per Week" doubles
+          // as the LinkedIn header). Set the section first, so the impression rows
+          // that follow aren't orphaned when this row short-circuits below.
+          const sec0 = detectSection(label); if (sec0) currentSection = sec0;
           for (let c = 1; c < row.length; c++) {
             const dk = dateKeys[c - 1]; if (!dk) continue;
             const raw = String(row[c] || '').trim().replace(/%/g, '').replace(/,/g, '');
@@ -5554,7 +5559,17 @@ function saveContent() {
 // ─────────────────────────────────────────
 // PIPEDRIVE TAB
 // ─────────────────────────────────────────
-const pdParseDate = s => (s && s.trim()) ? new Date(s) : null;
+const pdParseDate = s => {
+  if (!s || !String(s).trim()) return null;
+  const str = String(s).trim();
+  // Pipedrive exports "YYYY-MM-DD HH:MM:SS" (space, not ISO 'T'). Chrome/V8 parses
+  // that, but Safari/Firefox return Invalid Date, which would silently drop EVERY
+  // deal from every time bucket. Normalise the space to 'T' (still local time), and
+  // fall back to the raw string for any other format.
+  let d = new Date(str.replace(' ', 'T'));
+  if (isNaN(d.getTime())) d = new Date(str);
+  return d;
+};
 const pdValidDate = d => d && !isNaN(d.getTime());
 const isTrialType = s => !!(s && s.toLowerCase().includes('trial'));
 const pd12Months = () => {
@@ -6086,7 +6101,13 @@ function wsAuto(key, qr) {
       return { num: won / (won + lost) * 100, disp: fmtPct(won / (won + lost) * 100), sub: won + ' won / ' + lost + ' lost · ' + qr.label };
     }
     case 'net_new_seats': {
-      const added = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription' && inQ(p['Person - Date Access Granted'])).length;
+      // "added" counts anyone GRANTED paid access in the quarter, even if they have
+      // since churned (now Access Revoked) — otherwise a seat granted-and-lost in
+      // the same quarter is subtracted (churn side) without ever being added.
+      const added = _pd_people.filter(p =>
+        (p['Person - Customer Type'] === 'Paid Subscription' ||
+         (p['Person - Customer Type'] === 'Access Revoked' && (p['Person - Previous Customer Type'] || '').includes('Paid Subscription')))
+        && inQ(p['Person - Date Access Granted'])).length;
       const churned = _pd_people.filter(p => p['Person - Customer Type'] === 'Access Revoked'
         && (p['Person - Previous Customer Type'] || '').includes('Paid Subscription') && inQ(p['Person - Date Access Removed'])).length;
       return { num: added - churned, disp: (added - churned >= 0 ? '+' : '') + (added - churned), sub: added + ' added − ' + churned + ' churned · ' + qr.label };
@@ -7376,13 +7397,19 @@ function renderPdSales(sc) {
   wonDeals.forEach(d => { const o = d['Deal - Owner'] || 'Unknown'; ownerPerf[o] = (ownerPerf[o] || 0) + 1; });
 
   // Pipeline snapshot: all statuses per stage (current state, not range-filtered)
-  const SALES_STAGES = ['Contact Made/Discovery','Meeting Scheduled','Negotiations','Order Form Sent','Signed Order Form Returned','Invoice Sent','Payment Received','Closed Lost'];
+  // Stage list is DYNAMIC: canonical 2026-Sales stages first (in order), then any
+  // other stage actually present in the selected pipeline(s). Previously this was a
+  // hardcoded 2026-Sales list, so under "All pipelines" every deal in a stage from
+  // another pipeline (Cold Outreach, Onboarding, Renewals…) was silently dropped.
+  const CANON_STAGES = ['Contact Made/Discovery','Meeting Scheduled','Negotiations','Order Form Sent','Signed Order Form Returned','Invoice Sent','Payment Received','Closed Lost'];
+  const _normStage = d => { let st = d['Deal - Stage'] || ''; return st === 'Contact Made' ? 'Contact Made/Discovery' : st; };
+  const _presentStages = [...new Set(salesDeals.map(_normStage).filter(Boolean))];
+  const SALES_STAGES = [...CANON_STAGES.filter(s => _presentStages.includes(s)), ..._presentStages.filter(s => !CANON_STAGES.includes(s))];
   const stageByStatus = { open: {}, won: {}, lost: {} };
   SALES_STAGES.forEach(s => { stageByStatus.open[s]=0; stageByStatus.won[s]=0; stageByStatus.lost[s]=0; });
   salesDeals.forEach(d => {
-    let st = d['Deal - Stage'] || '';
-    if (st === 'Contact Made') st = 'Contact Made/Discovery';
-    if (!SALES_STAGES.includes(st)) return;
+    const st = _normStage(d);
+    if (!stageByStatus.open.hasOwnProperty(st)) return;   // no stage → nothing to place (blank only)
     const status = (d['Deal - Status'] || '').toLowerCase();
     if (stageByStatus[status]) stageByStatus[status][st]++;
   });
@@ -7409,9 +7436,13 @@ function renderPdSales(sc) {
     if (di != null) return di >= idx;
     return idx === 0;   // Lost/unknown stage: the deal still entered the pipeline (reached Contact Made)
   }
-  // Use deals created in current range for funnel
-  const funnelDeals = salesDeals.filter(d =>
-    range.from ? pdInRange(d['Deal - Deal created'], range) : true
+  // The funnel uses the 2026-Sales stage names, so it is ALWAYS computed on the
+  // 2026 Sales pipeline regardless of the pipeline toggle. Under "All pipelines"
+  // the old code mixed in Cold Outreach / Trial / Onboarding deals (whose stages
+  // aren't funnel stages), which dumped them all into the entry via the lost-deal
+  // fallback and produced a meaningless 16% first step.
+  const funnelDeals = _pd_deals.filter(d => d['Deal - Pipeline'] === '2026 Sales' &&
+    (range.from ? pdInRange(d['Deal - Deal created'], range) : true)
   );
   const funnelCnts  = FUNNEL_S.map((_,i) => funnelDeals.filter(d => dealReachedS(d,i)).length);
   const funnelRates = FUNNEL_S.map((_,i) =>
@@ -7617,7 +7648,7 @@ function renderPdSales(sc) {
       <div class="chart-wrap" style="height:${SALES_STAGES.length * 38 + 60}px"><canvas id="pd-stage-snap"></canvas></div></div>
 
     <div class="box" style="margin-top:14px">
-      <div class="box-title">Sales conversion funnel: ${range.label}
+      <div class="box-title">Sales conversion funnel: ${range.label} <span style="font-size:11px;font-weight:400;color:var(--tl)">· always 2026 Sales pipeline</span>
         <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">"Reached stage" · deals created in period · overall conversion: ${funnelOvr!=null?fmtPct(funnelOvr):':'}</span>
       </div>
       <div class="chart-wrap" style="height:260px"><canvas id="pd-funnel"></canvas></div>
@@ -8240,6 +8271,13 @@ function renderPdUsers(sc) {
   // Paid Subscription people only
   const paidPeople = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
   const activePaid = paidPeople.filter(isActive);
+  // People who were EVER paid: current paid OR churned-from-paid (now Access Revoked,
+  // previous type still includes "Paid Subscription"). Used for the HISTORICAL
+  // time-series so a subscriber who has since churned still counts in the months
+  // they were active — matching the Churn tab, which already does this.
+  const paidEver = _pd_people.filter(p =>
+    p['Person - Customer Type'] === 'Paid Subscription' ||
+    (p['Person - Customer Type'] === 'Access Revoked' && (p['Person - Previous Customer Type'] || '').includes('Paid Subscription')));
 
   // ── RENEWALS COMING UP (#3) ────────────────────────────────────────────────
   // Assumes yearly contracts: next renewal = next anniversary of access-granted date.
@@ -8304,7 +8342,7 @@ function renderPdUsers(sc) {
   // Find all months from earliest access granted to today
   const allPaidMonths = (() => {
     let earliest = null;
-    paidPeople.forEach(p => {
+    paidEver.forEach(p => {
       const d = pdParseDate(p['Person - Date Access Granted']);
       if (pdValidDate(d) && (!earliest || d < earliest)) earliest = d;
     });
@@ -8321,7 +8359,7 @@ function renderPdUsers(sc) {
   const activeAtMonth = allPaidMonths.map(m => {
     const [yr, mo] = m.split('-').map(Number);
     const monthEnd = new Date(yr, mo, 0, 23, 59, 59); // last moment of last day
-    return paidPeople.filter(p => {
+    return paidEver.filter(p => {
       const granted = pdParseDate(p['Person - Date Access Granted']);
       if (!pdValidDate(granted) || granted > monthEnd) return false;
       const removed = pdParseDate(p['Person - Date Access Removed']);
@@ -8339,9 +8377,9 @@ function renderPdUsers(sc) {
   activePaid.forEach(p => { const o=p['Person - Organisation']; if(o&&o.trim()) orgs[o]=(orgs[o]||0)+1; });
   const topOrgs = Object.entries(orgs).sort((a,b)=>b[1]-a[1]).slice(0,15);
 
-  // Chart 14: New paid subscribers by month: range-filtered
+  // Chart 14: New paid subscribers by month: range-filtered (includes since-churned)
   const newByMonth = {};
-  paidPeople.forEach(p => {
+  paidEver.forEach(p => {
     const dt = pdParseDate(p['Person - Date Access Granted']);
     if (!pdValidDate(dt)) return;
     if (!pdInRange(p['Person - Date Access Granted'], range)) return;
@@ -8349,9 +8387,11 @@ function renderPdUsers(sc) {
     newByMonth[k] = (newByMonth[k]||0)+1;
   });
 
-  // Chart 15: Access end dates: range-filtered
+  // Chart 15: Access end dates: range-filtered. MUST use paidEver — a subscriber
+  // whose access actually ended is now Access Revoked, so iterating current-paid
+  // only would exclude the very people this chart is about.
   const revokedByMonth = {};
-  paidPeople.forEach(p => {
+  paidEver.forEach(p => {
     const dt = pdParseDate(p['Person - Date Access Removed']);
     if (!pdValidDate(dt)) return;
     if (!pdInRange(p['Person - Date Access Removed'], range)) return;
