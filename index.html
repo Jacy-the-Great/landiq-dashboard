@@ -8765,11 +8765,13 @@ function renderPdOptimax(sc) {
     show_imp: 1,            // Stage 0 (Total impressions) row visible?
     contact_target: 0,      // monthly Contact Made target used as the projection base when impressions is hidden
     show_s4: 1,             // Stage 4 (increase average deal value) included?
+    avg_from: '2025-11',    // effective pipeline start for per-month averaging (YYYY-MM)
   };
 
   function loadOM() { try { return {...OM_DEF,...JSON.parse(localStorage.getItem(OM_KEY)||'{}')}; } catch { return {...OM_DEF}; } }
   function saveOM(k, v) { const o=loadOM(); o[k]=parseFloat(v)||0; localStorage.setItem(OM_KEY,JSON.stringify(o)); renderPdOptimax(sc); }
   window.omSave  = saveOM;
+  window.omSaveStr = (k, v) => { const o = loadOM(); o[k] = v; localStorage.setItem(OM_KEY, JSON.stringify(o)); renderPdOptimax(sc); };   // string settings (e.g. avg_from)
   window.omReset = () => { localStorage.removeItem(OM_KEY); renderPdOptimax(sc); };
 
   // ── Authoritative "reached stage" counts from Pipedrive Insights ─────────────
@@ -8779,7 +8781,9 @@ function renderPdOptimax(sc) {
   // are entered here (seeded from that report) and drive the funnel so it matches
   // Pipedrive exactly. Update them when you refresh from Pipedrive.
   const FA_KEY = 'liq_funnel_actual';
-  const FA_DEF = { asOf: '2026-07-13', contact: 103, meeting: 90, neg: 84, order: 75, signed: 69, invoice: 69, won: 53, on: 1 };
+  // Seeded from Pipedrive Insights → Conversion, filtered to 2026 Sales · Past 6 months.
+  // A fixed rolling window means the per-month average is simply "counts ÷ window".
+  const FA_DEF = { asOf: '2026-07-14', windowMonths: 6, contact: 50, meeting: 44, neg: 39, order: 31, signed: 27, invoice: 27, won: 17, on: 1 };
   const loadFA = () => { try { return { ...FA_DEF, ...JSON.parse(localStorage.getItem(FA_KEY) || '{}') }; } catch { return { ...FA_DEF }; } };
   window.omSaveFA = (k, v) => { const o = loadFA(); o[k] = (k === 'asOf') ? v : (k === 'on' ? (v ? 1 : 0) : (parseFloat(v) || 0)); localStorage.setItem(FA_KEY, JSON.stringify(o)); renderPdOptimax(sc); };
   window.omToggleFA = () => { const o = loadFA(); o.on = o.on ? 0 : 1; localStorage.setItem(FA_KEY, JSON.stringify(o)); renderPdOptimax(sc); };
@@ -8863,15 +8867,23 @@ function renderPdOptimax(sc) {
   const w30Cnt     = cycleDays.filter(d=>d<=30).length;
   const w30Pct     = cycleDays.length ? pct(w30Cnt,cycleDays.length) : null;
 
-  // First deal date for rate calc
+  // First deal date (for reference in the "average from" picker)
   const firstDealDt = sDeals.reduce((min,d)=>{const dt=pdParseDate(d['Deal - Deal created']);return pdValidDate(dt)&&(!min||dt<min)?dt:min;},null);
-  // Months of data = calendar months from the first deal's month through the current
-  // month, inclusive. ONE denominator everywhere (model + month-by-month charts) so
-  // the averages reconcile exactly. The current partial month counts, which slightly
-  // understates averages mid-month.
-  const monthsElapsed = firstDealDt ? Math.max(1, (new Date().getFullYear() - firstDealDt.getFullYear()) * 12 + (new Date().getMonth() - firstDealDt.getMonth()) + 1) : 12;
-  const perMo = v => v / monthsElapsed;                       // all-time count → per-month average
+  // Averaging denominator.
+  //  · Pipedrive Insights mode: the counts are a fixed rolling window (default past
+  //    6 months), so per-month = counts ÷ window months. Clean and unambiguous.
+  //  · CSV rebuild mode: counts are all-time, so divide by the months from an
+  //    editable effective start (default Nov 2025 — the pipeline barely existed
+  //    before then) through now.
+  const _now = new Date();
+  const avgFrom = t.avg_from || '2025-11';                    // YYYY-MM, used in CSV mode
+  const _af = avgFrom.split('-').map(Number);
+  const avgStart = new Date(_af[0], (_af[1] || 1) - 1, 1);
+  const csvMonths = Math.max(1, (_now.getFullYear() - avgStart.getFullYear()) * 12 + (_now.getMonth() - avgStart.getMonth()) + 1);
+  const monthsElapsed = useFA ? Math.max(1, Math.round(FA.windowMonths || 6)) : csvMonths;
+  const perMo = v => v / monthsElapsed;                       // period count → per-month average
   const fmt1  = v => (Math.round(v * 10) / 10).toLocaleString();
+  const avgFromLabel = avgStart.toLocaleDateString('en-AU', { month: 'short', year: 'numeric' });
 
   // ── Month-by-month stage volumes: validate the per-month averages, monitor progress ──
   // Bucketed by deal CREATION month. "Reached stage i" = current stage index ≥ i or Won,
@@ -8880,8 +8892,12 @@ function renderPdOptimax(sc) {
   // with 0), so the number of buckets equals monthsElapsed and the chart averages
   // reconcile exactly with the per-month figures in the model table.
   const omMonoMonths = (() => {
-    if (!firstDealDt) return [];
-    const out = []; const dd = new Date(firstDealDt.getFullYear(), firstDealDt.getMonth(), 1); const _n = new Date();
+    const _n = new Date();
+    // FA mode: the last `monthsElapsed` calendar months. CSV mode: from avgStart.
+    const startM = useFA
+      ? new Date(_n.getFullYear(), _n.getMonth() - (monthsElapsed - 1), 1)
+      : new Date(avgStart.getFullYear(), avgStart.getMonth(), 1);
+    const out = []; const dd = new Date(startM);
     while (dd <= _n) { out.push(dd.getFullYear() + '-' + String(dd.getMonth() + 1).padStart(2, '0')); dd.setMonth(dd.getMonth() + 1); }
     return out;
   })();
@@ -9205,12 +9221,12 @@ function renderPdOptimax(sc) {
   <div class="box">
     <div class="box-title">OPTI-MAX Sales Growth Model
       <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">
-        all figures per month · currents = Pipedrive actuals ÷ ${monthsElapsed} months of data · edits save automatically
+        all figures per month · currents = Pipedrive actuals ÷ ${monthsElapsed}${useFA ? '-month rolling window' : ' months of data'} · edits save automatically
       </span>
     </div>
     <p style="font-size:12px;color:var(--tm);margin-bottom:12px;line-height:1.5">
       Small % improvements at each stage <strong>compound</strong> into significantly more won ${unitLabel} <strong>per month</strong>.
-      Every figure is per month: Current # is the monthly average over the ${monthsElapsed} months since the first deal (hover for the all-time count, shown underneath).
+      Every figure is per month: Current # = the ${useFA ? 'past-' + monthsElapsed + '-month Pipedrive count ÷ ' + monthsElapsed : 'all-time count ÷ ' + monthsElapsed + ' months'} (window editable below; hover for the total count, shown underneath).
       Conversion %s are live from Pipedrive. <span style="color:var(--acc);font-weight:500">Blue input fields</span> are editable: projections update instantly.
     </p>
     <div class="box" style="background:#f0f7ff;border:1px solid #cfe3f0;margin-bottom:14px">
@@ -9225,12 +9241,20 @@ function renderPdOptimax(sc) {
           : 'reconstructed from the deals CSV · lost deals can only be placed at entry, so intermediate stages read low'}</span>
       </div>
       ${useFA ? `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px">
-        <span style="color:var(--tm)">Reached-stage deals (from Pipedrive Insights, 2026 Sales):</span>
+        <span style="color:var(--tm)">Reached-stage deals · 2026 Sales · past
+          <input class="om-input" style="width:42px" type="number" min="1" step="1" value="${FA.windowMonths}" onchange="omSaveFA('windowMonths',this.value)"> months:</span>
         ${[['contact','Contact'],['meeting','Meeting'],['neg','Negotiations'],['order','Order Form'],['signed','Signed OFR'],['invoice','Invoice'],['won','Won']].map(([k,lbl])=>
-          `<label style="display:inline-flex;align-items:center;gap:3px;color:var(--tl)">${lbl}<input class="om-input" style="width:56px" type="number" min="0" step="1" value="${FA[k]}" onchange="omSaveFA('${k}',this.value)"></label>`).join('')}
+          `<label style="display:inline-flex;align-items:center;gap:3px;color:var(--tl)">${lbl}<input class="om-input" style="width:52px" type="number" min="0" step="1" value="${FA[k]}" onchange="omSaveFA('${k}',this.value)"></label>`).join('')}
         <label style="display:inline-flex;align-items:center;gap:3px;color:var(--tl)">as of<input type="date" value="${FA.asOf}" onchange="omSaveFA('asOf',this.value)" style="font-size:11px;padding:2px 4px;border:1px solid var(--bd);border-radius:5px"></label>
-        <span style="color:var(--tl);font-size:11px">update these from Pipedrive → Insights → Conversion → Summary when you refresh</span>
       </div>` : ''}
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;margin-top:8px;border-top:1px solid #cfe3f0;padding-top:8px">
+        ${useFA ? `<span style="color:var(--tm)">Per month = counts ÷ <b>${monthsElapsed}</b> (the ${monthsElapsed}-month window).</span>
+          <span style="color:var(--tl);font-size:11px">e.g. Won ${FA.won} ÷ ${monthsElapsed} = ${fmt1(perMo(FA.won))}/mo · update the seven counts + window from Pipedrive → Insights → Conversion (2026 Sales · Past 6 months) when you refresh</span>`
+        : `<span style="color:var(--tm)">Average per month over:</span>
+          <input type="month" value="${avgFrom}" onchange="omSaveStr('avg_from',this.value)" style="font-size:12px;padding:2px 6px;border:1px solid var(--bd);border-radius:5px;font-family:inherit">
+          <span style="color:var(--tl)">to now = <b>${monthsElapsed} months</b> · counts ÷ ${monthsElapsed}</span>
+          <span style="color:var(--tl);font-size:11px">the pipeline effectively started ${avgFromLabel}${firstDealDt ? ' · first deal ' + fmtDate(firstDealDt).slice(0,6) : ''}</span>`}
+      </div>
     </div>
 
     <div style="background:var(--acc2);border:1px solid #cfe3f0;border-radius:8px;padding:10px 14px;margin-bottom:16px">
