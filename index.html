@@ -8771,6 +8771,20 @@ function renderPdOptimax(sc) {
   function saveOM(k, v) { const o=loadOM(); o[k]=parseFloat(v)||0; localStorage.setItem(OM_KEY,JSON.stringify(o)); renderPdOptimax(sc); }
   window.omSave  = saveOM;
   window.omReset = () => { localStorage.removeItem(OM_KEY); renderPdOptimax(sc); };
+
+  // ── Authoritative "reached stage" counts from Pipedrive Insights ─────────────
+  // A deals-CSV export can't reconstruct how far a LOST deal got (its stage is just
+  // "Closed Lost"), so the funnel can't be computed from the CSV alone. Pipedrive's
+  // Insights → Conversion → Summary table HAS the true reached-stage counts. These
+  // are entered here (seeded from that report) and drive the funnel so it matches
+  // Pipedrive exactly. Update them when you refresh from Pipedrive.
+  const FA_KEY = 'liq_funnel_actual';
+  const FA_DEF = { asOf: '2026-07-13', contact: 103, meeting: 90, neg: 84, order: 75, signed: 69, invoice: 69, won: 53, on: 1 };
+  const loadFA = () => { try { return { ...FA_DEF, ...JSON.parse(localStorage.getItem(FA_KEY) || '{}') }; } catch { return { ...FA_DEF }; } };
+  window.omSaveFA = (k, v) => { const o = loadFA(); o[k] = (k === 'asOf') ? v : (k === 'on' ? (v ? 1 : 0) : (parseFloat(v) || 0)); localStorage.setItem(FA_KEY, JSON.stringify(o)); renderPdOptimax(sc); };
+  window.omToggleFA = () => { const o = loadFA(); o.on = o.on ? 0 : 1; localStorage.setItem(FA_KEY, JSON.stringify(o)); renderPdOptimax(sc); };
+  const FA = loadFA();
+  const useFA = FA.on !== 0;   // use Pipedrive's authoritative counts (vs CSV reconstruction)
   window.setOmView = (v) => { activeSub.om_view = v; renderPdOptimax(sc); };
   window.omToggleImp = () => { const o=loadOM(); o.show_imp = o.show_imp!==0 ? 0 : 1; localStorage.setItem(OM_KEY,JSON.stringify(o)); renderPdOptimax(sc); };
   window.omToggleS4  = () => { const o=loadOM(); o.show_s4  = o.show_s4 !==0 ? 0 : 1; localStorage.setItem(OM_KEY,JSON.stringify(o)); renderPdOptimax(sc); };
@@ -8790,11 +8804,13 @@ function renderPdOptimax(sc) {
     if (di!=null) return di>=idx;
     return idx===0;   // Lost/unknown stage: the deal still entered the pipeline (reached Contact Made)
   }
-  const fCnts  = FSALL.map((_,i) => sDeals.filter(d=>reached(d,i)).length);
-  // Lost deals in this pipeline: the CSV export only carries their CURRENT stage
-  // ("Closed Lost"), so their reached-stage history is not available — they can
-  // only be counted at entry. Pipedrive's live funnel places each at its furthest
-  // reached stage, so its intermediate stages read higher than here.
+  // Deals-view reached counts: authoritative from Pipedrive Insights when enabled
+  // (matches Pipedrive exactly, lost deals placed correctly); otherwise the CSV
+  // reconstruction, which can only count lost deals at entry.
+  const fCntsCSV = FSALL.map((_,i) => sDeals.filter(d=>reached(d,i)).length);
+  const fCnts = useFA
+    ? [FA.contact, FA.meeting, FA.neg, FA.order, FA.signed, FA.invoice, FA.won]
+    : fCntsCSV;
   const lostCnt = sDeals.filter(d => d['Deal - Status']==='Lost').length;
   const fRates = FSALL.map((_,i) => i===0?null:(fCnts[i-1]>0?pct(fCnts[i],fCnts[i-1]):null));
   const wonAll = sDeals.filter(d=>d['Deal - Status']==='Won');
@@ -8905,7 +8921,7 @@ function renderPdOptimax(sc) {
   const isLic   = omView === 'licences';
   const currCnts= isLic ? licsCnts   : fCnts;
   const currRts = isLic ? licsRates  : fRates;
-  const wonCurr = isLic ? licsWon    : wonAll.length;
+  const wonCurr = isLic ? licsWon    : (useFA ? FA.won : wonAll.length);
   const unitLabel= isLic ? 'licences' : 'deals';
 
   // ── OPTI-MAX model rows ──────────────────────────────────────────────────
@@ -9197,9 +9213,25 @@ function renderPdOptimax(sc) {
       Every figure is per month: Current # is the monthly average over the ${monthsElapsed} months since the first deal (hover for the all-time count, shown underneath).
       Conversion %s are live from Pipedrive. <span style="color:var(--acc);font-weight:500">Blue input fields</span> are editable: projections update instantly.
     </p>
-    ${lostCnt ? `<div class="callout" style="background:#fdf6e9;border:1px solid #f0d9a8;margin-bottom:12px"><div style="font-size:11.5px;color:#8a5a00;line-height:1.5">
-      <b>Reconciling with Pipedrive:</b> this pipeline has <b>${fCnts[0]}</b> deals in total (${wonAll.length} won · ${sDeals.filter(d=>d['Deal - Status']==='Open').length} open · ${lostCnt} lost), which matches Pipedrive's "reached Contact Made". Pipedrive's Conversion report uses each deal's full <b>stage-change history</b>, so it places a lost deal at the furthest stage it reached. This CSV export only carries each deal's <b>current</b> stage, and a lost deal's stage is just "Closed Lost" — so the ${lostCnt} lost deals are counted at entry only, and the intermediate stages here read <b>lower than Pipedrive by up to ${lostCnt}</b>. Won and open counts match. Overall win rate (Won ÷ entered = ${fmtPct(pct(wonAll.length, fCnts[0]))}) matches Pipedrive.
-    </div></div>` : ''}
+    <div class="box" style="background:#f0f7ff;border:1px solid #cfe3f0;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:${useFA?'8px':'0'}">
+        <span style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--acc)">Funnel counts</span>
+        <div class="range-toggle">
+          <button class="range-btn${useFA?' active':''}" onclick="${useFA?'':'omToggleFA()'}">Pipedrive Insights</button>
+          <button class="range-btn${!useFA?' active':''}" onclick="${useFA?'omToggleFA()':''}">Rebuild from CSV</button>
+        </div>
+        <span style="font-size:11px;color:var(--tl)">${useFA
+          ? 'the true "reached stage" counts from Pipedrive\'s Conversion → Summary report · matches Pipedrive exactly, lost deals included'
+          : 'reconstructed from the deals CSV · lost deals can only be placed at entry, so intermediate stages read low'}</span>
+      </div>
+      ${useFA ? `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px">
+        <span style="color:var(--tm)">Reached-stage deals (from Pipedrive Insights, 2026 Sales):</span>
+        ${[['contact','Contact'],['meeting','Meeting'],['neg','Negotiations'],['order','Order Form'],['signed','Signed OFR'],['invoice','Invoice'],['won','Won']].map(([k,lbl])=>
+          `<label style="display:inline-flex;align-items:center;gap:3px;color:var(--tl)">${lbl}<input class="om-input" style="width:56px" type="number" min="0" step="1" value="${FA[k]}" onchange="omSaveFA('${k}',this.value)"></label>`).join('')}
+        <label style="display:inline-flex;align-items:center;gap:3px;color:var(--tl)">as of<input type="date" value="${FA.asOf}" onchange="omSaveFA('asOf',this.value)" style="font-size:11px;padding:2px 4px;border:1px solid var(--bd);border-radius:5px"></label>
+        <span style="color:var(--tl);font-size:11px">update these from Pipedrive → Insights → Conversion → Summary when you refresh</span>
+      </div>` : ''}
+    </div>
 
     <div style="background:var(--acc2);border:1px solid #cfe3f0;border-radius:8px;padding:10px 14px;margin-bottom:16px">
       <div style="font-size:10.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--acc);margin-bottom:8px">Display options</div>
@@ -9287,7 +9319,7 @@ function renderPdOptimax(sc) {
         <td style="text-align:right;color:var(--tl)">${s.isImp ? fmtNum(s.lastMonth) : s.lastMonth}</td>
       </tr>`).join('')}</tbody>
     </table>
-    <div style="font-size:10.5px;color:var(--tl);margin-top:6px">"All-time total" ÷ ${omMonoMonths.length} months = "Avg / month", which is exactly the Current # per month shown in the model above · "This month" is the current (partial) month.</div>` : '<div class="no-data">No dated deals in the 2026 Sales pipeline yet.</div>'}
+    <div style="font-size:10.5px;color:var(--tl);margin-top:6px">Monthly breakdown from the deals CSV, by deal-created month. ${useFA ? 'Note: lost deals sit at entry here, so intermediate-stage months are the CSV floor; the model table above uses Pipedrive\'s authoritative reached-stage totals.' : '"All-time total" ÷ ' + omMonoMonths.length + ' months = "Avg / month", exactly the Current # per month in the model above.'} "This month" is the current (partial) month.</div>` : '<div class="no-data">No dated deals in the 2026 Sales pipeline yet.</div>'}
   </div>
 
   <!-- Average deal value by month (Stage 4 indicator) -->
