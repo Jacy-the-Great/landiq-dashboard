@@ -8766,6 +8766,7 @@ function renderPdOptimax(sc) {
     contact_target: 0,      // monthly Contact Made target used as the projection base when impressions is hidden
     show_s4: 1,             // Stage 4 (increase average deal value) included?
     avg_from: '2025-11',    // effective pipeline start for per-month averaging (YYYY-MM)
+    show_fc: 1,             // "Funnel counts" data-entry box expanded?
   };
 
   function loadOM() { try { return {...OM_DEF,...JSON.parse(localStorage.getItem(OM_KEY)||'{}')}; } catch { return {...OM_DEF}; } }
@@ -8796,6 +8797,7 @@ function renderPdOptimax(sc) {
   const omView = activeSub.om_view || 'deals';
   const showImp = t.show_imp !== 0;   // false = hide impressions, funnel starts at Contact Made
   const showS4  = t.show_s4  !== 0;   // false = Stage 4 rows hidden AND excluded from Stage 5 / projections
+  const showFC  = t.show_fc  !== 0;   // false = "Funnel counts" data-entry box collapsed to its header
 
   // ── Pipedrive actuals (all-time) ─────────────────────────────────────────
   const sDeals = _pd_deals.filter(d => d['Deal - Pipeline']==='2026 Sales');
@@ -9230,17 +9232,18 @@ function renderPdOptimax(sc) {
       Conversion %s are live from Pipedrive. <span style="color:var(--acc);font-weight:500">Blue input fields</span> are editable: projections update instantly.
     </p>
     <div class="box" style="background:#f0f7ff;border:1px solid #cfe3f0;margin-bottom:14px">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:${useFA?'8px':'0'}">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:${(showFC&&useFA)?'8px':'0'}">
         <span style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--acc)">Funnel counts</span>
-        <div class="range-toggle">
+        <button onclick="omSave('show_fc',${showFC?0:1})" style="font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--acc);background:#fff;border:1px solid #cfe3f0;border-radius:4px;padding:1px 7px;cursor:pointer">${showFC?'Hide':'Show'}</button>
+        ${showFC ? `<div class="range-toggle">
           <button class="range-btn${useFA?' active':''}" onclick="${useFA?'':'omToggleFA()'}">Pipedrive Insights</button>
           <button class="range-btn${!useFA?' active':''}" onclick="${useFA?'omToggleFA()':''}">Rebuild from CSV</button>
         </div>
         <span style="font-size:11px;color:var(--tl)">${useFA
           ? 'the true "reached stage" counts from Pipedrive\'s Conversion → Summary report · matches Pipedrive exactly, lost deals included'
-          : 'reconstructed from the deals CSV · lost deals can only be placed at entry, so intermediate stages read low'}</span>
+          : 'reconstructed from the deals CSV · lost deals can only be placed at entry, so intermediate stages read low'}</span>` : '<span style="font-size:11px;color:var(--tl)">data-entry hidden · click Show to edit the Pipedrive counts</span>'}
       </div>
-      ${useFA ? `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px">
+      ${showFC ? `${useFA ? `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px">
         <span style="color:var(--tm)">Reached-stage deals · 2026 Sales · past
           <input class="om-input" style="width:42px" type="number" min="1" step="1" value="${FA.windowMonths}" onchange="omSaveFA('windowMonths',this.value)"> months:</span>
         ${[['contact','Contact'],['meeting','Meeting'],['neg','Negotiations'],['order','Order Form'],['signed','Signed OFR'],['invoice','Invoice'],['won','Won']].map(([k,lbl])=>
@@ -9254,7 +9257,7 @@ function renderPdOptimax(sc) {
           <input type="month" value="${avgFrom}" onchange="omSaveStr('avg_from',this.value)" style="font-size:12px;padding:2px 6px;border:1px solid var(--bd);border-radius:5px;font-family:inherit">
           <span style="color:var(--tl)">to now = <b>${monthsElapsed} months</b> · counts ÷ ${monthsElapsed}</span>
           <span style="color:var(--tl);font-size:11px">the pipeline effectively started ${avgFromLabel}${firstDealDt ? ' · first deal ' + fmtDate(firstDealDt).slice(0,6) : ''}</span>`}
-      </div>
+      </div>` : ''}
     </div>
 
     <div style="background:var(--acc2);border:1px solid #cfe3f0;border-radius:8px;padding:10px 14px;margin-bottom:16px">
@@ -9288,7 +9291,7 @@ function renderPdOptimax(sc) {
     </div>
 
     <div class="cards" style="margin-bottom:18px">
-      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Won ${unitLabel} (all time)${infoBtn('Won '+unitLabel,'<span class="src-tag">Pipedrive · 2026 Sales</span><br>Count of '+unitLabel+' with Status = Won.<br><div class="calc-row">'+(isLic?'SUM(Product quantity of won deals)':'COUNT(Won deals)')+'</div>')}</div><div class="card-value">${wonCurr}</div><div class="card-sub">2026 Sales pipeline · ${fmt1(currMoRate)}/mo avg</div></div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Won ${unitLabel} (${(useFA && !isLic) ? 'past ' + monthsElapsed + ' mo' : 'all time'})${infoBtn('Won '+unitLabel,'<span class="src-tag">Pipedrive · 2026 Sales</span><br>Count of '+unitLabel+' with Status = Won.<br><div class="calc-row">'+(isLic?'SUM(Product quantity of won deals)':'COUNT(Won deals)')+'</div>')}</div><div class="card-value">${wonCurr}</div><div class="card-sub">2026 Sales pipeline · ${fmt1(currMoRate)}/mo avg</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Avg licence won cost${infoBtn('Average licence won cost','<span class="src-tag">Pipedrive · Won Deals</span><br>The real average price per licence once discounts are factored in.<br><div class="calc-row">Total won revenue ÷ total licences sold (Product quantity)<br>'+(licCostFromData?fmtDollar(qtyWonValue)+' ÷ '+totalLicencesSold.toLocaleString()+' = '+fmtDollar(avgLicWonCost):'no Product quantity yet: assumed')+'</div>')}</div><div class="card-value">${fmtDollar(avgLicWonCost)}</div><div class="card-sub">${licCostFromData?totalLicencesSold.toLocaleString()+' licences sold':'assumed: add Product quantity'}</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Projected won / month${infoBtn('Projected won / month','<span class="src-tag">Calculated</span><br>Won '+unitLabel+' per month if every target conversion rate is hit.<br><div class="calc-row">Target impressions × chained target % at each stage</div>')}</div><div class="card-value" style="color:var(--gr)">${projWon??':'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">${projImpPct>=0?'+':''}${projImpPct}% vs ${fmt1(currMoRate)}/mo current</div>`:''}</div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Revenue / month (current)${infoBtn('Revenue / month (current)','<span class="src-tag">Pipedrive · Won Deals</span><br>Current won run-rate × average deal value.<br><div class="calc-row">(Won deals ÷ months since first deal) × avg deal value ('+fmtDollar(avgDealVal)+')</div>')}</div><div class="card-value">${fmtDollar(currRevMonth)}</div><div class="card-sub">${fmtDollar(currRevYear)}/yr at current rate</div></div>
@@ -9334,7 +9337,7 @@ function renderPdOptimax(sc) {
       </div>`).join('')}
     </div>
     <div style="overflow-x:auto;margin-top:16px"><table class="conv-table">
-      <thead><tr><th>Stage</th><th style="text-align:right">All-time total</th><th style="text-align:right">Avg / month</th><th style="text-align:right">This month</th><th style="text-align:right">Last month</th></tr></thead>
+      <thead><tr><th>Stage</th><th style="text-align:right">Past ${omMonoMonths.length} mo total</th><th style="text-align:right">Avg / month</th><th style="text-align:right">This month</th><th style="text-align:right">Last month</th></tr></thead>
       <tbody>${omMono.map(s => `<tr>
         <td><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${s.color};margin-right:6px"></span>${s.label}</td>
         <td style="text-align:right;font-weight:600">${s.isImp ? fmtNum(s.total) : s.total.toLocaleString()}</td>
@@ -9343,7 +9346,7 @@ function renderPdOptimax(sc) {
         <td style="text-align:right;color:var(--tl)">${s.isImp ? fmtNum(s.lastMonth) : s.lastMonth}</td>
       </tr>`).join('')}</tbody>
     </table>
-    <div style="font-size:10.5px;color:var(--tl);margin-top:6px">Monthly breakdown from the deals CSV, by deal-created month. ${useFA ? 'Note: lost deals sit at entry here, so intermediate-stage months are the CSV floor; the model table above uses Pipedrive\'s authoritative reached-stage totals.' : '"All-time total" ÷ ' + omMonoMonths.length + ' months = "Avg / month", exactly the Current # per month in the model above.'} "This month" is the current (partial) month.</div>` : '<div class="no-data">No dated deals in the 2026 Sales pipeline yet.</div>'}
+    <div style="font-size:10.5px;color:var(--tl);margin-top:6px">Monthly breakdown from the deals CSV, by deal-created month, over the last ${omMonoMonths.length} months. ${useFA ? 'Note: lost deals sit at entry here, so intermediate-stage months are the CSV floor; the model table above uses Pipedrive\'s authoritative reached-stage totals.' : 'The "Past ' + omMonoMonths.length + ' mo total" ÷ ' + omMonoMonths.length + ' months = "Avg / month", exactly the Current # per month in the model above.'} "This month" is the current (partial) month.</div></div>` : '<div class="no-data">No dated deals in the 2026 Sales pipeline yet.</div>'}
   </div>
 
   <!-- Average deal value by month (Stage 4 indicator) -->
