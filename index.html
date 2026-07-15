@@ -888,7 +888,7 @@ const METRIC_DOCS = [
   ['stage conversion rates', 'Pipedrive · Deals', 'Same reached-stage funnel as above, shown as a table: each stage\'s count and its % of the previous stage. "Won (total)" % = Won ÷ Contact Made.'],
   ['sales velocity', 'Pipedrive · Deals', 'Days from <b>Deal created</b> to <b>Won time</b> per won deal: bucket distribution plus the share won within 30 days, by month.'],
   ['all won deals', 'Pipedrive · Deals', 'Raw table of every won deal in the selected range: title, org, owner, source, value, won date, cycle days. No calculations beyond cycle = won − created.'],
-  ['win / loss analysis', 'Pipedrive · Deals', 'Left: lost deals grouped by <b>Lost reason</b>. Right: win rate (won ÷ won+lost) per <b>Source channel</b>, only sources with 2+ closed deals.'],
+  ['win / loss analysis', 'Pipedrive · Deals', 'Left: lost deals grouped by <b>Lost reason</b>. Right: close rate (won ÷ won+lost) per <b>Source channel</b>, only sources with 2+ closed deals.'],
   // Revenue
   ['cumulative contracted revenue', 'Pipedrive · Won Deals', 'Running total of won <b>Deal Value</b> by month of Won time, across all time, vs the $2.4M target line.'],
   ['revenue per month', 'Pipedrive · Won Deals', 'New won Deal Value per month ÷ 12: the monthly-revenue equivalent of each month\'s signings (assumes yearly contracts).'],
@@ -948,7 +948,7 @@ const METRIC_DOCS = [
   ['paying customers gone quiet', 'Pipedrive + PostHog', 'Active paid subscribers whose email matches usage data and whose last activity is 14+ days ago. Needs email matching enabled.'],
   ['top at-risk users', 'PostHog · nightly sync', 'First rows of the at-risk list (see Activity → Insights for the full list).'],
   // Team / Exec / Home / misc
-  ['scorecard :', 'Pipedrive · Deals', 'Per Deal Owner in the chosen period: won count, SUM won value, win rate (won ÷ won+lost), avg deal, avg cycle. Colour = vs the editable targets.'],
+  ['scorecard :', 'Pipedrive · Deals', 'Per Deal Owner in the chosen period: won count, SUM won value, close rate (won ÷ won+lost), avg deal, avg cycle. Colour = vs the editable targets.'],
   ['trend :', 'Pipedrive · Deals', 'The same per-owner stats computed for each of the last 6 periods.'],
   ['targets: per rep', 'Manual', 'Editable targets applied to every rep; saved on this device.'],
   ['won deals per month: last 12 months', 'Pipedrive · Deals', 'Won deals (2026 Sales) counted per month of Won time. Current active paid licences are shown as their own card, not on this chart.'],
@@ -1175,6 +1175,20 @@ const fmtMinSec = sec => sec == null ? ':' : Math.floor(sec / 60) + ':' + String
 const fmtDollar = n => n != null ? '$' + Number(n).toLocaleString() : ':';
 const fmtCur = n => { if (n == null) return ':'; if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M'; if (n >= 1000) return '$' + (n/1000).toFixed(n >= 10000 ? 0 : 1) + 'k'; return '$' + Math.round(n).toLocaleString(); };
 const pct = (a, b) => (a != null && b && b !== 0) ? (a / b * 100) : null;
+
+// Authoritative "win rate" = Won ÷ Contacts entered (funnel conversion), from the
+// Pipedrive Insights counts saved in liq_funnel_actual. This matches Pipedrive's
+// reported win rate (e.g. 17 won ÷ 50 contacts = 34%). It is DIFFERENT from the
+// "close rate" Won ÷ (Won + Lost), which is the % of already-closed deals that were
+// won and reads far higher because most deals are still open. Defaults mirror the
+// OPTI-MAX FA_DEF seed so the number is present before anything is saved.
+function pdInsightsWinRate() {
+  const DEF = { contact: 50, won: 17, windowMonths: 6 };
+  let fa = DEF;
+  try { fa = { ...DEF, ...(JSON.parse(localStorage.getItem('liq_funnel_actual') || '{}')) }; } catch { fa = DEF; }
+  const rate = (fa.contact > 0 && fa.won != null) ? pct(fa.won, fa.contact) : null;
+  return { rate, months: Math.round(fa.windowMonths || 6), won: fa.won, contact: fa.contact };
+}
 
 function thisMonth(arr, dateKey = 'week') {
   const now = new Date();
@@ -1541,8 +1555,8 @@ function renderHome(el) {
         '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with <b>Status = Won</b> and <b>Won time</b> in the current calendar month. The ▲/▼ compares to last calendar month.<br><div class="calc-row">Filter: Pipeline = "2026 Sales" AND Status = "Won" AND Won time in current month</div>'],
       ['Revenue (this month)', pdRevThisMonth || null, revLastMonth || null, '$', 'vs last month · 2026 Sales',
         '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Sum of <b>Deal Value</b> for all Won deals with Won time in the current calendar month. The ▲/▼ compares to last calendar month.<br><div class="calc-row">SUM(Deal Value) where Status = "Won" AND Won time in current month</div>'],
-      ['Win rate (2026 Sales)', pdWinRate, null, '%', 'Won ÷ (Won + Lost) all time',
-        '<span class="src-tag">Pipedrive · 2026 Sales</span><br><b>Won ÷ (Won + Lost)</b> across all time in the 2026 Sales pipeline. Open deals are excluded from the calculation.<br><div class="calc-row">Won.count / (Won.count + Lost.count) × 100</div>'],
+      ['Win rate (2026 Sales)', pdInsightsWinRate().rate, null, '%', 'Won ÷ Contacts · past ' + pdInsightsWinRate().months + ' mo · matches Pipedrive',
+        '<span class="src-tag">Pipedrive · Insights</span><br><b>Win rate = Won ÷ Contacts entered</b> — the funnel conversion Pipedrive reports (' + pdInsightsWinRate().won + ' won ÷ ' + pdInsightsWinRate().contact + ' contacts = ' + fmtPct(pdInsightsWinRate().rate) + ', past ' + pdInsightsWinRate().months + ' months).<br><div class="calc-row">Won ÷ Contacts-Made × 100</div>Not to be confused with the <b>close rate</b> Won ÷ (Won + Lost) = ' + fmtPct(pdWinRate) + ' (the % of already-<i>closed</i> deals that were won), which reads far higher because most deals are still open.'],
       ['Active paid subscribers', pdActivePaid || null, null, null, 'Target: 600',
         '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND either no Date Access Removed, or Date Access Removed is in the future.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
     ])}
@@ -2045,7 +2059,7 @@ function setSalesSub(sub, rerender = true) {
         <div class="box-title">Revenue won vs lost by month ($)</div>
         ${wlMonths.length ? `<canvas id="wl-val-chart" height="200"></canvas>` : '<div class="no-data">No data yet.</div>'}
         ${wlMonths.length ? `<table class="conv-table" style="margin-top:12px">
-          <thead><tr><th>Month</th><th>Won</th><th>Lost</th><th>Win rate</th><th>Won $</th><th>Lost $</th></tr></thead>
+          <thead><tr><th>Month</th><th>Won</th><th>Lost</th><th>Close rate</th><th>Won $</th><th>Lost $</th></tr></thead>
           <tbody>${wlMonths.map(([k, v]) => {
             const wr = pct(v.won, v.won + v.lost);
             const cls = wr > 60 ? 'good' : wr > 40 ? 'mid' : 'bad';
@@ -6543,7 +6557,7 @@ function renderTeam(el) {
       <div style="display:flex;gap:22px;flex-wrap:wrap;font-size:13px;align-items:center">
         <label>Won deals <input type="number" value="${t.won}" onchange="saveTeamTarget('won',this.value)" style="width:70px;margin-left:5px;padding:4px 6px;border:1px solid var(--bd);border-radius:6px"></label>
         <label>Revenue $ <input type="number" value="${t.revenue}" onchange="saveTeamTarget('revenue',this.value)" style="width:110px;margin-left:5px;padding:4px 6px;border:1px solid var(--bd);border-radius:6px"></label>
-        <label>Win rate % <input type="number" value="${t.winrate}" onchange="saveTeamTarget('winrate',this.value)" style="width:70px;margin-left:5px;padding:4px 6px;border:1px solid var(--bd);border-radius:6px"></label>
+        <label>Close rate % <input type="number" value="${t.winrate}" onchange="saveTeamTarget('winrate',this.value)" style="width:70px;margin-left:5px;padding:4px 6px;border:1px solid var(--bd);border-radius:6px"></label>
         <span style="color:var(--tl);font-size:11px">Applied to each rep · saved on this device</span>
       </div>
     </div>
@@ -6555,7 +6569,7 @@ function renderTeam(el) {
           <th style="text-align:left;padding:7px 8px">Rep</th>
           <th style="text-align:right;padding:7px 8px">Won</th>
           <th style="text-align:right;padding:7px 8px">Revenue</th>
-          <th style="text-align:right;padding:7px 8px">Win rate</th>
+          <th style="text-align:right;padding:7px 8px">Close rate</th>
           <th style="text-align:right;padding:7px 8px">Avg deal</th>
           <th style="text-align:right;padding:7px 8px">Avg cycle</th>
         </tr></thead>
@@ -6665,8 +6679,8 @@ function renderPipedrive(el) {
         '<span class="src-tag">Pipedrive · ' + plLabel + '</span><br>Deals with <b>Status = Won</b> and <b>Won time</b> within the selected date range.<br><div class="calc-row">Pipeline = "' + plLabel + '" AND Status = "Won" AND Won time in range</div>Currently showing: <b>' + range.label + '</b>'],
       ['Lost deals (' + plLabel + ')', lostDeals.length || null, null, null, range.label,
         '<span class="src-tag">Pipedrive · ' + plLabel + '</span><br>Deals with <b>Status = Lost</b> and <b>Lost time</b> within the selected date range.<br><div class="calc-row">Pipeline = "' + plLabel + '" AND Status = "Lost" AND Lost time in range</div>Currently showing: <b>' + range.label + '</b>'],
-      ['Win rate (' + plLabel + ')', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%', 'Won ÷ (Won + Lost) · ' + range.label,
-        '<span class="src-tag">Pipedrive · ' + plLabel + '</span><br><b>Won ÷ (Won + Lost)</b> for deals closed within the selected date range. Open deals are excluded.<br><div class="calc-row">Won.count / (Won.count + Lost.count) × 100</div>Currently showing: <b>' + range.label + '</b>'],
+      ['Close rate (' + plLabel + ')', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%', 'Won ÷ (Won + Lost) · ' + range.label,
+        '<span class="src-tag">Pipedrive · ' + plLabel + '</span><br><b>Close rate = Won ÷ (Won + Lost)</b> for deals CLOSED within the selected range — the % of resolved deals that were won. Open deals are excluded, so this reads much higher than Pipedrive\'s <b>win rate</b> (Won ÷ Contacts entered, ' + fmtPct(pdInsightsWinRate().rate) + ' — see OPTI-MAX).<br><div class="calc-row">Won.count / (Won.count + Lost.count) × 100</div>Currently showing: <b>' + range.label + '</b>'],
       ['Active paid subscribers', activePaidSubs.length || null, null, null, 'Target: 600 · as of today',
         '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND (Date Access Removed is blank OR is a future date). Always shows current snapshot: not affected by the date range or pipeline filter.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
       ['People (total)', _pd_people.length || null, null, null, null,
@@ -7170,9 +7184,9 @@ function renderPdRevenue(sc) {
     forecastEl.className = 'box';
     forecastEl.innerHTML = `
       <div class="box-title">Revenue forecast ${infoBtn('Revenue forecast',
-        `<p><b>Pipeline forecast</b>: sum of open deal values × current win rate (${fmtPct(winRate2*100)}).</p>
+        `<p><b>Pipeline forecast</b>: sum of open deal values × current close rate (${fmtPct(winRate2*100)}, Won ÷ Won+Lost — the right probability for expected value).</p>
         <p><b>Run-rate projection</b>: average monthly new revenue from the last 6 months, projected forward 6 months.</p>
-        <div class="calc-row">Forecast = Open pipeline × Win rate</div>
+        <div class="calc-row">Forecast = Open pipeline × Close rate</div>
         <span class="src-tag">Pipedrive Deals</span>`)}</div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px">
         <div class="card" style="margin:0">
@@ -7183,7 +7197,7 @@ function renderPdRevenue(sc) {
         <div class="card" style="margin:0">
           <div class="card-label">Expected from pipeline</div>
           <div class="card-value" style="color:var(--gr)">${fmtCur(forecast)}</div>
-          <div class="card-sub">at ${fmtPct(winRate2*100)} win rate</div>
+          <div class="card-sub">at ${fmtPct(winRate2*100)} close rate</div>
         </div>
         <div class="card" style="margin:0">
           <div class="card-label">6-mo run-rate projection</div>
@@ -7612,7 +7626,7 @@ function renderPdSales(sc) {
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Closed same month${infoBtn('Closed same month','<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Won deals where the <b>Deal created</b> month equals the <b>Won time</b> month: i.e. opened and closed in the same calendar month.<br><div class="calc-row">monthKey(Deal created) === monthKey(Won time)</div>')}</div>
         ${sameMonth.length ? `<div class="card-value">${sameMonth.length}</div><div class="card-sub">${fmtPct(pct(sameMonth.length, wonDeals.length))} of won deals</div>` : '<div class="card-nodata">no data</div>'}
       </div>
-      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Avg win rate${infoBtn('Avg win rate (period)','<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Average of monthly win rates across the selected range. Each month: <b>Won ÷ (Won + Lost)</b>. Months with zero closed deals are excluded.<br><div class="calc-row">avg(Won / (Won + Lost)) per month in range</div>')}</div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Avg close rate${infoBtn('Avg close rate (period)','<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Average of monthly <b>close rates</b> across the selected range. Each month: <b>Won ÷ (Won + Lost)</b> — the % of closed deals that were won. Months with zero closed deals are excluded. This is NOT Pipedrive\'s win rate (Won ÷ Contacts entered), which is lower.<br><div class="calc-row">avg(Won / (Won + Lost)) per month in range</div>')}</div>
         ${avgWinRate12 != null ? `<div class="card-value">${fmtPct(avgWinRate12)}</div><div class="card-sub">avg monthly rate · ${range.label}</div>` : '<div class="card-nodata">no data</div>'}
       </div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Avg sales cycle${infoBtn('Avg sales cycle','<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Average number of days from <b>Deal created</b> to <b>Won time</b> across all won deals in the selected range.<br><div class="calc-row">avg(Won time − Deal created) in days</div>')}</div>
@@ -7677,7 +7691,7 @@ function renderPdSales(sc) {
       <div class="box-title">Sales conversion funnel: visual ${infoBtn('Sales conversion funnel',
         '<span class="src-tag">Pipedrive · ' + pipelineLabel + '</span><br>Each box counts deals <b>created in ' + range.label + '</b> that <b>reached that stage or beyond</b> (a won deal counts as having reached every stage).<br>' +
         '<div class="calc-row">Stage % = deals at this stage ÷ deals at the previous stage<br>Won % = Won deals ÷ deals that reached Contact Made</div>' +
-        'The green <b>Won %</b> is the overall figure: <b>what share of Contact Made deals end up won</b>: not the Payment→Won step. It includes still-open deals in the denominator, so it reads lower than the win rate (won ÷ [won+lost]).')}
+        'The green <b>Won %</b> is the overall figure: <b>what share of Contact Made deals end up won</b> — this IS Pipedrive\'s win rate (Won ÷ Contacts entered). It is lower than the <b>close rate</b> (Won ÷ [Won+Lost]) because it includes still-open deals in the denominator.')}
         <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">deals created in ${range.label}</span>
       </div>
       ${(() => {
@@ -7785,7 +7799,7 @@ function renderPdSales(sc) {
       <div class="box-title">Win / loss analysis: ${range.label} · ${pipelineLabel}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">
         <div>
-          <div style="font-size:12px;color:var(--tl);margin-bottom:8px">Why deals were lost · ${lostDeals.length} lost · overall win rate <b>${wlOverall!=null?fmtPct(wlOverall):':'}</b></div>
+          <div style="font-size:12px;color:var(--tl);margin-bottom:8px">Why deals were lost · ${lostDeals.length} lost · close rate <b>${wlOverall!=null?fmtPct(wlOverall):':'}</b></div>
           ${wlReasonEntries.length ? `<div class="chart-wrap" style="height:${Math.max(180, wlReasonEntries.length*34)}px"><canvas id="pd-winloss-reasons"></canvas></div>` : '<div class="no-data">No lost deals in this period.</div>'}
         </div>
         <div>
@@ -7795,7 +7809,7 @@ function renderPdSales(sc) {
               <th style="text-align:left;padding:5px 6px;border-bottom:1px solid var(--bor)">Source</th>
               <th style="text-align:center;padding:5px 6px;border-bottom:1px solid var(--bor)">Won</th>
               <th style="text-align:center;padding:5px 6px;border-bottom:1px solid var(--bor)">Lost</th>
-              <th style="text-align:right;padding:5px 6px;border-bottom:1px solid var(--bor)">Win rate</th>
+              <th style="text-align:right;padding:5px 6px;border-bottom:1px solid var(--bor)">Close rate</th>
             </tr></thead>
             <tbody>${wlSrcRows.length ? wlSrcRows.map(r => { const cls = r.rate>=60?'good':r.rate>=35?'mid':'bad'; return `<tr style="border-bottom:1px solid var(--bg2)">
               <td style="padding:5px 6px">${r.s}</td>
