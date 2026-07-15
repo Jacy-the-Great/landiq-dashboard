@@ -8945,8 +8945,9 @@ function renderPdOptimax(sc) {
   // ── OPTI-MAX model rows ──────────────────────────────────────────────────
   // NOTE: Invoice currPct uses Order Form Sent (index 3) as denominator: not Signed OFR (index 4)
   // This avoids the 100% bug from Signed OFR → Invoice being 41/41=100%.
-  // Contact Made target used when impressions is hidden (it becomes the funnel entry).
-  const contactTarget = (t.contact_target && t.contact_target > 0) ? t.contact_target : Math.max(1, Math.round(perMo(currCnts[0])));
+  // Contact Made is the projection entry (per month). Fractional and defaults to
+  // the current per-month Contact rate, so an unchanged target is an exact no-op.
+  const contactTarget = (t.contact_target && t.contact_target > 0) ? t.contact_target : perMo(currCnts[0]);
   const ROWS = [
     { isHdr:true, label: showImp ? 'STAGE 1: INCREASE LEADS & DRIVE MORE TRAFFIC' : 'STAGE 1: LEADS INTO THE PIPELINE' },
     ...(showImp ? [{ id:'leads',
@@ -8958,13 +8959,9 @@ function renderPdOptimax(sc) {
     { id:'contact',
       label:'Contact Made / Discovery',
       desc:`${currCnts[0].toLocaleString()} ${unitLabel} entered the CRM since pipeline start · live from Pipedrive`,
-      calc: showImp
-        ? '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals that reached the Contact Made / Discovery stage or beyond.<br><div class="calc-row">Current % = Contact Made ' + unitLabel + ' ÷ Total impressions</div>'
-        : '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Top of the funnel: deals that reached Contact Made / Discovery or beyond. Impressions (Stage 0) are hidden, so this is the entry point and has no upstream conversion %.',
-      currEditable:false, isEntry: !showImp,
-      ...(showImp
-        ? { tgtKey:'contact_pct_target', currPct: totalImpressions>0?pct(currCnts[0],totalImpressions):null, tgtPct: t.contact_pct_target }
-        : { tgtKey:'contact_target', currPct: null }),
+      calc: '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Top of the sales funnel: deals that reached Contact Made / Discovery or beyond. This is the projection entry point — set a monthly Contact target to model growth.' + (showImp ? ' Impressions (Stage 0) above is marketing reach shown for context, not part of the conversion chain.' : ''),
+      currEditable:false, isEntry: true,
+      tgtKey:'contact_target', currPct: null,
       curr: currCnts[0] },
     { isHdr:true, label:'STAGE 2: INCREASE EFFECTIVENESS OF SALES PROCESS' },
     { id:'meeting',
@@ -9014,20 +9011,22 @@ function renderPdOptimax(sc) {
   ];
 
   // ── Build projections ────────────────────────────────────────────────────
+  // Anchored at Contact Made (per month), NOT impressions. Impressions is
+  // marketing reach shown as an indicator, not a sales stage the conversion %s
+  // apply to (impressions→contact is ~0.6%, not 65%); chaining through it
+  // produced absurd projections. Intermediates stay FRACTIONAL and are rounded
+  // only for display, so setting each target % equal to the current % is an
+  // exact no-op: proj.X collapses to perMo(currCnts[X]) at every stage.
   const proj = {};
-  let prevProj = t.leads_target;
-  for (const r of ROWS) {
-    if (r.isHdr) continue;
-    if      (r.id==='leads')   { proj.leads   = t.leads_target;                                  prevProj=proj.leads; }
-    else if (r.id==='contact') { proj.contact = showImp ? Math.round(prevProj*t.contact_pct_target/100) : contactTarget; prevProj=proj.contact; }
-    else if (r.id==='meeting') { proj.meeting = Math.round(prevProj*t.meeting_pct_target/100);   prevProj=proj.meeting; }
-    else if (r.id==='neg')     { proj.neg     = Math.round(prevProj*t.neg_pct_target/100);       prevProj=proj.neg; }
-    else if (r.id==='order')   { proj.order   = Math.round(prevProj*t.order_pct_target/100);     prevProj=proj.order; }
-    else if (r.id==='invoice') { proj.invoice = Math.round(prevProj*t.invoice_pct_target/100);   prevProj=proj.invoice; }
-    else if (r.id==='won')     { proj.won     = Math.round(prevProj*t.won_pct_target/100);       prevProj=proj.won; }
-    else proj[r.id] = null;
-  }
-  const projWon = proj.won;   // per-month projection (chained from a per-month entry target)
+  proj.leads   = t.leads_target;                          // indicator target only, not in the chain
+  proj.contact = contactTarget;
+  proj.meeting = proj.contact * (t.meeting_pct_target/100);
+  proj.neg     = proj.meeting * (t.neg_pct_target/100);
+  proj.order   = proj.neg     * (t.order_pct_target/100);
+  proj.invoice = proj.order   * (t.invoice_pct_target/100);
+  proj.won     = proj.invoice * (t.won_pct_target/100);
+  proj.dealval = null;
+  const projWon = proj.won;   // per-month projection (fractional; rounded only for display)
 
   // ── Unit discipline: currents from Pipedrive are ALL-TIME counts; targets and
   // projections are PER-MONTH. Convert every current to per-month (÷ monthsElapsed)
@@ -9122,11 +9121,11 @@ function renderPdOptimax(sc) {
     if (r.id === 'leads') {
       tgtCountCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input om-input-wide" type="number" min="0" step="1000" value="${t[r.tgtKey]||0}" onchange="omSave('${r.tgtKey}',this.value)"></div>`;
     } else if (r.id === 'contact' && r.isEntry) {
-      tgtCountCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" step="1" value="${contactTarget}" onchange="omSave('contact_target',this.value)" title="Monthly Contact Made target: the projection base while impressions is hidden"></div>`;
+      tgtCountCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" step="0.1" value="${fmt1(contactTarget)}" onchange="omSave('contact_target',this.value)" title="Monthly Contact Made target: the projection entry point"></div>`;
     } else if (r.id === 'dealval') {
       tgtCountCell = `<span style="font-weight:600;color:var(--gr)" title="${fmtDollar(avgDealVal)} × (1 + ${dealValTargetPct}%)">${fmtDollar(dealValTarget)}</span><div style="font-size:9px;color:var(--tl)">target avg deal</div>`;
     } else {
-      tgtCountCell = `<span style="font-weight:600;color:var(--gr)">${prj!=null?prj.toLocaleString():':'}</span>`;
+      tgtCountCell = `<span style="font-weight:600;color:var(--gr)">${prj!=null?fmt1(prj):':'}</span>`;
     }
 
     // ── Col 5: Target % (editable input) ────────────────────────────────────
@@ -9137,7 +9136,7 @@ function renderPdOptimax(sc) {
       tgtPctCell = '<span style="color:var(--tl)">:</span>';
     } else {
       const maxP = r.id === 'dealval' ? 500 : 100;
-      tgtPctCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="${maxP}" step="1" value="${r.tgtPct||0}" onchange="omSave('${r.tgtKey}',this.value)"><span style="font-size:11px;color:var(--tl)">%</span></div>`;
+      tgtPctCell = `<div style="display:flex;align-items:center;gap:3px;justify-content:flex-end"><input class="om-input" type="number" min="0" max="${maxP}" step="0.1" value="${r.tgtPct||0}" onchange="omSave('${r.tgtKey}',this.value)"><span style="font-size:11px;color:var(--tl)">%</span></div>`;
     }
 
     // ── Col 6: Actual % Increase ─────────────────────────────────────────────
@@ -9153,8 +9152,10 @@ function renderPdOptimax(sc) {
     } else if (r.id === 'dealval') {
       actualPct = +(dealValTargetPct).toFixed(1);
     } else {
-      // Absolute pp improvement in conversion rate (target% - current%)
-      actualPct = (r.currPct != null && r.tgtPct != null) ? +((r.tgtPct||0) - r.currPct).toFixed(1) : null;
+      // Absolute pp improvement in conversion rate (target% - current%). Compare
+      // against the current % rounded to the displayed 1 dp, so setting the target
+      // to the shown current value reads exactly +0.0%.
+      actualPct = (r.currPct != null && r.tgtPct != null) ? +((r.tgtPct||0) - (Math.round(r.currPct*10)/10)).toFixed(1) : null;
     }
     const actualHTML = actualPct != null
       ? `<span class="conv-pct ${actualPct>=0?'good':'bad'}">${actualPct>=0?'+':''}${actualPct}%</span>`
@@ -9293,7 +9294,7 @@ function renderPdOptimax(sc) {
     <div class="cards" style="margin-bottom:18px">
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Won ${unitLabel} (${(useFA && !isLic) ? 'past ' + monthsElapsed + ' mo' : 'all time'})${infoBtn('Won '+unitLabel,'<span class="src-tag">Pipedrive · 2026 Sales</span><br>Count of '+unitLabel+' with Status = Won.<br><div class="calc-row">'+(isLic?'SUM(Product quantity of won deals)':'COUNT(Won deals)')+'</div>')}</div><div class="card-value">${wonCurr}</div><div class="card-sub">2026 Sales pipeline · ${fmt1(currMoRate)}/mo avg</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Avg licence won cost${infoBtn('Average licence won cost','<span class="src-tag">Pipedrive · Won Deals</span><br>The real average price per licence once discounts are factored in.<br><div class="calc-row">Total won revenue ÷ total licences sold (Product quantity)<br>'+(licCostFromData?fmtDollar(qtyWonValue)+' ÷ '+totalLicencesSold.toLocaleString()+' = '+fmtDollar(avgLicWonCost):'no Product quantity yet: assumed')+'</div>')}</div><div class="card-value">${fmtDollar(avgLicWonCost)}</div><div class="card-sub">${licCostFromData?totalLicencesSold.toLocaleString()+' licences sold':'assumed: add Product quantity'}</div></div>
-      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Projected won / month${infoBtn('Projected won / month','<span class="src-tag">Calculated</span><br>Won '+unitLabel+' per month if every target conversion rate is hit.<br><div class="calc-row">Target impressions × chained target % at each stage</div>')}</div><div class="card-value" style="color:var(--gr)">${projWon??':'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">${projImpPct>=0?'+':''}${projImpPct}% vs ${fmt1(currMoRate)}/mo current</div>`:''}</div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Projected won / month${infoBtn('Projected won / month','<span class="src-tag">Calculated</span><br>Won '+unitLabel+' per month if every target conversion rate is hit.<br><div class="calc-row">Monthly Contact target × chained target % at each stage</div>')}</div><div class="card-value" style="color:var(--gr)">${projWon!=null?fmt1(projWon):':'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">${projImpPct>=0?'+':''}${projImpPct}% vs ${fmt1(currMoRate)}/mo current</div>`:''}</div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Revenue / month (current)${infoBtn('Revenue / month (current)','<span class="src-tag">Pipedrive · Won Deals</span><br>Current won run-rate × average deal value.<br><div class="calc-row">(Won deals ÷ months since first deal) × avg deal value ('+fmtDollar(avgDealVal)+')</div>')}</div><div class="card-value">${fmtDollar(currRevMonth)}</div><div class="card-sub">${fmtDollar(currRevYear)}/yr at current rate</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Revenue / month (target)${infoBtn('Revenue / month (target)','<span class="src-tag">Calculated</span><br>Projected won run-rate × average deal value.<br><div class="calc-row">(Projected won ÷ months) × avg deal value</div>')}</div><div class="card-value" style="color:var(--gr)">${fmtDollar(projRevMonth)}</div><div class="card-sub" style="color:var(--gr)">+${fmtDollar(projRevMonth-currRevMonth)}/mo uplift</div></div>
     </div>
