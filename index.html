@@ -1622,12 +1622,14 @@ function renderHome(el) {
           const website = load('website');
           const wl = website.length ? website[website.length - 1] : null;
           const webinars = load('webinars');
-          const wbThisYear = webinars.filter(w => w.date && w.date.startsWith('2026'));
+          // Held webinars only: date in 2026 AND on/before today. A record with a
+          // future date (an upcoming/planned webinar) is not counted as "held".
+          const wbThisYear = webinars.filter(w => w.date && w.date.startsWith('2026') && new Date(w.date) <= new Date());
           const content = load('content');
           const postsThisMonth = thisMonth(content, 'date').length;
           return [
-            ['Webinars (2026)', wbThisYear.length || null, null, null, 'from records',
-              '<span class="src-tag">Manual · Webinar log</span><br>Count of webinar records with <b>date starting "2026"</b>. Manually entered in the Marketing tab.'],
+            ['Webinars held (2026)', wbThisYear.length || null, null, null, 'held to date',
+              '<span class="src-tag">Manual · Webinar log</span><br>Count of 2026 webinars that have <b>already been held</b> (date on or before today). Upcoming/planned webinars with a future date are excluded, so this reflects webinars actually delivered. Entered in the Marketing tab.'],
             ['Content posts this month', postsThisMonth || null, null, null, null,
               '<span class="src-tag">Manual · Content log</span><br>Count of content log entries with <b>date in the current calendar month</b>. All content types included (LinkedIn, YouTube, EDM, etc.). Entered in the Marketing tab.'],
           ].map(args => cardHTML(...args)).join('');
@@ -1740,6 +1742,10 @@ function renderExec(el) {
   // Activity (PostHog)
   const phWeekly = (_ph.weekly || []).slice(-1)[0] || {};
   const phWeeklyPrev = (_ph.weekly || []).slice(-2,-1)[0] || {};
+  // Last FULLY-ENDED week (exclude the current partial week so "last week" isn't low)
+  const _phDoneEx = (_ph.weekly || []).filter(w => { const ws = new Date(w.week_start); return !isNaN(ws) && (ws.getTime() + 7 * 86400000) <= Date.now(); });
+  const auNow  = _phDoneEx.length     ? Number(_phDoneEx[_phDoneEx.length - 1].active_users) : null;
+  const auPrev = _phDoneEx.length > 1 ? Number(_phDoneEx[_phDoneEx.length - 2].active_users) : null;
   const dauMau = (_ph.dauMau || []).slice(-1)[0] || {};
   const segments = _ph.segments || [];
 
@@ -1779,8 +1785,8 @@ function renderExec(el) {
     bullets.push(`<b>${activeTrial.length}</b> active trial${activeTrial.length>1?'s':''} in progress.`);
   if (pipelineValue > 0)
     bullets.push(`Open pipeline: <b>${fmtCur(pipelineValue)}</b> across ${openDeals.length} deals (2026 Sales).`);
-  if (phWeekly.active_users)
-    bullets.push(`PostHog: <b>${fmtNum(phWeekly.active_users)}</b> active users last week${trend(phWeekly.active_users, phWeeklyPrev.active_users)}.`);
+  if (auNow)
+    bullets.push(`PostHog: <b>${fmtNum(auNow)}</b> active users last week (last full week, ≥1 event)${trend(auNow, auPrev)}.`);
   if (dauMau.dau_mau_pct)
     bullets.push(`On a typical day, <b>${fmtPct(dauMau.dau_mau_pct)}</b> of monthly users are active (last 30 days).`);
   if (visitors)
@@ -1826,7 +1832,8 @@ function renderExec(el) {
       ['Won this month', wonThisMonth.length || null, null, null, wonThisMonth.length ? fmtCur(wonThisMonth.reduce((s,d)=>s+(parseFloat(d['Deal - Value'])||0),0)) + ' new revenue' : null],
       ['Churned this month', churnedThisMonth.length || null, null, null, 'paid subscribers lost'],
       ['Active trials', activeTrial.length || null, null, null, 'in progress'],
-      ['Active users (last week)', phWeekly.active_users || null, null, null, 'product usage'],
+      ['Active users (last week)', auNow, auPrev, null, 'PostHog · ≥1 event · last full week',
+        '<span class="src-tag">Live · PostHog (Giraffe/SDK)</span><br>Distinct users who triggered <b>≥1 event</b> in Land iQ during the last <b>completed</b> week — people actually <b>active in the product</b>, not everyone with access. The current in-progress week is excluded so it does not read artificially low.<br><div class="calc-row">ph_weekly_stats() → active_users, latest fully-ended week</div>This is NOT the count of licence-holders / people with access — for that see <b>Active paid subscribers</b> on the Sales tab.'],
     ])}
 
     <!-- Narrative (full width) -->
