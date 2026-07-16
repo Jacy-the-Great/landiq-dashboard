@@ -6051,6 +6051,66 @@ window.wsSetTargetSel = (kpiId, v) => {
   wsPatch('t|' + kpiId, isNaN(num) ? null : num); renderWorkstreams();
 };
 
+// ── granularity, filters, and in-system KPI editing ──────────────────────────
+window.setWsGran = g => { activeSub.ws_gran = g; activeSub.ws_period = null; renderWorkstreams(); };
+window.setWsPeriod = p => { activeSub.ws_period = p; renderWorkstreams(); };
+window.setWsFilter = (type, v) => {
+  activeSub['ws_f_' + type] = v; renderWorkstreams();
+  if (type === 'kw') { const el = document.querySelector('#main-content input[type=search]'); if (el) { el.focus(); const val = el.value; el.value = ''; el.value = val; } }
+};
+window.wsClearFilters = () => { activeSub.ws_f_owner = ''; activeSub.ws_f_ws = ''; activeSub.ws_f_kw = ''; renderWorkstreams(); };
+window.wsEditKpi = id => { activeSub.ws_edit = (activeSub.ws_edit === id) ? null : id; renderWorkstreams(); };
+// Definition overrides (label / measure / unit / lowerBetter) for ANY kpi, built-in or custom.
+window.wsSaveDef = (id, field, value) => {
+  const cur = { ...(wsData()['def|' + id] || {}) };
+  if (field === 'measure') {
+    if (value === 'custom') { const u = prompt('Unit to measure in (e.g. seats, people, licences):', cur.unit && !['$','%',''].includes(cur.unit) ? cur.unit : ''); if (u == null) { renderWorkstreams(); return; } cur.unit = u.trim(); }
+    else cur.unit = value;   // '', '$' or '%'
+  } else if (field === 'lowerBetter') cur.lowerBetter = !cur.lowerBetter;
+  else cur[field] = value;   // label
+  wsPatch('def|' + id, cur); renderWorkstreams();
+};
+window.wsAddKpi = wsId => {
+  const label = prompt('New KPI name:'); if (!label || !label.trim()) return;
+  const id = 'cust_' + Math.random().toString(36).slice(2, 8);
+  const news = { ...(wsData()['new'] || {}) };
+  news[id] = { id, label: label.trim(), wsId, unit: '', lowerBetter: false };
+  wsPatch('new', news); renderWorkstreams();
+};
+window.wsDeleteKpi = id => {
+  if (!confirm('Delete this KPI? (built-in KPIs can only be deleted if custom; otherwise use Hide)')) return;
+  const news = { ...(wsData()['new'] || {}) };
+  if (news[id]) { delete news[id]; wsPatch('new', news); }
+  activeSub.ws_edit = null; renderWorkstreams();
+};
+// Build the effective board: built-in WORKSTREAMS + def overrides + custom KPIs.
+function wsEffective() {
+  const d = wsData();
+  const news = d['new'] || {};
+  const applyDef = k => { const o = d['def|' + k.id]; return o ? { ...k, ...('label' in o ? { label: o.label } : {}), ...('unit' in o ? { unit: o.unit } : {}), ...('lowerBetter' in o ? { lowerBetter: o.lowerBetter } : {}) } : k; };
+  return WORKSTREAMS.map(sec => ({ ...sec, items: sec.items.map(w => {
+    const custom = Object.values(news).filter(n => n.wsId === w.id).map(n => ({ ...n, type: 'manual', custom: true, ref: n.ref || ('KPI-C' + n.id.slice(-3)) }));
+    return { ...w, kpis: [...w.kpis.map(applyDef), ...custom.map(applyDef)] };
+  }) }));
+}
+// Value/target formatting by unit.
+function wsFmt(num, unit) {
+  if (num == null) return ':';
+  if (unit === '$') return fmtCur(num);
+  if (unit === '%') return fmtPct(num);
+  const u = unit && !['count', ''].includes(unit) ? ' ' + unit : '';
+  return fmtNum(num) + u;
+}
+// Additive measures (counts, $, seats…) scale with the period; rates (%, score, days) don't.
+function wsAdditive(unit) { return !['%', 'score', 'days'].includes(unit || ''); }
+
+// ── month/quarter period helpers (generalise the quarter selector)
+function wsMonthKey(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
+function wsMonthRange(key) { const [y, m] = key.split('-').map(Number); return { from: new Date(y, m - 1, 1), to: new Date(y, m, 0, 23, 59, 59, 999), label: new Date(y, m - 1, 1).toLocaleDateString('en-AU', { month: 'short', year: 'numeric' }) }; }
+function wsMonths(n) { const out = []; const now = new Date(); let y = now.getFullYear(), m = now.getMonth(); for (let i = 0; i < n; i++) { out.unshift(y + '-' + String(m + 1).padStart(2, '0')); m--; if (m < 0) { m = 11; y--; } } return out; }
+function wsPeriods(gran, n) { return gran === 'month' ? wsMonths(n) : wsQuarters(n); }
+function wsPeriodRange(gran, key) { return gran === 'month' ? wsMonthRange(key) : wsQuarterRange(key); }
+
 // ── quarter helpers
 function wsQuarterKey(d) { return d.getFullYear() + '-Q' + (Math.floor(d.getMonth() / 3) + 1); }
 function wsQuarterRange(key) {
@@ -6319,11 +6379,20 @@ function wsAuto(key, qr) {
 
 function renderWorkstreams(el) {
   el = el || document.getElementById('main-content');
-  const quarters = wsQuarters(6);
-  const q = (activeSub.ws_quarter && quarters.includes(activeSub.ws_quarter)) ? activeSub.ws_quarter : quarters[quarters.length - 1];
-  const qr = wsQuarterRange(q);
+  const gran = activeSub.ws_gran === 'month' ? 'month' : 'quarter';
+  const periods = wsPeriods(gran, 6);
+  const q = (activeSub.ws_period && periods.includes(activeSub.ws_period)) ? activeSub.ws_period : periods[periods.length - 1];
+  const qr = wsPeriodRange(gran, q);
   const d = wsData();
-  const isCurrentQ = q === quarters[quarters.length - 1];
+  const isCurrentQ = q === periods[periods.length - 1];
+  // Target scaling: a stored target is quarterly; month view shows a monthly pace
+  // (÷3) for additive measures, and the same value for rates (%, score, days).
+  const scaleTarget = (t, unit) => (t == null) ? null : (gran === 'month' && wsAdditive(unit) ? t / 3 : t);
+  // Active filters
+  const fOwner = (activeSub.ws_f_owner || '').trim();
+  const fWs = (activeSub.ws_f_ws || '').trim();
+  const fKw = (activeSub.ws_f_kw || '').trim().toLowerCase();
+  const BOARD = wsEffective();
 
   // status: green at/above target (or at/below for lower-better), amber within 30%, red otherwise, grey if no target/value
   function rag(num, target, lowerBetter) {
@@ -6356,7 +6425,10 @@ function renderWorkstreams(el) {
   }
 
   function kpiRow(k) {
+    if (activeSub.ws_edit === k.id) return { html: editorRowHTML(k), status: 'grey' };
     const target = d['t|' + k.id] ?? k.defaultTarget ?? null;
+    const targetScaled = scaleTarget(target, k.unit);
+    const tgtCell = () => targetSelectHTML(k, target) + (gran === 'month' && targetScaled != null ? `<div style="font-size:9px;color:var(--tl)">≈ ${wsFmt(Math.round(targetScaled * 10) / 10, k.unit)} / mo</div>` : '');
     let valueHTML = '', num = null, sub = '', badge = '', lower = k.lowerBetter;
     if (k.type === 'milestone') {
       const st = d['ms|' + k.id] || '';
@@ -6377,11 +6449,11 @@ function renderWorkstreams(el) {
         <button onclick="wsAddCheckItem('${k.id}')" style="font-size:10px;color:var(--acc);background:none;border:1px dashed var(--acc);border-radius:4px;padding:1px 6px;cursor:pointer">+ category</button>
       </div>`;
       sub = `<b>${ticked} of ${items.length}</b> asset categories aligned${num != null ? ' (' + fmtPct(num) + ')' : ''} · manual: tick as each is done`;
-      const st0 = rag(num, target, false);
-      return { html: rowHTML(k, st0, badge, valueHTML, targetSelectHTML(k, target), sub), status: st0 };
+      const st0 = rag(num, targetScaled, false);
+      return { html: rowHTML(k, st0, badge, valueHTML, tgtCell(), sub), status: st0 };
     }
     let a = null;
-    if (k.type === 'auto') a = wsAuto(k.auto, qr);
+    if (k.type === 'auto' && k.auto) a = wsAuto(k.auto, qr);
     if (a) {
       const TAB_NAMES = { pipedrive: 'Sales', marketing: 'Marketing', tracker: 'Weekly Tracker', training: 'Training', activity: 'Activity' };
       badge = '<span style="font-size:9px;font-weight:700;color:#1f6740;background:#e8f5ee;border-radius:4px;padding:1px 6px">LIVE</span>';
@@ -6397,11 +6469,39 @@ function renderWorkstreams(el) {
       valueHTML = `<input type="number" step="any" value="${rec ? rec.value : ''}" placeholder=":"
         onchange="wsSetVal('${k.id}','${q}',this.value)"
         style="width:86px;padding:4px 7px;border:1.5px solid ${rec ? 'var(--bd)' : '#e6a817'};border-radius:6px;font-size:13px;font-weight:600;font-family:inherit">
-        <span style="font-size:10.5px;color:var(--tl)">${k.unit || ''}</span>`;
+        <span style="font-size:10.5px;color:var(--tl)">${k.unit === '$' ? '$' : k.unit === '%' ? '%' : (k.unit || '')}</span>`;
       sub = rec ? `updated ${fmtDate(rec.at).slice(0, 6)}${rec.by ? ' by ' + rec.by : ''}` : 'manual entry: type the ' + qr.label + ' figure here any time';
     }
-    const st = rag(num, target, lower);
-    return { html: rowHTML(k, st, badge, valueHTML, targetSelectHTML(k, target), sub), status: st };
+    const st = rag(num, targetScaled, lower);
+    return { html: rowHTML(k, st, badge, valueHTML, tgtCell(), sub), status: st };
+  }
+
+  // Inline editor row: label, measure/unit, lower-better, delete (custom only).
+  function editorRowHTML(k) {
+    const o = d['def|' + k.id] || {};
+    const label = (o.label != null ? o.label : k.label);
+    const unit = (o.unit != null ? o.unit : (k.unit || ''));
+    const measure = unit === '$' ? '$' : unit === '%' ? '%' : (unit === '' || unit === 'count') ? '' : 'custom';
+    const lower = ('lowerBetter' in o) ? o.lowerBetter : k.lowerBetter;
+    return `<tr style="background:#f0f7ff;border-bottom:1px solid var(--bg2)">
+      <td></td>
+      <td colspan="3" style="padding:8px 6px">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px">
+          <span style="font-size:9px;font-weight:700;color:var(--tl);background:var(--bg2);border-radius:3px;padding:1px 4px">${k.ref}</span>
+          <input type="text" value="${String(label).replace(/"/g, '&quot;')}" onchange="wsSaveDef('${k.id}','label',this.value)" style="flex:1;min-width:200px;padding:4px 7px;border:1px solid var(--bd);border-radius:6px;font-family:inherit;font-size:12px" title="KPI name">
+          <label style="color:var(--tm)">Measure
+            <select onchange="wsSaveDef('${k.id}','measure',this.value)" style="padding:3px 5px;border:1px solid var(--bd);border-radius:6px;font-family:inherit">
+              <option value=""${measure === '' ? ' selected' : ''}>Number</option>
+              <option value="$"${measure === '$' ? ' selected' : ''}>$ amount</option>
+              <option value="%"${measure === '%' ? ' selected' : ''}>%</option>
+              <option value="custom"${measure === 'custom' ? ' selected' : ''}>${measure === 'custom' ? 'Custom (' + unit + ')' : 'Custom unit…'}</option>
+            </select></label>
+          <label style="color:var(--tm);display:inline-flex;align-items:center;gap:4px"><input type="checkbox"${lower ? ' checked' : ''} onchange="wsSaveDef('${k.id}','lowerBetter')">lower is better</label>
+          ${k.custom ? `<button onclick="wsDeleteKpi('${k.id}')" style="font-size:11px;color:#e05252;background:none;border:1px solid #e05252;border-radius:6px;padding:2px 8px;cursor:pointer">Delete</button>` : '<span style="font-size:10px;color:var(--tl)">built-in · edits saved as overrides</span>'}
+          <button onclick="wsEditKpi('${k.id}')" style="font-size:11px;color:#fff;background:var(--acc);border:none;border-radius:6px;padding:3px 10px;cursor:pointer">Done</button>
+        </div>
+      </td>
+    </tr>`;
   }
 
   function rowHTML(k, st, badge, valueHTML, targetHTML, sub) {
@@ -6410,13 +6510,31 @@ function renderWorkstreams(el) {
     const hidden = !!_hiddenMetrics[hk];
     return `<tr class="${hidden ? 'metric-hidden' : ''}" style="border-bottom:1px solid var(--bg2)${k.proposed ? ';background:#f7fafd' : ''}">
       <td style="padding:7px 6px;width:12px"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${dotCol[st]}"></span></td>
-      <td style="padding:7px 6px;font-size:12.5px"><span style="font-size:9px;font-weight:700;color:var(--tl);background:var(--bg2);border-radius:3px;padding:1px 4px;margin-right:5px" title="Reference code: quote this to request changes">${k.ref}</span>${k.label}${infoBtn(k.ref + ' · ' + k.label, wsKpiDoc(k))}<span class="hide-toggle" data-hk="${hk}" title="${hidden ? 'Hidden from the everyday view: click to show' : 'Click to hide this from the everyday view'}">${hidden ? 'show' : 'hide'}</span><div style="margin-top:2px">${badge}</div></td>
+      <td style="padding:7px 6px;font-size:12.5px"><span style="font-size:9px;font-weight:700;color:var(--tl);background:var(--bg2);border-radius:3px;padding:1px 4px;margin-right:5px" title="Reference code: quote this to request changes">${k.ref}</span>${k.label}${infoBtn(k.ref + ' · ' + k.label, wsKpiDoc(k))}<span class="hide-toggle" data-hk="${hk}" title="${hidden ? 'Hidden from the everyday view: click to show' : 'Click to hide this from the everyday view'}">${hidden ? 'show' : 'hide'}</span><span onclick="wsEditKpi('${k.id}')" title="Edit this KPI (name, measure, target)" style="cursor:pointer;font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--acc);margin-left:6px">✎ edit</span><div style="margin-top:2px">${badge}</div></td>
       <td style="padding:7px 6px;white-space:nowrap">${valueHTML}${sub ? `<div style="font-size:10px;color:var(--tl);margin-top:2px">${sub}</div>` : ''}</td>
       <td style="padding:7px 6px;text-align:right">${targetHTML}</td>
     </tr>`;
   }
 
-  const sectionsHTML = WORKSTREAMS.map(sec => `
+  // Apply filters (owner / workstream / keyword) to the effective board.
+  let matchCount = 0;
+  const filteredSections = BOARD.map(sec => {
+    const items = sec.items.filter(w => {
+      if (fWs && w.id !== fWs) return false;
+      if (fOwner && !(w.owner || '').includes(fOwner)) return false;
+      return true;
+    }).map(w => {
+      if (!fKw) return w;
+      const wsMatches = (w.name + ' ' + w.owner).toLowerCase().includes(fKw);
+      if (wsMatches) return w;   // keyword hits the workstream: keep all its KPIs
+      const kpis = w.kpis.filter(k => (k.label + ' ' + (k.ref || '')).toLowerCase().includes(fKw));
+      return kpis.length ? { ...w, kpis } : null;
+    }).filter(Boolean);
+    return { ...sec, items };
+  }).filter(sec => sec.items.length);
+  filteredSections.forEach(sec => sec.items.forEach(w => matchCount += w.kpis.length));
+
+  const sectionsHTML = filteredSections.length ? filteredSections.map(sec => `
     <div style="margin-bottom:6px;margin-top:22px;font-size:14px;font-weight:700;color:var(--navy);letter-spacing:.3px;text-transform:uppercase">${sec.section}</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(430px,1fr));gap:14px">
       ${sec.items.map(w => {
@@ -6442,9 +6560,15 @@ function renderWorkstreams(el) {
             </tr></thead>
             <tbody>${rows.map(r => r.html).join('')}</tbody>
           </table>
+          <button onclick="wsAddKpi('${w.id}')" style="margin-top:8px;font-size:11px;color:var(--acc);background:none;border:1px dashed var(--acc);border-radius:6px;padding:3px 10px;cursor:pointer">+ Add KPI</button>
         </div>`;
       }).join('')}
-    </div>`).join('');
+    </div>`).join('') : '<div class="no-data" style="margin-top:20px">No KPIs match the current filters. <a onclick="wsClearFilters()" style="color:var(--acc);cursor:pointer;text-decoration:underline">Clear filters</a></div>';
+
+  // Filter option lists (distinct owners + all workstreams, from the effective board)
+  const allItems = BOARD.flatMap(s => s.items);
+  const ownerOpts = [...new Set(allItems.flatMap(w => (w.owner || '').split(/\s*\/\s*/)).map(o => o.trim()).filter(Boolean))].sort();
+  const wsOpts = allItems.map(w => ({ id: w.id, name: w.name }));
 
   el.innerHTML = `
     <div class="section-header">
@@ -6452,9 +6576,29 @@ function renderWorkstreams(el) {
         <div class="section-title">Land iQ Workstreams</div>
         <div class="section-sub">Key tasks & KPIs by workstream · working reference alongside the Power BI tracker</div>
       </div>
-      <div class="range-toggle" style="align-items:center">
-        ${quarters.map(k => `<button class="range-btn${k === q ? ' active' : ''}" onclick="setWsQuarter('${k}')">${wsQuarterRange(k).label}</button>`).join('')}
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <div class="range-toggle" style="align-items:center">
+          <button class="range-btn${gran === 'month' ? ' active' : ''}" onclick="setWsGran('month')">Month</button>
+          <button class="range-btn${gran === 'quarter' ? ' active' : ''}" onclick="setWsGran('quarter')">Quarter</button>
+        </div>
+        <div class="range-toggle" style="align-items:center">
+          ${periods.map(k => `<button class="range-btn${k === q ? ' active' : ''}" onclick="setWsPeriod('${k}')">${wsPeriodRange(gran, k).label}</button>`).join('')}
+        </div>
       </div>
+    </div>
+
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;background:var(--sur);border:1px solid var(--bd);border-radius:8px;padding:8px 12px">
+      <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--tl)">Filter</span>
+      <select onchange="setWsFilter('owner',this.value)" style="font-size:12px;padding:4px 8px;border:1px solid var(--bd);border-radius:6px;font-family:inherit;background:var(--wh);cursor:pointer">
+        <option value=""${!fOwner ? ' selected' : ''}>All staff</option>
+        ${ownerOpts.map(o => `<option value="${o.replace(/"/g, '&quot;')}"${fOwner === o ? ' selected' : ''}>${o}</option>`).join('')}
+      </select>
+      <select onchange="setWsFilter('ws',this.value)" style="font-size:12px;padding:4px 8px;border:1px solid var(--bd);border-radius:6px;font-family:inherit;background:var(--wh);cursor:pointer">
+        <option value=""${!fWs ? ' selected' : ''}>All workstreams</option>
+        ${wsOpts.map(w => `<option value="${w.id}"${fWs === w.id ? ' selected' : ''}>${w.name}</option>`).join('')}
+      </select>
+      <input type="search" value="${(activeSub.ws_f_kw || '').replace(/"/g, '&quot;')}" oninput="setWsFilter('kw',this.value)" placeholder="🔍 keyword…" style="font-size:12px;padding:4px 10px;border:1px solid var(--bd);border-radius:6px;font-family:inherit;min-width:160px">
+      <span style="font-size:11px;color:var(--tl)">${matchCount} KPI${matchCount === 1 ? '' : 's'}${(fOwner || fWs || fKw) ? ' · <a onclick="wsClearFilters()" style="color:var(--acc);cursor:pointer;text-decoration:underline">clear</a>' : ''}</span>
     </div>
 
     ${(() => {
