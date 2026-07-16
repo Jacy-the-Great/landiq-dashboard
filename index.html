@@ -9186,8 +9186,12 @@ function renderPdOptimax(sc) {
     } else if (r.id === 'dealval') {
       cumulativePct = null;   // a value multiplier, not part of the volume chain
     } else {
+      // Compare the DISPLAYED (1 dp) target # and current #, so when the shown
+      // Target # equals the shown Current # the row reads exactly +0.0% (no
+      // sub-decimal residual leaking through from the full-precision chain).
       const currBase = perMo(r.id === 'won' ? wonCurr : r.curr);   // per-month vs per-month projection
-      cumulativePct = (currBase > 0 && prj != null) ? +((prj - currBase) / currBase * 100).toFixed(1) : null;
+      const prjD = Math.round(prj * 10) / 10, curD = Math.round(currBase * 10) / 10;
+      cumulativePct = (curD > 0 && prj != null) ? +((prjD - curD) / curD * 100).toFixed(1) : null;
     }
     const cumulativeHTML = cumulativePct != null
       ? `<span class="conv-pct ${cumulativePct>=0?'good':'bad'}">${cumulativePct>=0?'+':''}${cumulativePct}%</span>`
