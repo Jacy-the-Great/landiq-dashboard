@@ -1158,6 +1158,7 @@ const liImp = r => {
 // Chart axis labels: '16 Mar': readable at a glance (vs raw '03-16')
 const shortDate = s => { const d = new Date(s); return isNaN(d) ? (s || '') : d.toLocaleDateString('en-AU', { day:'numeric', month:'short' }); };
 const fmtNum  = n => n != null ? Number(n).toLocaleString() : ':';
+const fmt1    = n => n != null ? (Math.round(Number(n) * 10) / 10).toLocaleString() : ':';   // 1-decimal number
 const fmtPct  = n => n != null ? Number(n).toFixed(1) + '%' : ':';
 // Duration parsing for webinar times: accepts "49m 34s", "49:34", "49m", "45" (mins)
 function parseMinSec(s) {
@@ -1188,6 +1189,24 @@ function pdInsightsWinRate() {
   try { fa = { ...DEF, ...(JSON.parse(localStorage.getItem('liq_funnel_actual') || '{}')) }; } catch { fa = DEF; }
   const rate = (fa.contact > 0 && fa.won != null) ? pct(fa.won, fa.contact) : null;
   return { rate, months: Math.round(fa.windowMonths || 6), won: fa.won, contact: fa.contact };
+}
+
+// OPTI-MAX per-month targets, so Sales-tab KPIs stay in sync with the model.
+// leadsTarget = OPTI-MAX Stage 1 (Contact Made) target; wonTarget = OPTI-MAX
+// Stage 3 Won target (the same chained projection the model shows). Currents come
+// from the authoritative Insights counts (÷ window), matching OPTI-MAX exactly.
+function omTargets() {
+  const DEF = { meeting_pct_target: 80, neg_pct_target: 95, order_pct_target: 82, invoice_pct_target: 90, won_pct_target: 90, contact_target: 0 };
+  let t = DEF;
+  try { t = { ...DEF, ...(JSON.parse(localStorage.getItem('liq_optimax') || '{}')) }; } catch { t = DEF; }
+  const fa = pdInsightsWinRate();
+  const per = v => (v || 0) / (fa.months || 6);
+  const leadsCurr = per(fa.contact);
+  const wonCurr = per(fa.won);
+  const leadsTarget = (t.contact_target && t.contact_target > 0) ? t.contact_target : leadsCurr;
+  const wonTarget = leadsTarget * (t.meeting_pct_target / 100) * (t.neg_pct_target / 100)
+    * (t.order_pct_target / 100) * (t.invoice_pct_target / 100) * (t.won_pct_target / 100);
+  return { leadsCurr, leadsTarget, wonCurr, wonTarget };
 }
 
 function thisMonth(arr, dateKey = 'week') {
@@ -6681,6 +6700,10 @@ function renderPipedrive(el) {
         '<span class="src-tag">Pipedrive · ' + plLabel + '</span><br>Deals with <b>Status = Lost</b> and <b>Lost time</b> within the selected date range.<br><div class="calc-row">Pipeline = "' + plLabel + '" AND Status = "Lost" AND Lost time in range</div>Currently showing: <b>' + range.label + '</b>'],
       ['Close rate (' + plLabel + ')', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%', 'Won ÷ (Won + Lost) · ' + range.label,
         '<span class="src-tag">Pipedrive · ' + plLabel + '</span><br><b>Close rate = Won ÷ (Won + Lost)</b> for deals CLOSED within the selected range — the % of resolved deals that were won. Open deals are excluded, so this reads much higher than Pipedrive\'s <b>win rate</b> (Won ÷ Contacts entered, ' + fmtPct(pdInsightsWinRate().rate) + ' — see OPTI-MAX).<br><div class="calc-row">Won.count / (Won.count + Lost.count) × 100</div>Currently showing: <b>' + range.label + '</b>'],
+      ['Monthly leads', Math.round(omTargets().leadsCurr * 10) / 10, null, null, 'Target ' + fmt1(omTargets().leadsTarget) + '/mo · OPTI-MAX Stage 1',
+        '<span class="src-tag">Pipedrive · Insights</span><br>New leads reaching <b>Contact Made / Discovery</b> per month (' + pdInsightsWinRate().contact + ' contacts ÷ ' + pdInsightsWinRate().months + ' mo). The <b>target</b> is the OPTI-MAX <b>Stage 1</b> Contact target — set it in the OPTI-MAX model and this card follows.<br><div class="calc-row">Contacts entered ÷ window (months)</div>'],
+      ['Target won / month', Math.round(omTargets().wonTarget * 10) / 10, null, null, 'Now ' + fmt1(omTargets().wonCurr) + '/mo · OPTI-MAX Stage 3',
+        '<span class="src-tag">Calculated · OPTI-MAX</span><br>The <b>Stage 3 Won target</b> from the OPTI-MAX model — the Stage 1 lead target chained through every stage’s target conversion %. Currently <b>' + fmt1(omTargets().wonCurr) + '/mo</b> actual. Change the OPTI-MAX targets to move this.<br><div class="calc-row">Lead target × meeting% × neg% × order% × invoice% × won%</div>'],
       ['Active paid subscribers', activePaidSubs.length || null, null, null, 'Target: 600 · as of today',
         '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND (Date Access Removed is blank OR is a future date). Always shows current snapshot: not affected by the date range or pipeline filter.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
       ['People (total)', _pd_people.length || null, null, null, null,
