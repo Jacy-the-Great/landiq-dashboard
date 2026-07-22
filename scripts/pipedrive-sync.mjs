@@ -266,6 +266,13 @@ if (!SKIP_DETAIL) {
   const lost = sales.filter(d => d['Deal - Status'] === 'Lost');
   const lostMid = lost.filter(d => furthest(d) > 0).length;
 
+  // Distinct pipeline values, so a renamed/missing pipeline is obvious immediately.
+  const pipeCounts = {};
+  for (const d of deals) { const p = d['Deal - Pipeline'] ?? '(missing key)'; pipeCounts[p] = (pipeCounts[p] || 0) + 1; }
+  console.log(`\n   pipelines seen: ${Object.entries(pipeCounts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `"${k}"=${v}`).join('  ')}`);
+  const sampleKeys = Object.keys(deals[0] || {}).filter(k => /Pipeline|Stage|Status/i.test(k));
+  console.log(`   related keys on a deal: ${JSON.stringify(sampleKeys)}`);
+
   console.log(`\n── 2026 Sales sanity check ──`);
   console.log(`   ${sales.length} deals · ${withHist} with stage history · ${lost.length} lost (${lostMid} of them got past first contact)`);
   console.log(`   reached-stage (all time): ${FSALL.map((s, i) => s.split(/[ /]/)[0] + '=' + counts[i]).join('  ')}`);
