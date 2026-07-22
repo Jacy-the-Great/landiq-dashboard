@@ -1,0 +1,23 @@
+name: Pipedrive sync
+
+on:
+  schedule:
+    # 16:00 UTC = 02:00 AEST — an hour before the PostHog sync, so they don't overlap.
+    - cron: '0 16 * * *'
+  workflow_dispatch:        # lets you run it on demand from the Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30     # the per-deal stage-history pass is the slow part
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Sync Pipedrive deals + people into Supabase
+        env:
+          PIPEDRIVE_TOKEN: ${{ secrets.PIPEDRIVE_TOKEN }}
+          PIPEDRIVE_DOMAIN: ${{ secrets.PIPEDRIVE_DOMAIN }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/pipedrive-sync.mjs
