@@ -112,16 +112,26 @@ function buildMapper(fields, prefix, lookups) {
     for (const f of fields) {
       const name = f.name;
       if (!name) continue;
+      const lname = name.toLowerCase();
+
+      // The key in /dealFields doesn't always match the property on the record
+      // (e.g. Pipeline is "pipeline_id" on a deal). Try the field key, then the
+      // ±"_id" variants, before giving up.
       let v = rec[f.key];
+      if (v === undefined && f.key.endsWith('_id')) v = rec[f.key.replace(/_id$/, '')];
+      if (v === undefined) v = rec[f.key + '_id'];
+
+      // Relations resolved by field NAME, which is stable even when the key isn't.
+      if (lname === 'pipeline')      v = lookups.pipelines[rec.pipeline_id ?? v] ?? v;
+      else if (lname === 'stage')    v = lookups.stages[rec.stage_id ?? v]?.name ?? v;
+      else if (lname === 'owner')    v = lookups.users[(rec.user_id && typeof rec.user_id === 'object' ? rec.user_id.id : rec.user_id) ?? v] ?? (typeof v === 'object' ? v?.name : v);
+
       if (v === undefined || v === null || v === '') { row[`${prefix} - ${name}`] = ''; continue; }
 
-      // Relations come back either as an object (with .name/.value) or a bare id.
+      // Remaining relations come back either as an object (with .name/.value) or a bare id.
       if (typeof v === 'object' && !Array.isArray(v)) v = v.name ?? v.value ?? v.id ?? '';
 
-      if (f.key === 'pipeline_id') v = lookups.pipelines[v] ?? v;
-      else if (f.key === 'stage_id') v = lookups.stages[v]?.name ?? v;
-      else if (f.key === 'user_id' || f.key === 'creator_user_id' || f.key === 'owner_id') v = lookups.users[v] ?? v;
-      else if (f.key === 'status') v = String(v).charAt(0).toUpperCase() + String(v).slice(1);  // won → Won
+      if (f.key === 'status') v = String(v).charAt(0).toUpperCase() + String(v).slice(1);  // won → Won
       else if (optMap[f.key]) {
         const ids = Array.isArray(v) ? v : String(v).split(',');
         v = ids.map(id => optMap[f.key][String(id).trim()] ?? String(id).trim()).join(', ');
