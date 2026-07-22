@@ -63,12 +63,22 @@ in Pipedrive later will flow through automatically**, no code change needed.
 
 - **`Deal - Product quantity` / `Product name` / `Product amount`** — pulled from
   each deal's attached products. This is what the licence numbers are built on.
-- **`Deal - Max stage reached` / `Max stage order`** — the furthest stage each deal
-  *ever* reached, read from its change history. A CSV export only carries the
-  *current* stage, so a lost deal's journey was erased and the funnel's middle
-  stages read low. This is exactly why the OPTI-MAX funnel counts have been typed
-  in by hand from Pipedrive Insights — once this sync has run, they can come from
-  the data instead.
+- **`Deal - Stages visited`** (plus `Max stage reached` / `Max stage order`) — every
+  stage each deal *ever* passed through, read from its change history. A CSV export
+  only carries the *current* stage, so a lost deal's journey was erased and the
+  funnel's middle stages read low. This is exactly why the OPTI-MAX funnel counts
+  have been typed in by hand from Pipedrive Insights.
+
+  We store the full list rather than just "the furthest stage" on purpose: your
+  pipeline has a terminal **Closed Lost** stage which sits at a high sort order, so
+  reducing to a single furthest-by-order stage would make *every* lost deal report
+  "Closed Lost" — erasing the very journey we came to recover. The dashboard picks
+  the furthest stage that is a real funnel stage.
+
+  **The OPTI-MAX funnel switches over automatically.** As soon as this field is
+  present in the data, the funnel computes its counts from real stage history and
+  the "Funnel counts" box shows **● Live stage history** instead of the manual
+  Insights entry. No hand-typed numbers, and nothing to remember to refresh.
 
 ---
 

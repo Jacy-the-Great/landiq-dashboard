@@ -224,9 +224,16 @@ if (!SKIP_DETAIL) {
     }
     const known = [...seen].filter(s => lookups.stages[s]);
     if (!known.length) return;
-    const furthest = known.reduce((a, b) => (lookups.stages[a].order >= lookups.stages[b].order ? a : b));
-    deals[i]['Deal - Max stage reached'] = lookups.stages[furthest].name;
-    deals[i]['Deal - Max stage order']   = String(lookups.stages[furthest].order);
+    // Record EVERY stage the deal ever sat in, ordered. We deliberately do not
+    // reduce this to a single "furthest by order_nr" here: a pipeline that has a
+    // terminal "Closed Lost" stage would make that stage win on order for every
+    // lost deal, erasing the journey we came here to recover. The dashboard picks
+    // the furthest stage that is an actual funnel stage.
+    const ordered = known.sort((a, b) => lookups.stages[a].order - lookups.stages[b].order);
+    deals[i]['Deal - Stages visited'] = ordered.map(s => lookups.stages[s].name).join(' | ');
+    const last = ordered[ordered.length - 1];
+    deals[i]['Deal - Max stage reached'] = lookups.stages[last].name;
+    deals[i]['Deal - Max stage order']   = String(lookups.stages[last].order);
   });
   const moved = deals.filter(r => r['Deal - Max stage reached'] && r['Deal - Max stage reached'] !== r['Deal - Stage']).length;
   console.log(`  ✓ stage history done — ${moved} deals reached a stage beyond their current one`);

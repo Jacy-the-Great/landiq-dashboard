@@ -8977,7 +8977,7 @@ function renderPdOptimax(sc) {
   window.omSaveFA = (k, v) => { const o = loadFA(); o[k] = (k === 'asOf') ? v : (k === 'on' ? (v ? 1 : 0) : (parseFloat(v) || 0)); localStorage.setItem(FA_KEY, JSON.stringify(o)); renderPdOptimax(sc); };
   window.omToggleFA = () => { const o = loadFA(); o.on = o.on ? 0 : 1; localStorage.setItem(FA_KEY, JSON.stringify(o)); renderPdOptimax(sc); };
   const FA = loadFA();
-  const useFA = FA.on !== 0;   // use Pipedrive's authoritative counts (vs CSV reconstruction)
+  const faManualOn = FA.on !== 0;   // the saved toggle: hand-typed Pipedrive Insights counts
   window.setOmView = (v) => { activeSub.om_view = v; renderPdOptimax(sc); };
   window.omToggleImp = () => { const o=loadOM(); o.show_imp = o.show_imp!==0 ? 0 : 1; localStorage.setItem(OM_KEY,JSON.stringify(o)); renderPdOptimax(sc); };
   window.omToggleS4  = () => { const o=loadOM(); o.show_s4  = o.show_s4 !==0 ? 0 : 1; localStorage.setItem(OM_KEY,JSON.stringify(o)); renderPdOptimax(sc); };
@@ -8991,16 +8991,40 @@ function renderPdOptimax(sc) {
   const sDeals = _pd_deals.filter(d => d['Deal - Pipeline']==='2026 Sales');
   const FSALL  = ['Contact Made/Discovery','Meeting Scheduled','Negotiations','Order Form Sent','Signed Order Form Returned','Invoice Sent','Payment Received'];
   const fsIdx  = Object.fromEntries(FSALL.map((s,i)=>[s,i]));
+  // True when the nightly Pipedrive API sync has written stage history into the
+  // deals (scripts/pipedrive-sync.mjs). That is the only source that knows how far
+  // a LOST deal actually got, so it supersedes both the CSV guess and the
+  // hand-typed Insights counts.
+  const hasStageHistory = sDeals.some(d => d['Deal - Stages visited']);
+  // Once real stage history is synced it supersedes the hand-typed Insights counts:
+  // same measurement, but live and exact, so it can't go stale.
+  const useFA = faManualOn && !hasStageHistory;
+
   function reached(d, idx) {
     if (d['Deal - Status']==='Won') return true;
+    // Synced stage history: the deal reached stage idx if ANY stage it ever sat in
+    // maps to a funnel stage at or beyond idx. We take the furthest stage that is a
+    // real funnel stage, so a terminal "Closed Lost" stage can't mask the journey.
+    const visited = d['Deal - Stages visited'];
+    if (visited) {
+      let best = -1;
+      for (let nm of String(visited).split('|')) {
+        nm = nm.trim(); if (nm === 'Contact Made') nm = 'Contact Made/Discovery';
+        const vi = fsIdx[nm];
+        if (vi != null && vi > best) best = vi;
+      }
+      if (best >= 0) return best >= idx;
+      return idx === 0;
+    }
     let stg=d['Deal - Stage']||''; if(stg==='Contact Made')stg='Contact Made/Discovery';
     const di=fsIdx[stg];
     if (di!=null) return di>=idx;
     return idx===0;   // Lost/unknown stage: the deal still entered the pipeline (reached Contact Made)
   }
-  // Deals-view reached counts: authoritative from Pipedrive Insights when enabled
-  // (matches Pipedrive exactly, lost deals placed correctly); otherwise the CSV
-  // reconstruction, which can only count lost deals at entry.
+  // Deals-view reached counts. Preference order:
+  //   1. synced stage history  — live, exact, lost deals placed correctly
+  //   2. Pipedrive Insights    — exact but typed in by hand, goes stale
+  //   3. CSV reconstruction    — lost deals can only be counted at entry
   const fCntsCSV = FSALL.map((_,i) => sDeals.filter(d=>reached(d,i)).length);
   const fCnts = useFA
     ? [FA.contact, FA.meeting, FA.neg, FA.order, FA.signed, FA.invoice, FA.won]
@@ -9429,12 +9453,14 @@ function renderPdOptimax(sc) {
         <span style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--acc)">Funnel counts</span>
         <button onclick="omSave('show_fc',${showFC?0:1})" style="font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--acc);background:#fff;border:1px solid #cfe3f0;border-radius:4px;padding:1px 7px;cursor:pointer">${showFC?'Hide':'Show'}</button>
         ${showFC ? `<div class="range-toggle">
-          <button class="range-btn${useFA?' active':''}" onclick="${useFA?'':'omToggleFA()'}">Pipedrive Insights</button>
-          <button class="range-btn${!useFA?' active':''}" onclick="${useFA?'omToggleFA()':''}">Rebuild from CSV</button>
+          ${hasStageHistory ? '' : `<button class="range-btn${useFA?' active':''}" onclick="${useFA?'':'omToggleFA()'}">Pipedrive Insights</button>`}
+          <button class="range-btn${!useFA?' active':''}" onclick="${(useFA && !hasStageHistory)?'omToggleFA()':''}">${hasStageHistory ? '● Live stage history' : 'Rebuild from CSV'}</button>
         </div>
         <span style="font-size:11px;color:var(--tl)">${useFA
           ? 'the true "reached stage" counts from Pipedrive\'s Conversion → Summary report · matches Pipedrive exactly, lost deals included'
-          : 'reconstructed from the deals CSV · lost deals can only be placed at entry, so intermediate stages read low'}</span>` : '<span style="font-size:11px;color:var(--tl)">data-entry hidden · click Show to edit the Pipedrive counts</span>'}
+          : hasStageHistory
+            ? 'from each deal\'s real stage history, synced nightly from the Pipedrive API · lost deals counted at the furthest stage they actually reached · no manual entry needed'
+            : 'reconstructed from the deals CSV · lost deals can only be placed at entry, so intermediate stages read low'}</span>` : '<span style="font-size:11px;color:var(--tl)">data-entry hidden · click Show to edit the Pipedrive counts</span>'}
       </div>
       ${showFC ? `${useFA ? `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px">
         <span style="color:var(--tm)">Reached-stage deals · 2026 Sales · past
