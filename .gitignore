@@ -2,3 +2,6 @@
 .env
 .env.*
 node_modules/
+
+# local scratch copies of real Pipedrive data — never commit customer data
+_tmp_*.json
