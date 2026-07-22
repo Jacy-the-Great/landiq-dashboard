@@ -243,3 +243,32 @@ console.log('· writing to Supabase…');
 const dc = await replaceTable('liq_pipedrive_deals', deals);
 const pc = await replaceTable('liq_pipedrive_people', people);
 console.log(`✓ done — ${dc} deals, ${pc} people in Supabase`);
+
+// ── Sanity summary: the funnel the dashboard will now draw ───────────────────
+// Printed every run so a bad sync is obvious in the log rather than silently
+// producing a wrong-looking funnel in the dashboard.
+if (!SKIP_DETAIL) {
+  const FSALL = ['Contact Made/Discovery', 'Meeting Scheduled', 'Negotiations',
+    'Order Form Sent', 'Signed Order Form Returned', 'Invoice Sent', 'Payment Received'];
+  const fsIdx = Object.fromEntries(FSALL.map((s, i) => [s, i]));
+  const sales = deals.filter(d => d['Deal - Pipeline'] === '2026 Sales');
+  const furthest = d => {
+    let best = -1;
+    for (let nm of String(d['Deal - Stages visited'] || '').split('|')) {
+      nm = nm.trim(); if (nm === 'Contact Made') nm = 'Contact Made/Discovery';
+      const i = fsIdx[nm]; if (i != null && i > best) best = i;
+    }
+    return best;
+  };
+  const reached = (d, i) => d['Deal - Status'] === 'Won' || furthest(d) >= i;
+  const counts = FSALL.map((_, i) => sales.filter(d => reached(d, i)).length);
+  const withHist = sales.filter(d => d['Deal - Stages visited']).length;
+  const lost = sales.filter(d => d['Deal - Status'] === 'Lost');
+  const lostMid = lost.filter(d => furthest(d) > 0).length;
+
+  console.log(`\n── 2026 Sales sanity check ──`);
+  console.log(`   ${sales.length} deals · ${withHist} with stage history · ${lost.length} lost (${lostMid} of them got past first contact)`);
+  console.log(`   reached-stage (all time): ${FSALL.map((s, i) => s.split(/[ /]/)[0] + '=' + counts[i]).join('  ')}`);
+  if (!withHist) console.warn('   ⚠ no stage history on any 2026 Sales deal — the funnel will fall back to the CSV estimate');
+  if (counts.some((c, i) => i && c > counts[i - 1])) console.warn('   ⚠ a later stage has MORE deals than an earlier one — that should be impossible');
+}
