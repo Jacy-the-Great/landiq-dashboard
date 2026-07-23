@@ -128,6 +128,13 @@ function buildMapper(fields, prefix, lookups) {
 
       if (v === undefined || v === null || v === '') { row[`${prefix} - ${name}`] = ''; continue; }
 
+      // Contact fields (email, phone) arrive as [{ value, primary, label }] — take
+      // the primary (else first) so "Person - Email" is a plain address, not JSON.
+      // The dashboard matches these against PostHog, so a JSON blob silently breaks
+      // active-usage %, power/at-risk users and org ROI.
+      if (Array.isArray(v) && v.length && v[0] && typeof v[0] === 'object' && 'value' in v[0]) {
+        v = (v.find(x => x.primary) || v[0]).value ?? '';
+      }
       // Remaining relations come back either as an object (with .name/.value) or a bare id.
       if (typeof v === 'object' && !Array.isArray(v)) v = v.name ?? v.value ?? v.id ?? '';
 
@@ -366,6 +373,12 @@ if (!SKIP_DETAIL) {
   const activeTrials = people.filter(p => { if (!isTrial(p['Person - Customer Type'])) return false; const r = parse(p['Person - Date Access Removed']); return !r || r.getTime() > now; }).length;
   const newPaidThisMonth = people.filter(p => p['Person - Customer Type'] === 'Paid Subscription' && inThisMonth(p['Person - Date Access Granted'])).length;
   const winRate = (won.length + lostD.length) ? Math.round(won.length / (won.length + lostD.length) * 100) : null;
+
+  // Field-name dump: shows the exact names the API exposes, so an empty column
+  // (e.g. Region/LGA/Council) can be traced to a renamed or missing field.
+  const geoish = personFields.filter(f => /region|lga|council|locality|area|state|suburb|postcode/i.test(f.name || '')).map(f => f.name);
+  console.log(`\n── Person fields matching geo/region terms: ${JSON.stringify(geoish)}`);
+  console.log(`   all person field names: ${personFields.map(f => f.name).join(' · ')}`);
 
   console.log(`\n── Headline metrics (recomputed from synced data) ──`);
   console.log(`   Active paying seats ............ ${activePaid}`);
