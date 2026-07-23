@@ -260,6 +260,7 @@ body.review-mode .metric-hidden{opacity:.4;outline:1px dashed #c4c4c4;outline-of
 /* Review-only blocks: hidden for the everyday/exec view, revealed in review mode */
 .review-only{display:none}
 body.review-mode .review-only{display:block}
+body.viewer .admin-only{display:none !important}
 /* ── Data-source freshness banner ── */
 .freshness{display:flex;align-items:center;gap:8px;font-size:12.5px;line-height:1.5;padding:9px 13px;border-radius:8px;margin-bottom:14px;border:1px solid}
 .freshness.ok{background:#eef7f1;border-color:#b3dfc5;color:#1f6740}
@@ -312,11 +313,11 @@ body.review-mode .review-only{display:block}
     </div>
     <div class="h-actions">
       <span id="header-user" style="font-size:11px;color:var(--tl);margin-right:4px"></span>
-      <button class="h-link" id="review-toggle" onclick="toggleReviewMode()" title="Show trust flags and click any dot to rate a metric green / yellow / red">⚑ Review mode</button>
-      <button class="h-link" onclick="exportData()">⬇ Export</button>
-      <button class="h-link" onclick="document.getElementById('import-file').click()">⬆ Import</button>
+      <button class="h-link admin-only" id="review-toggle" onclick="toggleReviewMode()" title="Show trust flags and click any dot to rate a metric green / yellow / red">⚑ Review mode</button>
+      <button class="h-link admin-only" onclick="exportData()">⬇ Export</button>
+      <button class="h-link admin-only" onclick="document.getElementById('import-file').click()">⬆ Import</button>
       <input type="file" id="import-file" accept=".json" style="display:none" onchange="handleImportFile(this)">
-      <button class="h-link" onclick="confirmClear()">Clear all</button>
+      <button class="h-link admin-only" onclick="confirmClear()">Clear all</button>
       <button class="h-link" onclick="signOut()" style="color:#e05252">Sign out</button>
     </div>
   </header>
@@ -339,6 +340,16 @@ const TARGET_ARR = 2400000;
 let _authState   = 'initialising'; // 'initialising'|'authenticated'|'unauthenticated'|'refreshing'
 let _authSession = null;
 let _authEmail   = null;
+
+// ── Roles ────────────────────────────────────────────────────────────────────
+// Admins see everything (including hidden items) and get the management controls
+// (Review mode, Export, Import, Clear all). Everyone else is a viewer: the full
+// dashboard MINUS anything the admin has hidden, and none of those controls, so a
+// viewer can't reveal or curate hidden items. Viewers can still edit data values.
+// Add more admin addresses here (lower-case compared).
+const ADMIN_EMAILS = ['jacymacnee1@gmail.com'];
+function isAdminEmail(e) { return ADMIN_EMAILS.some(a => a.toLowerCase() === String(e || '').trim().toLowerCase()); }
+let _isAdmin = false;
 let _refreshTimer = null;
 let _initInFlight = null; // deduplication: prevents concurrent initialiseDatabaseAuth calls
 
@@ -485,7 +496,12 @@ function showApp() {
   document.getElementById('lock').style.display = 'none';
   document.getElementById('app').style.display  = 'flex';
   const userEl = document.getElementById('header-user');
-  if (userEl) userEl.textContent = _authSession?.user?.email || '';
+  const _email = _authSession?.user?.email || '';
+  _isAdmin = isAdminEmail(_email);
+  if (userEl) userEl.textContent = _email + (_isAdmin ? ' · admin' : '');
+  // Viewers: strip the admin controls and make sure review mode can't linger on.
+  document.body.classList.toggle('viewer', !_isAdmin);
+  if (!_isAdmin) { _reviewMode = false; document.body.classList.remove('review-mode'); }
   // Only initialise app once per session
   if (!window._appInitialised) {
     window._appInitialised = true;
@@ -1069,6 +1085,7 @@ document.addEventListener('click', e => {
 });
 
 function toggleReviewMode() {
+  if (!_isAdmin) return;   // viewers can't enter review mode (it reveals hidden items + edit controls)
   _reviewMode = !_reviewMode;
   document.body.classList.toggle('review-mode', _reviewMode);
   const btn = document.getElementById('review-toggle');
