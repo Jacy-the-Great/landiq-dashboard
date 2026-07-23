@@ -110,6 +110,25 @@ async function main() {
     FROM events GROUP BY day ORDER BY day LIMIT 100000`);
   await replaceTable('ph_daily', 'day', daily);
 
+  // ── DIAGNOSTIC: what actually makes up "active users"? ──────────────────────
+  // Compares the current definition (any event, incl. anonymous pageviews) with
+  // stricter ones, for the last 6 weeks, so we can see how much is noise.
+  console.log('• DIAGNOSTIC: active-user definitions, last 6 weeks');
+  try {
+    const diag = await hogql(`
+      SELECT toStartOfWeek(timestamp, 1) AS wk,
+             count(distinct distinct_id) AS any_event,
+             count(distinct if(NOT (event LIKE '$%' OR event LIKE '%click%'), distinct_id, NULL)) AS product_event,
+             count(distinct if(coalesce(person.properties.email,'') != '', distinct_id, NULL)) AS identified,
+             count(distinct if(coalesce(person.properties.email,'') != '' AND NOT (event LIKE '$%' OR event LIKE '%click%'), distinct_id, NULL)) AS identified_product
+      FROM events
+      WHERE timestamp >= now() - INTERVAL 6 WEEK
+      GROUP BY wk ORDER BY wk`);
+    for (const r of diag) {
+      console.log(`   ${String(r.wk).slice(0,10)}  any-event=${r.any_event}  product-event=${r.product_event}  identified=${r.identified}  identified+product=${r.identified_product}`);
+    }
+  } catch (e) { console.warn('  diagnostic failed:', e.message.slice(0, 160)); }
+
   console.log('• weekly');
   const weekly = await hogql(`
     SELECT toStartOfWeek(timestamp, 1) AS week_start,
