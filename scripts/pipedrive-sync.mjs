@@ -308,4 +308,22 @@ if (!SKIP_DETAIL) {
   console.log(`   active paying seats (exact 'Paid Subscription', access not removed): ${activePaid}`);
   console.log(`   people whose type merely CONTAINS "paid": ${paidAny}`);
   if (paidAny > activePaid * 1.15) console.warn(`   ⚠ ${paidAny - activePaid} people say "paid" but don't match exactly — likely a relabelled/multi-value Customer Type dropping out of the count`);
+
+  // Break down the Paid Subscription people by their Date Access Removed, so we can
+  // tell a genuine drop (real past removal dates) from a parsing artefact.
+  const paid = people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
+  let emptyRem = 0, pastRem = 0, futureRem = 0, unparseable = 0;
+  const samples = [];
+  for (const p of paid) {
+    const raw = p['Person - Date Access Removed'];
+    if (!raw || !String(raw).trim()) { emptyRem++; continue; }
+    if (samples.length < 8) samples.push(String(raw));
+    const d = parse(raw);
+    if (!d) unparseable++;
+    else if (d.getTime() > now) futureRem++;
+    else pastRem++;
+  }
+  console.log(`   Paid Subscription breakdown (${paid.length}): no removal date=${emptyRem}  removal in PAST=${pastRem}  removal in FUTURE=${futureRem}  unparseable=${unparseable}`);
+  console.log(`   sample Date Access Removed values: ${JSON.stringify(samples)}`);
+  console.log(`   → active = no-removal + future-removal = ${emptyRem + futureRem}`);
 }
