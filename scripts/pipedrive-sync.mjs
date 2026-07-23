@@ -209,6 +209,19 @@ const personMap = buildMapper(personFields, 'Person', lookups);
 const deals = dealsRaw.map(dealMap);
 const people = personsRaw.map(personMap);
 
+// Aliases: fill the column names the dashboard expects from the API's actual
+// field names, so metrics that read the old CSV column keys keep working.
+deals.forEach((row, i) => {
+  const rec = dealsRaw[i];
+  if (!row['Deal - Person'] && rec.person_id?.name) row['Deal - Person'] = rec.person_id.name;
+});
+people.forEach(row => {
+  // The API has no plain Region/LGA/Council fields — only postal-address parts.
+  if (!row['Person - Region'])  row['Person - Region']  = row['Region of Postal address'] || row['State/county of Postal address'] || '';
+  if (!row['Person - LGA'])     row['Person - LGA']     = row['City/town/village/locality of Postal address'] || '';
+  if (!row['Person - Council']) row['Person - Council'] = row['District/sublocality of Postal address'] || '';
+});
+
 if (!SKIP_DETAIL) {
   // Products → "Deal - Product quantity/name/amount" (drives the licence numbers)
   console.log('· products…');
