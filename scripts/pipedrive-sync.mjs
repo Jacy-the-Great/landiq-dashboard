@@ -326,4 +326,53 @@ if (!SKIP_DETAIL) {
   console.log(`   Paid Subscription breakdown (${paid.length}): no removal date=${emptyRem}  removal in PAST=${pastRem}  removal in FUTURE=${futureRem}  unparseable=${unparseable}`);
   console.log(`   sample Date Access Removed values: ${JSON.stringify(samples)}`);
   console.log(`   → active = no-removal + future-removal = ${emptyRem + futureRem}`);
+
+  // ════════════════════════════════════════════════════════════════════════
+  // COMPREHENSIVE AUDIT — every field the dashboard reads + headline metrics,
+  // so any field that came through empty/malformed after the API switch is
+  // obvious rather than showing up as a silently-wrong number in the UI.
+  // ════════════════════════════════════════════════════════════════════════
+  const fillOf = (arr, key) => arr.length ? Math.round(arr.filter(r => { const v = r[key]; return v != null && String(v).trim() !== ''; }).length / arr.length * 100) : 0;
+  const sampleOf = (arr, key) => { const r = arr.find(x => x[key] != null && String(x[key]).trim() !== ''); return r ? String(r[key]).slice(0, 32) : ''; };
+  const report = (arr, prefix, fields) => {
+    for (const short of fields) {
+      const key = `${prefix} - ${short}`;
+      const pc = fillOf(arr, key);
+      const flag = pc === 0 ? ' ← EMPTY' : pc < 25 ? ' ← low' : '';
+      console.log(`   ${String(pc).padStart(3)}%  ${short.padEnd(22)} e.g. ${JSON.stringify(sampleOf(arr, key))}${flag}`);
+    }
+  };
+
+  console.log(`\n── Deal field coverage (${deals.length} deals) ──`);
+  report(deals, 'Deal', ['Title', 'Value', 'Pipeline', 'Stage', 'Status', 'Owner', 'Deal created',
+    'Won time', 'Lost time', 'Deal closed on', 'Expected close date', 'Product quantity', 'Product amount',
+    'Organisation', 'Person', 'Source channel', 'Source origin', 'Category', 'Label', 'Weighted value',
+    'Lost reason', 'Stages visited']);
+
+  console.log(`\n── Person field coverage (${people.length} people) ──`);
+  report(people, 'Person', ['Name', 'Customer Type', 'Previous Customer Type', 'Date Access Granted',
+    'Date Access Removed', 'Email', 'Owner', 'Organisation', 'Region', 'LGA', 'Council', 'Trial License Number',
+    'Last activity date']);
+
+  // ── Headline metrics the dashboard shows, recomputed from the synced data ──
+  const inThisMonth = s => { const d = parse(s); if (!d) return false; const n = new Date(now); return d.getUTCFullYear() === n.getUTCFullYear() && d.getUTCMonth() === n.getUTCMonth(); };
+  const won = sales.filter(d => d['Deal - Status'] === 'Won');
+  const lostD = sales.filter(d => d['Deal - Status'] === 'Lost');
+  const openD = sales.filter(d => d['Deal - Status'] === 'Open');
+  const wonVal = won.reduce((s, d) => s + (parseFloat(d['Deal - Value']) || 0), 0);
+  const wonThisMonth = won.filter(d => inThisMonth(d['Deal - Won time'])).length;
+  const licsSold = won.reduce((s, d) => s + (parseFloat(d['Deal - Product quantity']) || 0), 0);
+  const isTrial = ct => /trial/i.test(ct || '');
+  const activeTrials = people.filter(p => { if (!isTrial(p['Person - Customer Type'])) return false; const r = parse(p['Person - Date Access Removed']); return !r || r.getTime() > now; }).length;
+  const newPaidThisMonth = people.filter(p => p['Person - Customer Type'] === 'Paid Subscription' && inThisMonth(p['Person - Date Access Granted'])).length;
+  const winRate = (won.length + lostD.length) ? Math.round(won.length / (won.length + lostD.length) * 100) : null;
+
+  console.log(`\n── Headline metrics (recomputed from synced data) ──`);
+  console.log(`   Active paying seats ............ ${activePaid}`);
+  console.log(`   2026 Sales: won=${won.length}  lost=${lostD.length}  open=${openD.length}  (close rate ${winRate}%)`);
+  console.log(`   Won revenue (all-time) ......... $${Math.round(wonVal).toLocaleString()}`);
+  console.log(`   Won deals this month ........... ${wonThisMonth}`);
+  console.log(`   Licences sold (won) ............ ${licsSold}`);
+  console.log(`   Active trials .................. ${activeTrials}`);
+  console.log(`   New paid this month ............ ${newPaidThisMonth}`);
 }
