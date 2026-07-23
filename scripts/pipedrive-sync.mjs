@@ -288,4 +288,24 @@ if (!SKIP_DETAIL) {
   console.log(`   reached-stage (all time): ${FSALL.map((s, i) => s.split(/[ /]/)[0] + '=' + counts[i]).join('  ')}`);
   if (!withHist) console.warn('   ⚠ no stage history on any 2026 Sales deal — the funnel will fall back to the CSV estimate');
   if (counts.some((c, i) => i && c > counts[i - 1])) console.warn('   ⚠ a later stage has MORE deals than an earlier one — that should be impossible');
+
+  // ── People / paying-customer sanity check ──────────────────────────────────
+  // The dashboard's "active paying seats" filters Customer Type === 'Paid
+  // Subscription' exactly, so print the distinct Customer Type values (with
+  // counts) — a relabelled or set-valued field shows up here instantly.
+  const ctCounts = {};
+  for (const p of people) { const v = p['Person - Customer Type'] ?? '(missing key)'; ctCounts[v] = (ctCounts[v] || 0) + 1; }
+  const now = Date.now();
+  const parse = s => { const d = new Date(String(s || '').replace(' ', 'T')); return isNaN(d) ? null : d; };
+  const activePaid = people.filter(p => {
+    if (p['Person - Customer Type'] !== 'Paid Subscription') return false;
+    const rem = parse(p['Person - Date Access Removed']);
+    return !rem || rem.getTime() > now;
+  }).length;
+  const paidAny = people.filter(p => /paid/i.test(p['Person - Customer Type'] || '')).length;
+  console.log(`\n── People sanity check ──`);
+  console.log(`   Customer Type values: ${Object.entries(ctCounts).sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, v]) => `"${k}"=${v}`).join('  ')}`);
+  console.log(`   active paying seats (exact 'Paid Subscription', access not removed): ${activePaid}`);
+  console.log(`   people whose type merely CONTAINS "paid": ${paidAny}`);
+  if (paidAny > activePaid * 1.15) console.warn(`   ⚠ ${paidAny - activePaid} people say "paid" but don't match exactly — likely a relabelled/multi-value Customer Type dropping out of the count`);
 }
