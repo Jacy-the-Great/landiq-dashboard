@@ -8,6 +8,10 @@ is auto-loaded into every session — it is the master brief. Deeper references:
   every source (Pipedrive, PostHog, manual tables).
 - **[docs/CODE_MAP.md](docs/CODE_MAP.md)** — global state, render functions,
   helpers, canvas-id rules, coding conventions for `index.html`.
+- **[docs/DECISIONS.md](docs/DECISIONS.md)** — the shared living log. **Skim the
+  top few entries at the start of a session**, and **append a dated entry after any
+  significant decision, non-obvious learning, or gotcha** (not routine edits). When
+  a learning becomes a permanent rule, also fold it into the doc above that owns it.
 
 ## What this is
 
