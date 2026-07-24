@@ -54,6 +54,19 @@ async function replaceTable(table, pkCol, rows) {
   console.log(`  ${table}: wrote ${rows.length} rows`);
 }
 
+// Write rows, but if an optional column doesn't exist yet (migration not run),
+// drop it and retry so the nightly sync never hard-fails on a pending migration.
+async function writeMaybe(table, pk, rows, optionalCol) {
+  try {
+    await replaceTable(table, pk, rows);
+  } catch (e) {
+    const msg = String(e.message).toLowerCase();
+    if (!msg.includes(optionalCol.toLowerCase()) && !msg.includes('column') && !msg.includes('schema cache')) throw e;
+    console.warn(`  ${table}: "${optionalCol}" column not present — run posthog_active_engaged.sql. Syncing without it for now.`);
+    await replaceTable(table, pk, rows.map(({ [optionalCol]: _drop, ...rest }) => rest));
+  }
+}
+
 const EXCLUDE = `event NOT LIKE '$%' AND event NOT LIKE '%click%' AND event NOT IN ('$web_vitals','$dead_click','$rageclick','$pageleave')`;
 
 async function main() {
@@ -101,14 +114,26 @@ async function main() {
     await replaceTable('ph_lifecycle', 'distinct_id', lifecycleRows.map(({ email, ...rest }) => rest));
   }
 
+  // Active-user metrics count distinct KNOWN PEOPLE (by person email), not raw
+  // distinct_ids — the latter counts every anonymous browser/bot that fired a
+  // pageview and massively inflates the number. Two flavours:
+  //   active_users   = "showed up"     : a known person fired any event that week
+  //   active_engaged = "did something" : a known person did a real product action
+  //                    (excludes $-events like pageview/autocapture, and clicks)
+  const KNOWN = `coalesce(person.properties.email,'') != ''`;
+  const REAL  = `NOT (event LIKE '$%' OR event LIKE '%click%')`;
+  const showedUp = `count(distinct if(${KNOWN}, person.properties.email, NULL))`;
+  const engaged  = `count(distinct if(${KNOWN} AND ${REAL}, person.properties.email, NULL))`;
+
   console.log('• daily');
   const daily = await hogql(`
     SELECT toDate(timestamp) AS day,
-           count(distinct distinct_id) AS active_users,
+           ${showedUp} AS active_users,
+           ${engaged}  AS active_engaged,
            count() AS total_events,
            count(distinct if(event = '$identify', distinct_id, NULL)) AS login_users
     FROM events GROUP BY day ORDER BY day LIMIT 100000`);
-  await replaceTable('ph_daily', 'day', daily);
+  await writeMaybe('ph_daily', 'day', daily, 'active_engaged');
 
   // ── DIAGNOSTIC: what actually makes up "active users"? ──────────────────────
   // Compares the current definition (any event, incl. anonymous pageviews) with
@@ -132,15 +157,16 @@ async function main() {
   console.log('• weekly');
   const weekly = await hogql(`
     SELECT toStartOfWeek(timestamp, 1) AS week_start,
-           count(distinct distinct_id) AS active_users,
+           ${showedUp} AS active_users,
+           ${engaged}  AS active_engaged,
            count() AS total_events,
            count(distinct if(event = '$identify', distinct_id, NULL)) AS login_users
     FROM events GROUP BY week_start ORDER BY week_start LIMIT 100000`);
-  await replaceTable('ph_weekly', 'week_start', weekly);
+  await writeMaybe('ph_weekly', 'week_start', weekly, 'active_engaged');
 
   console.log('• monthly');
   const monthly = await hogql(`
-    SELECT toStartOfMonth(timestamp) AS month_start, count(distinct distinct_id) AS mau
+    SELECT toStartOfMonth(timestamp) AS month_start, ${showedUp} AS mau
     FROM events GROUP BY month_start ORDER BY month_start LIMIT 100000`);
   await replaceTable('ph_monthly', 'month_start', monthly);
 

@@ -1763,6 +1763,9 @@ function renderExec(el) {
   const _phDoneEx = (_ph.weekly || []).filter(w => { const ws = new Date(w.week_start); return !isNaN(ws) && (ws.getTime() + 7 * 86400000) <= Date.now(); });
   const auNow  = _phDoneEx.length     ? Number(_phDoneEx[_phDoneEx.length - 1].active_users) : null;
   const auPrev = _phDoneEx.length > 1 ? Number(_phDoneEx[_phDoneEx.length - 2].active_users) : null;
+  // "did something in-product" — a known person who did a real product action.
+  const _engVal = _phDoneEx.length ? _phDoneEx[_phDoneEx.length - 1].active_engaged : null;
+  const auEng  = (_engVal == null) ? null : Number(_engVal);
   const dauMau = (_ph.dauMau || []).slice(-1)[0] || {};
   const segments = _ph.segments || [];
 
@@ -1803,7 +1806,7 @@ function renderExec(el) {
   if (pipelineValue > 0)
     bullets.push(`Open pipeline: <b>${fmtCur(pipelineValue)}</b> across ${openDeals.length} deals (2026 Sales).`);
   if (auNow)
-    bullets.push(`PostHog: <b>${fmtNum(auNow)}</b> active users last week (last full week, ≥1 event)${trend(auNow, auPrev)}.`);
+    bullets.push(`PostHog: <b>${fmtNum(auNow)}</b> known users showed up last week${auEng != null ? `, <b>${fmtNum(auEng)}</b> did something in-product` : ''} (last full week)${trend(auNow, auPrev)}.`);
   if (dauMau.dau_mau_pct)
     bullets.push(`On a typical day, <b>${fmtPct(dauMau.dau_mau_pct)}</b> of monthly users are active (last 30 days).`);
   if (visitors)
@@ -1849,8 +1852,8 @@ function renderExec(el) {
       ['Won this month', wonThisMonth.length || null, null, null, wonThisMonth.length ? fmtCur(wonThisMonth.reduce((s,d)=>s+(parseFloat(d['Deal - Value'])||0),0)) + ' new revenue' : null],
       ['Churned this month', churnedThisMonth.length || null, null, null, 'paid subscribers lost'],
       ['Active trials', activeTrial.length || null, null, null, 'in progress'],
-      ['Active users (last week)', auNow, auPrev, null, 'PostHog · ≥1 event · last full week',
-        '<span class="src-tag">Live · PostHog (Giraffe/SDK)</span><br>Distinct users who triggered <b>≥1 event</b> in Land iQ during the last <b>completed</b> week — people actually <b>active in the product</b>, not everyone with access. The current in-progress week is excluded so it does not read artificially low.<br><div class="calc-row">ph_weekly_stats() → active_users, latest fully-ended week</div>This is NOT the count of licence-holders / people with access — for that see <b>Active paid subscribers</b> on the Sales tab.'],
+      ['Active users (last week)', auNow, auPrev, null, (auEng != null ? auEng + ' did something in-product · ' : '') + 'known people · last full week',
+        '<span class="src-tag">Live · PostHog (Giraffe/SDK)</span><br><b>Showed up (' + fmtNum(auNow) + '):</b> distinct <b>known people</b> (matched to a PostHog identity/email) who triggered any event in Land iQ during the last <b>completed</b> week.<br>' + (auEng != null ? '<b>Did something (' + fmtNum(auEng) + '):</b> of those, the ones who took a <b>real product action</b> (excludes bare page-views, autocapture and clicks).<br>' : '') + '<div class="calc-row">count(distinct person email) per week; anonymous/logged-out browser traffic is excluded — that is why this is far below the raw event-session count.</div>This is <b>usage</b>, not access — for licence-holders see <b>Active paid subscribers</b> on the Sales tab.'],
     ])}
 
     <!-- Narrative (full width) -->
@@ -2963,13 +2966,14 @@ function setActivitySub(sub, rerender = true, data) {
         '<tr>' +
         '<td>' + (r.week_start||'').slice(0,10) + '</td>' +
         '<td style="text-align:right">' + fmtNum(r.active_users) + '</td>' +
+        '<td style="text-align:right">' + (r.active_engaged != null ? fmtNum(r.active_engaged) : ':') + '</td>' +
         '<td style="text-align:right">' + fmtNum(r.login_users) + '</td>' +
         '<td style="text-align:right">' + fmtNum(r.new_users) + '</td>' +
         '<td style="text-align:right">' + fmtNum(r.total_events) + '</td>' +
         '</tr>'
       ).join('');
       weeklyTableHTML = '<div class="tbl-scroll"><table>' +
-        '<thead><tr><th>Week start</th><th style="text-align:right">Active users</th><th style="text-align:right">Login users</th><th style="text-align:right">New users</th><th style="text-align:right">Events</th></tr></thead>' +
+        '<thead><tr><th>Week start</th><th style="text-align:right" title="Known people who showed up (any event)">Showed up</th><th style="text-align:right" title="Known people who did a real product action">Did something</th><th style="text-align:right">Login users</th><th style="text-align:right">New users</th><th style="text-align:right">Events</th></tr></thead>' +
         '<tbody>' + liveRows + '</tbody></table></div>';
     } else if (giraffe.length) {
       const manualRows = [...giraffe].reverse().slice(0,12).map(r =>
@@ -3046,7 +3050,8 @@ function setActivitySub(sub, rerender = true, data) {
         data: {
           labels: wkData.map(r => shortDate(r.week_start) + (isPartialWk(r) ? ' (partial)' : '')),
           datasets: [
-            { label: 'Active users', data: wkData.map(r => r.active_users||0),  borderColor:'#2e8bc0', backgroundColor:'rgba(46,139,192,.07)', borderWidth:2, fill:true,  tension:.3, pointRadius:3 },
+            { label: 'Showed up', data: wkData.map(r => r.active_users||0),  borderColor:'#2e8bc0', backgroundColor:'rgba(46,139,192,.07)', borderWidth:2, fill:true,  tension:.3, pointRadius:3 },
+            { label: 'Did something', data: wkData.map(r => r.active_engaged==null?null:r.active_engaged), borderColor:'#7b1fa2', borderWidth:2, fill:false, tension:.3, pointRadius:3, borderDash:[3,3], spanGaps:true },
             { label: 'Login users',  data: wkData.map(r => r.login_users||0),   borderColor:'#2a7a4b', borderWidth:2, fill:false, tension:.3, pointRadius:3 },
             { label: 'New users',    data: wkData.map(r => r.new_users||0),     borderColor:'#c25a00', borderWidth:2, fill:false, tension:.3, pointRadius:3, borderDash:[5,4] },
           ]
