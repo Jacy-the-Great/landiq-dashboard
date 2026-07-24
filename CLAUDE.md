@@ -1,149 +1,137 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (CLI or claude.ai/code) working in this repo. This file
+is auto-loaded into every session — it is the master brief. For the full
+operations reference (connectors, secrets, syncs, deploys, working from the web,
+troubleshooting) read **[docs/OPERATIONS.md](docs/OPERATIONS.md)**.
 
-## Deploy
+## What this is
 
-```bash
-cd /Users/jacymacnee/Desktop/landiq-dashboard && vercel --prod
-```
+The **Land iQ Performance** dashboard — an internal team tracker for the Land iQ
+product. Live at **https://landiq-dashboard.vercel.app**. It is Jacy's working
+tracker alongside Mark Elakawi's official Power BI tracker.
 
-No build step. The repo is a single HTML file deployed as a static site. Never add a build process.
+## Golden rules
 
-## Architecture
+1. **One file.** The entire app is `index.html` (~9,900 lines, vanilla JS + CSS +
+   HTML, no framework, no bundler). CDN libs only: Supabase JS v2, Chart.js,
+   PapaParse. **Never add a build step, framework, or node_modules to the app.**
+   (`scripts/*.mjs` are separate Node sync jobs run by GitHub Actions — not part
+   of the app.)
+2. **Deploy = `git push` to `main`.** Vercel auto-deploys on push. No `vercel --prod`,
+   no local-path dependency. Confirm live with a cache-buster:
+   `curl -s "https://landiq-dashboard.vercel.app/?_=$(date +%s)" | grep <marker>`.
+3. **Verify before you claim done.** Syntax-check every inline script, then confirm
+   the behaviour — never assert a fix works on inspection alone. See "Verifying".
+   The owner's #1 priority is **trustworthy, sourced, current numbers**; a
+   silently-wrong metric is the worst outcome.
+4. **Plain English.** No SaaS/sales jargon in UI copy (no ARR/MoM/WoW/DAU/MAU — say
+   "monthly active users"). Every number shows a visible source.
+5. **Commit messages** end with:
+   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
+6. **Secrets never touch the repo or the HTML.** The Supabase *anon* key in
+   `index.html` is public by design; service-role keys / API tokens live only in
+   GitHub Actions secrets. Never print, commit, or paste a token.
 
-Everything lives in **`index.html`** (~5,900 lines). It is a single-file vanilla JS + CSS + HTML dashboard with no framework, no bundler, and no dependencies except CDN-loaded libraries (Supabase JS v2, Chart.js, PapaParse).
+## Navigating the single file
 
-### Sections in file order
+Line numbers rot — **grep for symbols**, don't trust a line map:
+- Tabs: `switchTab(id)` → `renderTab(id)` → `render<Name>`. Grep `function renderHome`,
+  `renderPipedrive`, `renderWorkstreams`, `renderExec`, `renderTeam`,
+  `renderMarketing`, `renderActivity`, `renderTraining`, `renderWeeklyTracker`.
+- Sales sub-tabs: `renderPipedrive` → `setPdSub(sub)` → `renderPdRevenue` /
+  `renderPdSales` / `renderPdUsers` / `renderPdChurn` / `renderPdTrials` /
+  `renderPdOptimax` / `renderPdHealth`. Sub-tab state lives in `activeSub`.
+- Workstreams KPI board: `WORKSTREAMS` array + `renderWorkstreams`; editable KPI
+  overrides via `wsEffective()` / `wsData()` (Supabase key `workstream_kpis`).
 
-| Lines (approx) | Section |
-|---|---|
-| 1–270 | CSS (variables, layout, components) |
-| 270–485 | Auth state machine (`_authState`, `initialiseDatabaseAuth`, token refresh) |
-| 485–750 | Data layer: Supabase fetch, localStorage backup, PostHog RPC calls, `save()`, `load()` |
-| 750–895 | Global UI helpers: `makeChart`, `cardHTML`, `cardsHTML`, `tableHTML`, `toast`, formatters |
-| 895–1075 | `renderHome` |
-| 1075–1430 | `renderSales` (manual weekly sales tracker) |
-| 1430–1585 | `renderTrials` (manual trials tracker) |
-| 1585–1935 | `renderWebsite` |
-| 1935–2705 | `renderActivity` (Giraffe/PostHog, SDK, Labs sub-tabs) |
-| 2705–3010 | `renderTraining` |
-| 3010–3135 | `renderWeeklyTracker` |
-| 3135–3830 | `renderMarketing` (content log, webinars, LinkedIn, EDM) |
-| 3830–4005 | Pipedrive helpers (`pdNormalisePeople`, `pdGetRange`, `pdRangeMonths`, `pdParseDate`, `pdValidDate`, `pdInRange`, `isTrialType`) |
-| 4005–4085 | `renderPipedrive` (tab shell + header cards + pipeline toggle) + `setPdSub` |
-| 4085–4355 | `renderPdRevenue` |
-| 4355–4780 | `renderPdSales` + `renderPdOptimax` |
-| 4780–5010 | `renderPdChurn` |
-| 5010–5165 | `renderPdUsers` |
-| 5165–5345 | `renderPdTrials` |
-| 5345–5600 | `renderPdOptimax` |
-| 5600–5900 | Info popup system (`_INFO`, `infoBtn`, `showInfo`, `closeInfo`), shared UI helpers, HTML shell |
+## Data model (where numbers come from)
 
-### Tab / sub-tab routing
+- **Manual data** (most tabs): Supabase `dashboard_data`, `{key,value}` rows. Read
+  `load(key)`, write `save(key, arr)` (Supabase + `localStorage` `liq_bk_` backup).
+  `KEYS` maps short names → Supabase keys.
+- **Pipedrive** (`_pd_deals`, `_pd_people`): tables `liq_pipedrive_deals` /
+  `liq_pipedrive_people`, each row `{raw:{...}}` with CSV-style keys like
+  `"Deal - Title"`, `"Person - Customer Type"`. Populated by the nightly API sync
+  (`scripts/pipedrive-sync.mjs`) or a manual CSV import on the Import tab. People
+  are run through `pdNormalisePeople()` on load.
+- **PostHog** (`_ph.*`): summary tables `ph_weekly` / `ph_daily` / `ph_monthly` /
+  `ph_lifecycle` / `ph_feature_daily` / `ph_feature_adoption_tbl`, written nightly
+  by `scripts/posthog-sync.mjs`. Loaded into `_ph` at startup.
 
-```
-TABS array → switchTab(id) → renderTab(id)
-  'home'      → renderHome
-  'pipedrive' → renderPipedrive → setPdSub(sub)
-                  'import'  → renderPdImport
-                  'revenue' → renderPdRevenue
-                  'sales'   → renderPdSales
-                  'users'   → renderPdUsers
-                  'churn'   → renderPdChurn
-                  'trials'  → renderPdTrials
-                  'optimax' → renderPdOptimax
-  'training'  → renderTraining
-  'marketing' → renderMarketing
-  'tracker'   → renderWeeklyTracker
-  'activity'  → renderActivity
-```
+### Data conventions — read before touching Pipedrive/PostHog metrics
+- Trial detection: **`isTrialType(s)`** (`.includes('trial')`), never `===` a single
+  value — the field is multi-value with several trial variants.
+- `Person - Previous Customer Type` is comma-separated multi-value — always
+  `.includes()`, never `===`.
+- CSV import path only: run **`pdNormalisePeople()`** after parsing (exports
+  sometimes drop the `"Person - "` prefix).
+- `Person - Date Access Removed` is usually a **future** subscription-expiry date.
+  "Active paid" = Customer Type `Paid Subscription` AND (no removal date OR removal
+  in the future). Never treat a future date as churned.
+- Funnel "reached stage": prefer `Deal - Stages visited` (synced stage history)
+  over the current stage, so LOST deals count at the furthest stage reached.
+- Win rate (Won ÷ Contacts, ~34%) ≠ close rate (Won ÷ Won+Lost, ~65%). OPTI-MAX is
+  anchored at Contact Made.
+- `Person - Email` must be a plain address. If you see a JSON blob, the sync mapper
+  regressed (Pipedrive returns email as `[{value,primary}]` — extract the primary).
+- "Active users" (PostHog) counts **distinct known people by email**, not raw
+  `distinct_id` (which includes anonymous browsers/bots). Two flavours:
+  `active_users` = showed up, `active_engaged` = did a real product action.
+- Exclude `Contact Register` and `Expression of Interest` from any "trained" count.
 
-Active sub-tab state is stored in `activeSub` (e.g. `activeSub.pd_sub`).
+## Auth & roles
 
-### Data layer
+Supabase email+password (`sb.auth.signInWithPassword`; RLS restricts every table to
+the `authenticated` role, so the anon key returns empty, not an error). Token
+refresh is manual (`scheduleTokenRefresh`). `ADMIN_EMAILS` in `index.html`
+(currently `jacymacnee1@gmail.com`) = admins: see everything incl. hidden items,
+get Review mode / Export / Import / Clear. Everyone else is a viewer (dashboard
+minus hidden items; can still edit values). UI-level visibility, not hard security.
+Add users in the Supabase dashboard — see docs/OPERATIONS.md.
 
-**Manual data** (all tabs except Pipedrive/PostHog):
-- Stored in Supabase `dashboard_data` table as `{ key, data }` rows
-- Read via `load(key)` → returns array from `_cache`
-- Written via `save(key, arr)` → writes Supabase + backup table + localStorage simultaneously
-- `KEYS` constant maps short names to Supabase key strings
-- `localStorage` (prefix `liq_bk_`) is a fallback if Supabase is slow/offline
+## Charts & UI patterns
 
-**Pipedrive data** (CSV import):
-- `_pd_deals[]` — from `liq_pipedrive_deals` table (`{ raw }` JSONB rows)
-- `_pd_people[]` — from `liq_pipedrive_people` table, always run through `pdNormalisePeople()` on load
-- `_pdSalesPipeline` — global toggle `'2026 Sales'` | `null` (all pipelines); affects header cards + Sales/Revenue sub-tabs
-- **Critical:** always use `isTrialType(s)` (`.includes('trial')`) never `=== '2 Week Trial Licence'` — the field is multi-value comma-separated and has multiple trial type variants
-- **Critical:** always run `pdNormalisePeople()` after any CSV parse — Pipedrive exports sometimes omit the `Person - ` prefix from column headers
+- `makeChart(id, config)` wraps Chart.js and destroys the previous chart at that
+  canvas id first; `destroyAllCharts()` runs on every tab switch. **Canvas ids must
+  be globally unique** — a collision silently breaks a chart.
+- Cards: `cardHTML(label, value, prev, type, sub, info)` — `type` is `null|'$'|'%'`;
+  `value` null/0 renders a "no data" state; `info` is HTML for the ⓘ popup.
+  `cardsHTML([...tuples])` renders a row.
+- Info popups: `infoBtn(title, bodyHTML)` — body should use
+  `<span class="src-tag">Source</span>` and `<div class="calc-row">formula</div>`.
+- Number formatters: `fmtNum` (commas), `fmt1` (1 dp), `fmtCur`/`fmtDollar`, `fmtPct`.
+- Hidden metrics + trust flags: review-mode only; `_hiddenMetrics`,
+  `flagKey(...)`, `.hide-toggle`, `.metric-hidden`.
 
-**PostHog data** (Supabase materialized views):
-- Loaded into `_ph` object at startup via 12 parallel `sb.rpc('ph_...')` calls
-- Views refresh nightly at 3am via pg_cron (`SELECT public.ph_refresh_views()`)
-- Can be manually refreshed with the button in the Activity tab (calls `sb.rpc('ph_refresh_views')`)
-- Requires `posthog_migrations.sql` to have been run in Supabase SQL Editor first
+### Adding a Pipedrive sub-tab
+1. Add the key to the `['import','revenue',...]` array in `renderPipedrive`.
+2. Add its label to the label map on the same line.
+3. Add `else if (sub === 'key') renderPdKey(sc);` in `setPdSub`.
+4. Write `function renderPdKey(sc){ ... }` near the other `renderPd*` functions.
 
-### Auth
+## Verifying
 
-- Email + password via `sb.auth.signInWithPassword()`; OTP magic link also available
-- `persistSession: false`, `autoRefreshToken: false` — token refresh is managed manually by `scheduleTokenRefresh()`
-- Auth state machine: `'initialising' → 'authenticated' | 'unauthenticated'`
-- RLS: all tables restrict to `authenticated` role only; anon key returns empty results (not an error)
+1. Syntax-check every inline `<script>` before pushing:
+   ```bash
+   node -e 'const h=require("fs").readFileSync("index.html","utf8");const re=/<script\b[^>]*>([\s\S]*?)<\/script>/g;let m,i=0,bad=0;while((m=re.exec(h))){i++;if(!m[1].trim()||/\bsrc=/.test(m[0].slice(0,m[0].indexOf(">"))))continue;try{new Function(m[1])}catch(e){bad++;console.log("block",i,e.message)}}console.log(i+" blocks, "+bad+" errors")'
+   ```
+2. Metric/data changes: verify against real numbers. The sync scripts log a sanity
+   check each run — `gh workflow run "Pipedrive sync"` then read the log with
+   `gh run view <id> --log`. Test the empty/sparse/edge case, not just the happy path.
+3. After push, confirm the change is live with the cache-buster curl above.
 
-### Charts
+## Global constants
 
-- `makeChart(id, config)` wraps Chart.js — always destroys the previous chart at that canvas ID first
-- `destroyAllCharts()` is called on every tab switch
-- Chart canvas IDs must be unique across the whole file — collisions silently break charts
-- `axStyle` and `gridStyle` are global constants for consistent axis styling
+`TARGET_USERS = 600` (paid-seat target) · `TARGET_ARR = 2_400_000` ($2.4M target).
+OPTI-MAX targets: `localStorage` key `liq_optimax`. Funnel Insights counts:
+`liq_funnel_actual`.
 
-### UI patterns
+## Supabase
 
-**Cards:**
-```js
-cardHTML(label, value, prev, type, sub, info)
-// type: null | '$' | '%'
-// info: HTML string → renders ⓘ button that opens info popup
-// value=null or 0 renders "no data" state
-```
-
-**Info popups:**
-```js
-infoBtn(title, bodyHTML)
-// Registers in _INFO{} keyed by random ID
-// Body should use: <span class="src-tag">Source</span> and <div class="calc-row">formula</div>
-```
-
-**cardsHTML(items):** takes array of `[label, value, prev, type, sub, info]` tuples.
-
-### Adding a new Pipedrive sub-tab
-
-1. Add the key to the `['import','revenue','sales',...]` array in `renderPipedrive`
-2. Add its label to the label map in the same line
-3. Add `else if (sub === 'key') renderPdKey(sc);` in `setPdSub`
-4. Write `function renderPdKey(sc) { ... }` near the other `renderPd*` functions
-
-### Global constants
-
-```js
-TARGET_USERS = 600       // paid subscriber target
-TARGET_ARR   = 2400000   // $2.4M ARR target
-```
-
-OPTI-MAX conversion targets are stored in `localStorage` under key `liq_optimax` (JSON object).
-
-## Supabase project
-
-- **URL:** `https://ysdonnjezvoyrrizadik.supabase.co`
-- **SQL Editor:** `https://supabase.com/dashboard/project/ysdonnjezvoyrrizadik/editor`
-- **Tables:** `dashboard_data`, `dashboard_backups`, `liq_pipedrive_deals`, `liq_pipedrive_people`
-- **PostHog schema:** `posthog."Posthog Events"` — materialized views sit in `public`
-- Run `supabase_auth_rls.sql` to apply RLS, `posthog_migrations.sql` to set up PostHog views
-
-## Known field name rules (Pipedrive)
-
-- `Person - Customer Type` values: `Paid Subscription`, `Access Revoked`, `2 Week Trial Licence`, `Extended Trial Licence`, `Centrally Funded Licence`, `Contact Register`, `Expression of Interest`, `Admin Accounts`, `WSP/Giraffe`, `Land iQ Project Team`
-- `Person - Previous Customer Type` is **comma-separated multi-value** — never use `===`, always use `.includes()`
-- Exclude `Contact Register` and `Expression of Interest` from any "trained" count
-- `Access Revoked` is a Customer Type (not a field) representing churned users
-- `Deal - Pipeline` values: `2026 Sales`, `General Onboarding Pipeline`, `Trial Pipeline`
+- Project: `ysdonnjezvoyrrizadik` · SQL editor:
+  `https://supabase.com/dashboard/project/ysdonnjezvoyrrizadik/editor`
+- Tables: `dashboard_data`, `dashboard_backups`, `liq_pipedrive_deals`,
+  `liq_pipedrive_people`, `ph_weekly`/`ph_daily`/`ph_monthly`/`ph_lifecycle`/`ph_feature_*`.
+- `*.sql` files in the repo root are one-off migrations to run in the SQL editor;
+  each says at the top when to run it. Newest: `posthog_active_engaged.sql`.
