@@ -1,9 +1,13 @@
 # CLAUDE.md
 
 Guidance for Claude Code (CLI or claude.ai/code) working in this repo. This file
-is auto-loaded into every session — it is the master brief. For the full
-operations reference (connectors, secrets, syncs, deploys, working from the web,
-troubleshooting) read **[docs/OPERATIONS.md](docs/OPERATIONS.md)**.
+is auto-loaded into every session — it is the master brief. Deeper references:
+- **[docs/OPERATIONS.md](docs/OPERATIONS.md)** — connectors, secrets, syncs,
+  deploys, auth/roles, working from the web, troubleshooting.
+- **[docs/DATA_CATALOGUE.md](docs/DATA_CATALOGUE.md)** — every field/indicator from
+  every source (Pipedrive, PostHog, manual tables).
+- **[docs/CODE_MAP.md](docs/CODE_MAP.md)** — global state, render functions,
+  helpers, canvas-id rules, coding conventions for `index.html`.
 
 ## What this is
 
