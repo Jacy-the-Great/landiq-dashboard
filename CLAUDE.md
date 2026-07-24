@@ -1,7 +1,9 @@
 # CLAUDE.md
 
 Guidance for Claude Code (CLI or claude.ai/code) working in this repo. This file
-is auto-loaded into every session — it is the master brief. Deeper references:
+is auto-loaded into every session — it is the master brief. New here or setting up
+a chat on another device? See **[docs/START_HERE.md](docs/START_HERE.md)**. Deeper
+references:
 - **[docs/OPERATIONS.md](docs/OPERATIONS.md)** — connectors, secrets, syncs,
   deploys, auth/roles, working from the web, troubleshooting.
 - **[docs/DATA_CATALOGUE.md](docs/DATA_CATALOGUE.md)** — every field/indicator from
