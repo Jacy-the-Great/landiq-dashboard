@@ -19,6 +19,18 @@ Format: `## YYYY-MM-DD — Short title` + a few lines. Use absolute dates.
 
 ---
 
+## 2026-07-24 — OPTI-MAX per-month averaging fixed + Target-won reconnected
+When the live stage-history data switched OPTI-MAX off the hand-typed Insights
+counts, two bugs surfaced: (1) the funnel counts were **all-time** but divided by
+the **window** months (9 since avg_from), so changing the month only moved the
+denominator — inflated, "not accurate". Fixed by windowing the numerator (deals
+*created* since avg_from that reached each stage, ÷ window months). (2) The Sales
+"Monthly leads" / "Target won" cards read the hand-typed FA counts while the table
+used live data, so they diverged. Fixed by one canonical `omModel()` (global,
+windowed, live) that BOTH the table and the cards use. Also clarified the period UI
+(shows years, "Nov 2025 → Jul 2026 = 9 months"). Lesson: never compute the same
+metric two ways in two places — extract one source.
+
 ## 2026-07-24 — Deep reference + this log moved into the repo
 Ported the data catalogue and code map out of local CLI memory into
 `docs/DATA_CATALOGUE.md` and `docs/CODE_MAP.md`, and created this log, so any chat
