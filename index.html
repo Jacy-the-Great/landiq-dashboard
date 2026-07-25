@@ -1200,30 +1200,68 @@ const pct = (a, b) => (a != null && b && b !== 0) ? (a / b * 100) : null;
 // "close rate" Won ÷ (Won + Lost), which is the % of already-closed deals that were
 // won and reads far higher because most deals are still open. Defaults mirror the
 // OPTI-MAX FA_DEF seed so the number is present before anything is saved.
+// ── Canonical OPTI-MAX current model ─────────────────────────────────────────
+// The single source of truth for OPTI-MAX "current per-month" figures, used by BOTH
+// the OPTI-MAX table AND the Sales-tab cards so they can never disagree. Counts =
+// deals CREATED within the averaging window (liq_optimax.avg_from → now) that reached
+// each funnel stage, ÷ the number of months in that window — numerator and
+// denominator span the SAME period, so per-month figures are consistent (the old bug
+// divided an all-time count by a shorter window).
+const OM_FS = ['Contact Made/Discovery', 'Meeting Scheduled', 'Negotiations', 'Order Form Sent', 'Signed Order Form Returned', 'Invoice Sent', 'Payment Received'];
+function omReached(d, idx) {
+  if (d['Deal - Status'] === 'Won') return true;
+  const idxOf = s => OM_FS.indexOf(s === 'Contact Made' ? 'Contact Made/Discovery' : s);
+  const visited = d['Deal - Stages visited'];   // synced stage history: furthest real funnel stage
+  if (visited) {
+    let best = -1;
+    for (const raw of String(visited).split('|')) { const vi = idxOf(raw.trim()); if (vi > best) best = vi; }
+    return best >= 0 ? best >= idx : idx === 0;
+  }
+  const di = idxOf(d['Deal - Stage'] || '');
+  return di >= 0 ? di >= idx : idx === 0;
+}
+function omModel() {
+  const DEF = { meeting_pct_target: 80, neg_pct_target: 95, order_pct_target: 82, invoice_pct_target: 90, won_pct_target: 90, contact_target: 0, avg_from: '2025-11' };
+  let t = DEF;
+  try { t = { ...DEF, ...(JSON.parse(localStorage.getItem('liq_optimax') || '{}')) }; } catch { t = DEF; }
+  const sDeals = (typeof _pd_deals !== 'undefined' ? _pd_deals : []).filter(d => d['Deal - Pipeline'] === '2026 Sales');
+  const hasHist = sDeals.some(d => d['Deal - Stages visited']);
+  const now = new Date();
+  const [ay, am] = String(t.avg_from || '2025-11').split('-').map(Number);
+  const start = new Date(ay || 2025, (am || 1) - 1, 1);
+  const months = Math.max(1, (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth()) + 1);
+  const inWin = d => { const dt = pdParseDate(d['Deal - Deal created']); return pdValidDate(dt) && dt >= start; };
+  const win = sDeals.filter(inWin);
+  const counts = OM_FS.map((_, i) => win.filter(d => omReached(d, i)).length);
+  const wonCount = win.filter(d => d['Deal - Status'] === 'Won').length;
+  const per = v => v / months;
+  const leadsCurr = per(counts[0]);
+  const wonCurr = per(wonCount);
+  const leadsTarget = (t.contact_target > 0) ? t.contact_target : leadsCurr;
+  const wonTarget = leadsTarget * (t.meeting_pct_target / 100) * (t.neg_pct_target / 100)
+    * (t.order_pct_target / 100) * (t.invoice_pct_target / 100) * (t.won_pct_target / 100);
+  return { hasHist, months, start, counts, wonCount, leadsCurr, wonCurr, leadsTarget, wonTarget, per };
+}
+
+// Win rate: live from the model when stage history is synced, else the hand-typed
+// Insights counts (liq_funnel_actual) as a fallback.
 function pdInsightsWinRate() {
+  const m = omModel();
+  if (m.hasHist) {
+    const rate = m.counts[0] > 0 ? pct(m.wonCount, m.counts[0]) : null;
+    return { rate, months: m.months, won: m.wonCount, contact: m.counts[0], live: true };
+  }
   const DEF = { contact: 50, won: 17, windowMonths: 6 };
   let fa = DEF;
   try { fa = { ...DEF, ...(JSON.parse(localStorage.getItem('liq_funnel_actual') || '{}')) }; } catch { fa = DEF; }
   const rate = (fa.contact > 0 && fa.won != null) ? pct(fa.won, fa.contact) : null;
-  return { rate, months: Math.round(fa.windowMonths || 6), won: fa.won, contact: fa.contact };
+  return { rate, months: Math.round(fa.windowMonths || 6), won: fa.won, contact: fa.contact, live: false };
 }
 
-// OPTI-MAX per-month targets, so Sales-tab KPIs stay in sync with the model.
-// leadsTarget = OPTI-MAX Stage 1 (Contact Made) target; wonTarget = OPTI-MAX
-// Stage 3 Won target (the same chained projection the model shows). Currents come
-// from the authoritative Insights counts (÷ window), matching OPTI-MAX exactly.
+// Sales-tab "Monthly leads" / "Target won" cards — same numbers as the OPTI-MAX table.
 function omTargets() {
-  const DEF = { meeting_pct_target: 80, neg_pct_target: 95, order_pct_target: 82, invoice_pct_target: 90, won_pct_target: 90, contact_target: 0 };
-  let t = DEF;
-  try { t = { ...DEF, ...(JSON.parse(localStorage.getItem('liq_optimax') || '{}')) }; } catch { t = DEF; }
-  const fa = pdInsightsWinRate();
-  const per = v => (v || 0) / (fa.months || 6);
-  const leadsCurr = per(fa.contact);
-  const wonCurr = per(fa.won);
-  const leadsTarget = (t.contact_target && t.contact_target > 0) ? t.contact_target : leadsCurr;
-  const wonTarget = leadsTarget * (t.meeting_pct_target / 100) * (t.neg_pct_target / 100)
-    * (t.order_pct_target / 100) * (t.invoice_pct_target / 100) * (t.won_pct_target / 100);
-  return { leadsCurr, leadsTarget, wonCurr, wonTarget };
+  const m = omModel();
+  return { leadsCurr: m.leadsCurr, leadsTarget: m.leadsTarget, wonCurr: m.wonCurr, wonTarget: m.wonTarget, months: m.months };
 }
 
 function thisMonth(arr, dateKey = 'week') {
@@ -9047,11 +9085,18 @@ function renderPdOptimax(sc) {
   //   1. synced stage history  — live, exact, lost deals placed correctly
   //   2. Pipedrive Insights    — exact but typed in by hand, goes stale
   //   3. CSV reconstruction    — lost deals can only be counted at entry
-  const fCntsCSV = FSALL.map((_,i) => sDeals.filter(d=>reached(d,i)).length);
+  // Canonical model (windowed counts ÷ months) — the SAME object the Sales-tab
+  // "Monthly leads" / "Target won" cards use, so the table and the cards agree.
+  const M = omModel();
+  // Windowed reached-stage counts: deals CREATED since avg_from that reached each
+  // stage. Matches the ÷ monthsElapsed denominator (the old all-time count did not).
+  const fCntsCSV = M.counts;
   const fCnts = useFA
     ? [FA.contact, FA.meeting, FA.neg, FA.order, FA.signed, FA.invoice, FA.won]
     : fCntsCSV;
-  const lostCnt = sDeals.filter(d => d['Deal - Status']==='Lost').length;
+  const wonWindow = M.wonCount;   // won deals CREATED in the window (per-month numerator)
+  const inAvgWindow = d => { const dt = pdParseDate(d['Deal - Deal created']); return pdValidDate(dt) && dt >= M.start; };
+  const lostCnt = sDeals.filter(d => d['Deal - Status']==='Lost' && inAvgWindow(d)).length;
   const fRates = FSALL.map((_,i) => i===0?null:(fCnts[i-1]>0?pct(fCnts[i],fCnts[i-1]):null));
   const wonAll = sDeals.filter(d=>d['Deal - Status']==='Won');
 
@@ -9173,7 +9218,7 @@ function renderPdOptimax(sc) {
   const isLic   = omView === 'licences';
   const currCnts= isLic ? licsCnts   : fCnts;
   const currRts = isLic ? licsRates  : fRates;
-  const wonCurr = isLic ? licsWon    : (useFA ? FA.won : wonAll.length);
+  const wonCurr = isLic ? licsWon    : (useFA ? FA.won : wonWindow);
   const unitLabel= isLic ? 'licences' : 'deals';
 
   // ── OPTI-MAX model rows ──────────────────────────────────────────────────
@@ -9328,7 +9373,7 @@ function renderPdOptimax(sc) {
       currCell = `<span style="font-weight:600" title="Average value of won deals in the data">${fmtDollar(avgDealVal)}</span><div style="font-size:9px;color:var(--tl)">avg won deal · baseline</div>`;
     } else {
       currCell = r.curr != null
-        ? `<span style="font-weight:500" title="${r.curr.toLocaleString()} all time ÷ ${monthsElapsed} months of data">${fmt1(perMo(r.curr))}</span><div style="font-size:9px;color:var(--tl)">${r.curr.toLocaleString()} all time</div>`
+        ? `<span style="font-weight:500" title="${r.curr.toLocaleString()} ${useFA ? 'in the past ' + monthsElapsed + ' months' : 'deals created since ' + avgFromLabel} ÷ ${monthsElapsed} months">${fmt1(perMo(r.curr))}</span><div style="font-size:9px;color:var(--tl)">${r.curr.toLocaleString()} ${useFA ? 'past ' + monthsElapsed + ' mo' : 'since ' + avgFromLabel}</div>`
         : '<span style="font-weight:500">:</span>';
     }
 
@@ -9462,12 +9507,12 @@ function renderPdOptimax(sc) {
   <div class="box">
     <div class="box-title">OPTI-MAX Sales Growth Model
       <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">
-        all figures per month · currents = Pipedrive actuals ÷ ${monthsElapsed}${useFA ? '-month rolling window' : ' months of data'} · edits save automatically
+        all figures per month · currents = Pipedrive actuals ÷ ${monthsElapsed} months ${useFA ? '(rolling window)' : '(' + avgFromLabel + ' → now)'} · edits save automatically
       </span>
     </div>
     <p style="font-size:12px;color:var(--tm);margin-bottom:12px;line-height:1.5">
       Small % improvements at each stage <strong>compound</strong> into significantly more won ${unitLabel} <strong>per month</strong>.
-      Every figure is per month: Current # = the ${useFA ? 'past-' + monthsElapsed + '-month Pipedrive count ÷ ' + monthsElapsed : 'all-time count ÷ ' + monthsElapsed + ' months'} (window editable below; hover for the total count, shown underneath).
+      Every figure is per month: Current # = ${useFA ? 'the past-' + monthsElapsed + '-month Pipedrive count ÷ ' + monthsElapsed : 'deals created since ' + avgFromLabel + ' that reached each stage, ÷ ' + monthsElapsed + ' months'} (window editable below; hover for the window count, shown underneath).
       Conversion %s are live from Pipedrive. <span style="color:var(--acc);font-weight:500">Blue input fields</span> are editable: projections update instantly.
     </p>
     <div class="box" style="background:#f0f7ff;border:1px solid #cfe3f0;margin-bottom:14px">
@@ -9494,10 +9539,10 @@ function renderPdOptimax(sc) {
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;margin-top:8px;border-top:1px solid #cfe3f0;padding-top:8px">
         ${useFA ? `<span style="color:var(--tm)">Per month = counts ÷ <b>${monthsElapsed}</b> (the ${monthsElapsed}-month window).</span>
           <span style="color:var(--tl);font-size:11px">e.g. Won ${FA.won} ÷ ${monthsElapsed} = ${fmt1(perMo(FA.won))}/mo · update the seven counts + window from Pipedrive → Insights → Conversion (2026 Sales · Past 6 months) when you refresh</span>`
-        : `<span style="color:var(--tm)">Average per month over:</span>
+        : `<span style="color:var(--tm)">Average per month from</span>
           <input type="month" value="${avgFrom}" onchange="omSaveStr('avg_from',this.value)" style="font-size:12px;padding:2px 6px;border:1px solid var(--bd);border-radius:5px;font-family:inherit">
-          <span style="color:var(--tl)">to now = <b>${monthsElapsed} months</b> · counts ÷ ${monthsElapsed}</span>
-          <span style="color:var(--tl);font-size:11px">the pipeline effectively started ${avgFromLabel}${firstDealDt ? ' · first deal ' + fmtDate(firstDealDt).slice(0,6) : ''}</span>`}
+          <span style="color:var(--tl)"><b>${avgFromLabel} → ${new Date().toLocaleDateString('en-AU',{month:'short',year:'numeric'})}</b> = <b>${monthsElapsed} months</b>. Only deals created in this window are counted, then ÷ ${monthsElapsed}.</span>
+          <span style="color:var(--tl);font-size:11px">${firstDealDt ? 'first 2026-Sales deal was created ' + fmtDate(firstDealDt) : ''}</span>`}
       </div>` : ''}
     </div>
 
@@ -9532,7 +9577,7 @@ function renderPdOptimax(sc) {
     </div>
 
     <div class="cards" style="margin-bottom:18px">
-      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Won ${unitLabel} (${(useFA && !isLic) ? 'past ' + monthsElapsed + ' mo' : 'all time'})${infoBtn('Won '+unitLabel,'<span class="src-tag">Pipedrive · 2026 Sales</span><br>Count of '+unitLabel+' with Status = Won.<br><div class="calc-row">'+(isLic?'SUM(Product quantity of won deals)':'COUNT(Won deals)')+'</div>')}</div><div class="card-value">${wonCurr}</div><div class="card-sub">2026 Sales pipeline · ${fmt1(currMoRate)}/mo avg</div></div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Won ${unitLabel} (${isLic ? 'all time' : useFA ? 'past ' + monthsElapsed + ' mo' : 'since ' + avgFromLabel})${infoBtn('Won '+unitLabel,'<span class="src-tag">Pipedrive · 2026 Sales</span><br>Count of '+unitLabel+' with Status = Won.<br><div class="calc-row">'+(isLic?'SUM(Product quantity of won deals)':'COUNT(Won deals)')+'</div>')}</div><div class="card-value">${wonCurr}</div><div class="card-sub">2026 Sales pipeline · ${fmt1(currMoRate)}/mo avg</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Avg licence won cost${infoBtn('Average licence won cost','<span class="src-tag">Pipedrive · Won Deals</span><br>The real average price per licence once discounts are factored in.<br><div class="calc-row">Total won revenue ÷ total licences sold (Product quantity)<br>'+(licCostFromData?fmtDollar(qtyWonValue)+' ÷ '+totalLicencesSold.toLocaleString()+' = '+fmtDollar(avgLicWonCost):'no Product quantity yet: assumed')+'</div>')}</div><div class="card-value">${fmtDollar(avgLicWonCost)}</div><div class="card-sub">${licCostFromData?totalLicencesSold.toLocaleString()+' licences sold':'assumed: add Product quantity'}</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Projected won / month${infoBtn('Projected won / month','<span class="src-tag">Calculated</span><br>Won '+unitLabel+' per month if every target conversion rate is hit.<br><div class="calc-row">Monthly Contact target × chained target % at each stage</div>')}</div><div class="card-value" style="color:var(--gr)">${projWon!=null?fmt1(projWon):':'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">${projImpPct>=0?'+':''}${projImpPct}% vs ${fmt1(currMoRate)}/mo current</div>`:''}</div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Revenue / month (current)${infoBtn('Revenue / month (current)','<span class="src-tag">Pipedrive · Won Deals</span><br>Current won run-rate × average deal value.<br><div class="calc-row">(Won deals ÷ months since first deal) × avg deal value ('+fmtDollar(avgDealVal)+')</div>')}</div><div class="card-value">${fmtDollar(currRevMonth)}</div><div class="card-sub">${fmtDollar(currRevYear)}/yr at current rate</div></div>
