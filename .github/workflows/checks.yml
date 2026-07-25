@@ -1,0 +1,24 @@
+name: Checks
+
+# Regression tests on every push — the safety net that catches "fixed X, broke Y".
+# WARN, DON'T BLOCK: a red run marks the commit ✗ in GitHub (and obliges Claude to
+# stop and flag it per CLAUDE.md), but Vercel deploys independently of this job,
+# so a failure never holds up a deploy. Owner's decision: loud warning, no gate.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run regression tests
+        run: node tests/run-tests.mjs

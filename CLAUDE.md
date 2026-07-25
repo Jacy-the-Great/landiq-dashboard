@@ -120,16 +120,43 @@ Add users in the Supabase dashboard — see docs/OPERATIONS.md.
 3. Add `else if (sub === 'key') renderPdKey(sc);` in `setPdSub`.
 4. Write `function renderPdKey(sc){ ... }` near the other `renderPd*` functions.
 
+## Change-control protocol (MANDATORY on every edit)
+
+The regression suite (`tests/run-tests.mjs`) encodes the documented behaviour of
+the key calculations. CI (`.github/workflows/checks.yml`) runs it on every push —
+**warn loudly, never block**: a red run marks the commit ✗ but does not stop the
+Vercel deploy. The discipline therefore lives with the editor:
+
+1. **Before editing shared logic** (any global helper, `omModel`/`omReached`,
+   `pdParseDate`, the data layer, a metric used on more than one tab): grep for its
+   call sites first and list what depends on it. If an edit changes behaviour for a
+   caller you weren't asked about, that's a flag (see 4).
+2. **After editing, always run** `node tests/run-tests.mjs` locally before pushing.
+3. **If a test goes red, STOP. Never quietly edit a test to make it pass.**
+   Either the code broke real behaviour (fix/revert the code), or the behaviour is
+   changing on purpose — which requires step 4.
+4. **Escalate intentional behaviour changes.** If a change alters what a metric
+   *means* (source dataset, formula, window, filter) or affects anything beyond
+   what the owner asked for, stop and put the decision to the owner **boldly and
+   plainly, with the consequences**: what number changes, on which tabs, roughly by
+   how much, and what breaks if wrong. Only proceed on an explicit yes — then
+   update the test to the new behaviour AND add a `docs/DECISIONS.md` entry in the
+   same commit.
+5. **When you add or materially change a metric/calculation, add a test for it**
+   in `tests/run-tests.mjs` (extraction pattern at the top of that file). A metric
+   without a test is unprotected.
+
 ## Verifying
 
-1. Syntax-check every inline `<script>` before pushing:
+1. Run the regression suite (includes the inline-script syntax check):
    ```bash
-   node -e 'const h=require("fs").readFileSync("index.html","utf8");const re=/<script\b[^>]*>([\s\S]*?)<\/script>/g;let m,i=0,bad=0;while((m=re.exec(h))){i++;if(!m[1].trim()||/\bsrc=/.test(m[0].slice(0,m[0].indexOf(">"))))continue;try{new Function(m[1])}catch(e){bad++;console.log("block",i,e.message)}}console.log(i+" blocks, "+bad+" errors")'
+   node tests/run-tests.mjs
    ```
 2. Metric/data changes: verify against real numbers. The sync scripts log a sanity
    check each run — `gh workflow run "Pipedrive sync"` then read the log with
    `gh run view <id> --log`. Test the empty/sparse/edge case, not just the happy path.
-3. After push, confirm the change is live with the cache-buster curl above.
+3. After push, confirm the change is live with the cache-buster curl above, and
+   that the **Checks** workflow is green on the commit (`gh run list --workflow=Checks`).
 
 ## Global constants
 

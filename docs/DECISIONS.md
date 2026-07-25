@@ -19,6 +19,27 @@ Format: `## YYYY-MM-DD — Short title` + a few lines. Use absolute dates.
 
 ---
 
+## 2026-07-26 — Regression test harness + CI + change-control protocol (Phase 1+2)
+Built the reliability system the owner asked for ("don't break one thing when
+updating another"): `tests/run-tests.mjs` extracts the REAL calculation functions
+from index.html and asserts documented behaviour on fixtures (36 checks: dates,
+trial detection, funnel stage history incl. the Closed-Lost trap, the rolling-
+window model, active-paid rule). CI runs it on every push (`Checks` workflow).
+Enforcement decision: **warn loudly, never block** — red ✗ on the commit, deploys
+not gated. CLAUDE.md now carries a mandatory change-control protocol: check
+dependents before editing shared logic, run tests after, never edit a test to
+green it, and **escalate intentional metric-meaning changes to the owner with
+consequences** before proceeding. Adversarially verified: re-injecting the July
+all-time-counts bug turns exactly the right 4 tests red. Deferred by choice:
+metric registry (tooltip-from-spec) and the admin "under the hood" audit tab —
+agreed design: registry renders tooltips so they can't drift; audit tab shows
+every metric's source/formula/health, admin-only.
+
+## 2026-07-26 — OPTI-MAX window switched to rolling past-6-months
+Replaced the editable start-month with a rolling 3/6/12-month selector (default 6,
+`liq_optimax.roll_months`) computed once in `omModel()` and shared by the table,
+Sales cards, charts and labels. Clearer, and pre-pipeline deals can never creep in.
+
 ## 2026-07-24 — OPTI-MAX per-month averaging fixed + Target-won reconnected
 When the live stage-history data switched OPTI-MAX off the hand-typed Insights
 counts, two bugs surfaced: (1) the funnel counts were **all-time** but divided by
