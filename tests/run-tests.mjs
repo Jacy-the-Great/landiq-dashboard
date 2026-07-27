@@ -1,20 +1,18 @@
 // Land iQ dashboard — regression test harness
 //
-// Zero-dependency. Extracts the real calculation functions from index.html and
-// runs them against fixture data, so a change that alters a metric's meaning
-// turns a test red BEFORE anyone sees a wrong number on the dashboard.
+// Zero-dependency. Extracts the real calculation functions AND the metric
+// registry from index.html and runs them against fixture data, so a change that
+// alters a metric's meaning turns a test red BEFORE anyone sees a wrong number.
 //
 // Run:            node tests/run-tests.mjs
 // CI:             .github/workflows/checks.yml runs this on every push.
 // Enforcement:    WARN LOUDLY, NEVER BLOCK (owner's decision) — a red run marks
-//                 the commit with a red ✗ in GitHub and obliges Claude to stop
-//                 and flag it, but Vercel still deploys. See CLAUDE.md
-//                 "Change-control protocol".
+//                 the commit ✗ in GitHub and obliges Claude to stop and flag it,
+//                 but Vercel still deploys. See CLAUDE.md "Change-control protocol".
 //
-// Design note: functions are extracted from the single-file app by name.
-// If someone renames or restructures one, extraction fails and the suite goes
-// red — that is intentional: it forces the editor to look at this harness and
-// update the tests alongside the change, instead of silently orphaning them.
+// Design note: functions are extracted from the single-file app by name. If one
+// is renamed or restructured, extraction fails and the suite goes red — that is
+// intentional: it forces the editor to update the tests alongside the change.
 
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -46,9 +44,6 @@ console.log('\n0. Syntax');
 }
 
 // ── Function extraction ──────────────────────────────────────────────────────
-// Single-line consts: take the whole line. Multi-line: balanced-brace scan from
-// the definition start (fine for these targets — they contain no braces inside
-// strings/comments; if that ever changes the extraction fails loudly).
 function extractLine(startPat) {
   const i = html.search(startPat);
   if (i < 0) return null;
@@ -74,6 +69,10 @@ const pieces = {
   OM_FS: extractLine(/const OM_FS = /),
   omReached: extractBalanced(/function omReached\(/),
   omModel: extractBalanced(/function omModel\(/),
+  METRICS: extractBalanced(/const METRICS = \{/),
+  mVal: extractBalanced(/function mVal\(/),
+  mTest: extractBalanced(/function mTest\(/),
+  mDoc: extractBalanced(/function mDoc\(/),
 };
 
 console.log('\n1. Extraction');
@@ -84,24 +83,25 @@ if (Object.values(pieces).some(v => !v)) finish();
 
 // ── Sandbox: run the REAL functions with fixtures + a fixed "now" ────────────
 const FIXED_NOW = new Date('2026-07-26T10:00:00');
-function makeSandbox(deals, lsData = {}) {
-  const store = { ...lsData };
+function makeSandbox({ deals = [], people = [], ph = { weekly: [] }, ls = {} } = {}) {
+  const store = { ...ls };
   const sandbox = {
     console,
     localStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } },
-    _pd_deals: deals,
+    _pd_deals: deals, _pd_people: people, _ph: ph,
     Date: class extends Date { constructor(...a) { a.length ? super(...a) : super(FIXED_NOW.getTime()); } static now() { return FIXED_NOW.getTime(); } },
   };
   vm.createContext(sandbox);
-  const bundle = ['pct', 'pdParseDate', 'pdValidDate', 'isTrialType', 'OM_FS', 'omReached', 'omModel'].map(k => pieces[k]).join('\n');
-  vm.runInContext(bundle + '\nthis.__x = { pct, pdParseDate, pdValidDate, isTrialType, omReached, omModel };', sandbox);
+  const bundle = ['pct', 'pdParseDate', 'pdValidDate', 'isTrialType', 'OM_FS', 'omReached', 'omModel', 'METRICS', 'mVal', 'mTest', 'mDoc']
+    .map(k => pieces[k]).join('\n');
+  vm.runInContext(bundle + '\nthis.__x = { pct, pdParseDate, pdValidDate, isTrialType, omReached, omModel, METRICS, mVal, mTest, mDoc };', sandbox);
   return sandbox.__x;
 }
 
 // ── 2. Date parsing ──────────────────────────────────────────────────────────
 console.log('\n2. Date parsing (Pipedrive "YYYY-MM-DD HH:MM:SS" must parse everywhere)');
 {
-  const { pdParseDate, pdValidDate } = makeSandbox([]);
+  const { pdParseDate, pdValidDate } = makeSandbox();
   check('space-separated datetime parses', pdValidDate(pdParseDate('2026-05-14 01:15:21')));
   check('plain date parses', pdValidDate(pdParseDate('2026-05-14')));
   check('empty string → null (not a bogus date)', pdParseDate('') === null && pdParseDate('   ') === null);
@@ -111,7 +111,7 @@ console.log('\n2. Date parsing (Pipedrive "YYYY-MM-DD HH:MM:SS" must parse every
 // ── 3. Trial detection ───────────────────────────────────────────────────────
 console.log('\n3. Trial detection (multi-value field — must use includes, never ===)');
 {
-  const { isTrialType } = makeSandbox([]);
+  const { isTrialType } = makeSandbox();
   check('"2 Week Trial Licence" is a trial', isTrialType('2 Week Trial Licence'));
   check('"Extended Trial Licence" is a trial', isTrialType('Extended Trial Licence'));
   check('comma-separated multi-value containing a trial is a trial', isTrialType('Contact Register, 2 Week Trial Licence'));
@@ -122,7 +122,7 @@ console.log('\n3. Trial detection (multi-value field — must use includes, neve
 // ── 4. Funnel stage logic (omReached) ────────────────────────────────────────
 console.log('\n4. Funnel "reached stage" (lost deals must count at the furthest stage reached)');
 {
-  const { omReached } = makeSandbox([]);
+  const { omReached } = makeSandbox();
   const lostDeep = { 'Deal - Status': 'Lost', 'Deal - Stage': 'Closed Lost', 'Deal - Stages visited': 'Contact Made/Discovery | Meeting Scheduled | Negotiations | Closed Lost' };
   check('lost deal that reached Negotiations counts at stages 0–2', omReached(lostDeep, 0) && omReached(lostDeep, 1) && omReached(lostDeep, 2));
   check('…and NOT beyond (Closed Lost must not inflate the funnel)', !omReached(lostDeep, 3) && !omReached(lostDeep, 6));
@@ -136,13 +136,12 @@ console.log('\n4. Funnel "reached stage" (lost deals must count at the furthest 
 
 // ── 5. Rolling-window model (omModel) ────────────────────────────────────────
 console.log('\n5. OPTI-MAX rolling window (numerator and denominator must cover the SAME period)');
+const mkDeal = (created, status, visited) => ({ 'Deal - Pipeline': '2026 Sales', 'Deal - Deal created': created, 'Deal - Status': status, 'Deal - Stages visited': visited });
+const windowDeals = [];
+for (let i = 0; i < 30; i++) windowDeals.push(mkDeal('2026-01-15 10:00:00', i < 10 ? 'Won' : 'Lost', 'Contact Made/Discovery | Negotiations'));
+for (let i = 0; i < 60; i++) windowDeals.push(mkDeal('2026-03-15 10:00:00', i < 18 ? 'Won' : 'Open', 'Contact Made/Discovery | Meeting Scheduled | Negotiations'));
 {
-  // Fixture: 30 deals created BEFORE the window (Jan 2026), 60 inside (Mar 2026).
-  const mk = (created, status, visited) => ({ 'Deal - Pipeline': '2026 Sales', 'Deal - Deal created': created, 'Deal - Status': status, 'Deal - Stages visited': visited });
-  const deals = [];
-  for (let i = 0; i < 30; i++) deals.push(mk('2026-01-15 10:00:00', i < 10 ? 'Won' : 'Lost', 'Contact Made/Discovery | Negotiations'));
-  for (let i = 0; i < 60; i++) deals.push(mk('2026-03-15 10:00:00', i < 18 ? 'Won' : 'Open', 'Contact Made/Discovery | Meeting Scheduled | Negotiations'));
-  const { omModel } = makeSandbox(deals, { liq_optimax: JSON.stringify({ roll_months: 6 }) });
+  const { omModel } = makeSandbox({ deals: windowDeals, ls: { liq_optimax: JSON.stringify({ roll_months: 6 }) } });
   const m = omModel();
   check('6-month window in Jul 2026 starts 1 Feb 2026', m.start.getFullYear() === 2026 && m.start.getMonth() === 1 && m.start.getDate() === 1, `got ${m.start}`);
   check('months = 6', m.months === 6);
@@ -151,37 +150,60 @@ console.log('\n5. OPTI-MAX rolling window (numerator and denominator must cover 
   check('per-month lead rate = 60 ÷ 6 = 10', Math.abs(m.leadsCurr - 10) < 1e-9, `got ${m.leadsCurr}`);
   check('funnel counts never increase down the funnel (monotonic)', m.counts.every((c, i) => i === 0 || c <= m.counts[i - 1]), JSON.stringify(m.counts));
   check('Sales-card values come from the SAME model (wonCurr = wonCount ÷ months)', Math.abs(m.wonCurr - m.wonCount / m.months) < 1e-9);
-  // Changing the window must change BOTH count and denominator (the July 2026 bug)
-  const m3 = makeSandbox(deals, { liq_optimax: JSON.stringify({ roll_months: 3 }) }).omModel();
+  const m3 = makeSandbox({ deals: windowDeals, ls: { liq_optimax: JSON.stringify({ roll_months: 3 }) } }).omModel();
   check('shrinking the window shrinks the COUNT as well as the divisor', m3.months === 3 && m3.counts[0] === 0, `months=${m3.months} count=${m3.counts[0]} (Mar deals fall outside May–Jul)`);
 }
 
-// ── 6. Active-paid rule (documented in CLAUDE.md — future removal ≠ churned) ─
-console.log('\n6. Active-paid rule (a FUTURE Date Access Removed means still active)');
+// ── 6. Metric registry — the REAL definitions, on fixtures ───────────────────
+console.log('\n6. Metric registry (single source of truth for value AND tooltip)');
 {
-  // The rule lives inline in render functions; assert the canonical definition here
-  // so any reimplementation has a spec to match, and assert the SOURCE still
-  // contains the guard (removal date compared against now, not treated as churn).
-  const { pdParseDate, pdValidDate } = makeSandbox([]);
-  const activePaid = p => {
-    if (p['Person - Customer Type'] !== 'Paid Subscription') return false;
-    const rem = p['Person - Date Access Removed'];
-    if (!rem) return true;
-    const d = pdParseDate(rem); return pdValidDate(d) && d > FIXED_NOW;
-  };
-  check('paid + no removal date = active', activePaid({ 'Person - Customer Type': 'Paid Subscription' }));
-  check('paid + FUTURE removal (2026-12-31) = active', activePaid({ 'Person - Customer Type': 'Paid Subscription', 'Person - Date Access Removed': '2026-12-31' }));
-  check('paid + PAST removal (2026-01-01) = NOT active', !activePaid({ 'Person - Customer Type': 'Paid Subscription', 'Person - Date Access Removed': '2026-01-01' }));
-  check('non-paid type = NOT active-paid', !activePaid({ 'Person - Customer Type': '2 Week Trial Licence' }));
-  const sites = (html.match(/!== 'Paid Subscription'/g) || []).length;
-  check(`source still applies the exact-match paid filter (${sites} sites found)`, sites >= 2);
+  const people = [
+    { 'Person - Customer Type': 'Paid Subscription' },                                                        // active (no removal)
+    { 'Person - Customer Type': 'Paid Subscription', 'Person - Date Access Removed': '2026-12-31' },          // active (future expiry)
+    { 'Person - Customer Type': 'Paid Subscription', 'Person - Date Access Removed': '2026-01-01' },          // NOT active (past)
+    { 'Person - Customer Type': 'Paid Subscription', 'Person - Date Access Removed': 'garbage-date' },        // NOT active (unparseable)
+    { 'Person - Customer Type': '2 Week Trial Licence' },                                                     // active trial
+    { 'Person - Customer Type': 'Extended Trial Licence', 'Person - Date Access Removed': '2026-01-01' },     // ended trial
+    { 'Person - Customer Type': 'Contact Register' },
+  ];
+  const phWeekly = { weekly: [
+    { week_start: '2026-07-06', active_users: 81, active_engaged: 30 },   // complete week
+    { week_start: '2026-07-20', active_users: 33, active_engaged: 9 },    // PARTIAL (now = Sun 26 Jul; week ends 27 Jul)
+  ] };
+  const x = makeSandbox({ deals: windowDeals, people, ph: phWeekly, ls: { liq_optimax: JSON.stringify({ roll_months: 6 }) } });
+
+  const need = ['label', 'src', 'desc', 'formula', 'compute'];
+  const bad = Object.entries(x.METRICS).filter(([, m]) => !need.every(k => m[k]));
+  check(`every registry entry declares label/src/desc/formula/compute (${Object.keys(x.METRICS).length} entries)`, bad.length === 0, bad.map(([k]) => k).join(','));
+
+  check('active_paid = 2 (future expiry active; past + unparseable NOT)', x.mVal('active_paid') === 2, `got ${x.mVal('active_paid')}`);
+  check('active_trials = 1 (ended trial excluded)', x.mVal('active_trials') === 1, `got ${x.mVal('active_trials')}`);
+  check('close_rate = 28 won ÷ (28+20 closed) ≈ 58.3% — all-time, open deals excluded', Math.abs(x.mVal('close_rate') - (28 / (28 + 20) * 100)) < 0.01, `got ${x.mVal('close_rate')}`);
+  check('win_rate = windowed 18 ÷ 60 = 30%', Math.abs(x.mVal('win_rate') - 30) < 1e-9, `got ${x.mVal('win_rate')}`);
+  check('monthly_leads = 10/mo (same model as OPTI-MAX table)', Math.abs(x.mVal('monthly_leads') - 10) < 1e-9);
+  check('active_users_week uses the LAST COMPLETE week (81, not partial 33)', x.mVal('active_users_week') === 81, `got ${x.mVal('active_users_week')}`);
+  check('active_engaged_week from the same complete week (30)', x.mVal('active_engaged_week') === 30, `got ${x.mVal('active_engaged_week')}`);
+  check('tooltip body is generated from the registry (mDoc contains src + formula)',
+    x.mDoc('active_paid').includes(x.METRICS.active_paid.src) && x.mDoc('active_paid').includes(x.METRICS.active_paid.formula));
+}
+
+// ── 7. Drift guards — render sites must USE the registry ─────────────────────
+console.log('\n7. Drift guards (no second copies of registry logic in render code)');
+{
+  const inlinePaidFilters = (html.match(/!== 'Paid Subscription'/g) || []).length;
+  check('the active-paid predicate exists ONCE (in the registry) — no inline copies', inlinePaidFilters === 1,
+    `found ${inlinePaidFilters}; a new inline copy of the paid filter was added — use mTest('active_paid') instead`);
+  const mTestUses = (html.match(/mTest\('active_paid'\)/g) || []).length;
+  const mValPaid = (html.match(/mVal\('active_paid'\)/g) || []).length;
+  check(`render sites consume the registry (mTest×${mTestUses} + mVal×${mValPaid} ≥ 5)`, mTestUses + mValPaid >= 5);
+  const mDocUses = (html.match(/mDoc\('/g) || []).length;
+  check(`card tooltips are registry-generated (mDoc used ${mDocUses}×, ≥ 5)`, mDocUses >= 5);
 }
 
 finish();
 
 function finish() {
-  console.log(`\n${'─'.repeat
-    ? '' : ''}══════════════════════════════════════════`);
+  console.log('\n══════════════════════════════════════════');
   console.log(`RESULT: ${passed} passed, ${failed} failed`);
   if (failed) {
     console.log('\n⚠  FAILURES — a documented behaviour has changed:');

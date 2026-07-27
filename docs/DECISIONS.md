@@ -19,6 +19,20 @@ Format: `## YYYY-MM-DD — Short title` + a few lines. Use absolute dates.
 
 ---
 
+## 2026-07-28 — Metric registry (reliability Phase 3)
+`METRICS` in index.html is now the single source of truth for 10 key metrics
+(active_paid, active_trials, win_rate, close_rate, monthly_leads, target_won,
+won_revenue_2026, licences_sold, active_users_week, active_engaged_week): each
+entry declares source, human formula, tooltip text AND the actual computation.
+Render sites call `mVal(id)` / `mTest(id)` for values and `mDoc(id)`/`mInfo(id)`
+for tooltips, so a tooltip physically cannot drift from the calculation. Found and
+killed 5 divergent inline copies of the active-paid predicate — two of them used a
+DIFFERENT rule (unparseable removal date counted as active). Canonical rule:
+unparseable = NOT active. Tests §6 run the real registry on fixtures; §7 adds
+drift guards (the inline paid-filter pattern may appear exactly once — in the
+registry; adding a copy turns CI red). Rule: new key metric → registry entry +
+test, never a second inline copy.
+
 ## 2026-07-26 — Regression test harness + CI + change-control protocol (Phase 1+2)
 Built the reliability system the owner asked for ("don't break one thing when
 updating another"): `tests/run-tests.mjs` extracts the REAL calculation functions

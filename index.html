@@ -1266,6 +1266,128 @@ function omTargets() {
   return { leadsCurr: m.leadsCurr, leadsTarget: m.leadsTarget, wonCurr: m.wonCurr, wonTarget: m.wonTarget, months: m.months };
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// METRIC REGISTRY — the single source of truth for key metrics.
+// Each entry declares the metric ONCE: its source, its human-readable formula,
+// AND the actual computation. Render sites call mVal(id) for the number and
+// mInfo(id) for the ⓘ tooltip, so the tooltip is generated FROM the same entry
+// that computes the value — they physically cannot drift apart. Tests
+// (tests/run-tests.mjs §7) assert each compute against fixtures.
+// Rules: never inline a second copy of a registry metric's logic in a render
+// function — reuse .test / mVal. New key metric → new entry + a test.
+// ═════════════════════════════════════════════════════════════════════════════
+const METRICS = {
+  active_paid: {
+    label: 'Active paying customers',
+    src: 'Pipedrive · People — nightly API sync',
+    desc: 'People whose paid licence is active today. <b>Date Access Removed</b> is usually a <i>future</i> subscription-expiry date, so a future date still counts as active; only a past date means access has ended. An unparseable date is treated as NOT active.',
+    formula: "Customer Type = 'Paid Subscription' AND (no Date Access Removed OR removal date > today)",
+    test: p => {
+      if (p['Person - Customer Type'] !== 'Paid Subscription') return false;
+      const rem = p['Person - Date Access Removed'];
+      if (!rem) return true;
+      const d = pdParseDate(rem); return pdValidDate(d) && d > new Date();
+    },
+    compute: () => _pd_people.filter(METRICS.active_paid.test).length,
+  },
+  active_trials: {
+    label: 'Active trials',
+    src: 'Pipedrive · People — nightly API sync',
+    desc: 'People currently on any trial licence (2 Week, Extended, …). Trial detection uses substring matching because Customer Type is multi-value.',
+    formula: "Customer Type contains 'trial' AND (no Date Access Removed OR removal date > today)",
+    test: p => {
+      if (!isTrialType(p['Person - Customer Type'])) return false;
+      const rem = p['Person - Date Access Removed'];
+      if (!rem) return true;
+      const d = pdParseDate(rem); return pdValidDate(d) && d > new Date();
+    },
+    compute: () => _pd_people.filter(METRICS.active_trials.test).length,
+  },
+  win_rate: {
+    label: 'Win rate (2026 Sales)',
+    src: 'Pipedrive · deals + stage history — nightly API sync',
+    desc: 'The funnel conversion Pipedrive reports: of the deals that entered the pipeline in the rolling window, the share that were won. Not to be confused with the <b>close rate</b> (Won ÷ Won+Lost), which reads far higher because open deals are excluded from it.',
+    formula: 'Won ÷ Contacts entered × 100 · rolling window (OPTI-MAX)',
+    compute: () => { const m = omModel(); return m.counts[0] > 0 ? pct(m.wonCount, m.counts[0]) : null; },
+  },
+  close_rate: {
+    label: 'Close rate (2026 Sales)',
+    src: 'Pipedrive · deals — nightly API sync',
+    desc: 'Of the deals already resolved (won or lost), the share that were won. Open deals are excluded, so this reads much higher than the win rate.',
+    formula: 'Won ÷ (Won + Lost) × 100',
+    compute: () => {
+      const won = _pd_deals.filter(d => d['Deal - Pipeline'] === '2026 Sales' && d['Deal - Status'] === 'Won').length;
+      const lost = _pd_deals.filter(d => d['Deal - Pipeline'] === '2026 Sales' && d['Deal - Status'] === 'Lost').length;
+      return (won + lost) ? pct(won, won + lost) : null;
+    },
+  },
+  monthly_leads: {
+    label: 'Monthly leads',
+    src: 'Pipedrive · deals — nightly API sync (OPTI-MAX model)',
+    desc: 'New deals reaching Contact Made / Discovery per month, averaged over the OPTI-MAX rolling window. The target is the OPTI-MAX Stage 1 Contact target — set it in the model and this follows.',
+    formula: 'deals created in the rolling window that reached Contact Made ÷ window months',
+    compute: () => omModel().leadsCurr,
+  },
+  target_won: {
+    label: 'Target won / month',
+    src: 'Calculated · OPTI-MAX model',
+    desc: 'The OPTI-MAX Stage 3 Won target: the Stage 1 lead target chained through every stage\'s target conversion %. Change the OPTI-MAX targets to move this.',
+    formula: 'lead target × meeting% × negotiations% × order% × invoice% × won%',
+    compute: () => omModel().wonTarget,
+  },
+  won_revenue_2026: {
+    label: 'Won revenue (2026 Sales)',
+    src: 'Pipedrive · deals — nightly API sync',
+    desc: 'Total value of every deal won in the 2026 Sales pipeline, all time.',
+    formula: 'SUM(Deal Value) over Status = Won',
+    compute: () => _pd_deals.filter(d => d['Deal - Pipeline'] === '2026 Sales' && d['Deal - Status'] === 'Won')
+      .reduce((s, d) => s + (parseFloat(d['Deal - Value']) || 0), 0),
+  },
+  licences_sold: {
+    label: 'Licences sold (won deals)',
+    src: 'Pipedrive · deal products — nightly API sync',
+    desc: 'Total seats sold across won 2026 Sales deals, from each deal\'s attached products.',
+    formula: 'SUM(Product quantity) over Status = Won',
+    compute: () => _pd_deals.filter(d => d['Deal - Pipeline'] === '2026 Sales' && d['Deal - Status'] === 'Won')
+      .reduce((s, d) => s + (parseFloat(d['Deal - Product quantity']) || 0), 0),
+  },
+  active_users_week: {
+    label: 'Active users (last week)',
+    src: 'Live · PostHog (Giraffe/SDK) — nightly sync',
+    desc: 'Distinct <b>known people</b> (matched to a PostHog identity/email) who triggered any event in Land iQ during the last <b>completed</b> week. Anonymous/logged-out browser traffic is excluded, and the in-progress week is skipped so the number is never artificially low. This is usage, not access — for licence-holders see Active paying customers.',
+    formula: 'count(distinct person email) · any event · last fully-ended week',
+    compute: () => {
+      const done = ((_ph && _ph.weekly) || []).filter(w => { const ws = new Date(w.week_start); return !isNaN(ws) && (ws.getTime() + 7 * 86400000) <= Date.now(); });
+      return done.length ? Number(done[done.length - 1].active_users) : null;
+    },
+    computePrev: () => {
+      const done = ((_ph && _ph.weekly) || []).filter(w => { const ws = new Date(w.week_start); return !isNaN(ws) && (ws.getTime() + 7 * 86400000) <= Date.now(); });
+      return done.length > 1 ? Number(done[done.length - 2].active_users) : null;
+    },
+  },
+  active_engaged_week: {
+    label: 'Did something in-product (last week)',
+    src: 'Live · PostHog (Giraffe/SDK) — nightly sync',
+    desc: 'Of the known people who showed up, the ones who took a <b>real product action</b> — excludes bare page-views, autocapture and clicks.',
+    formula: 'count(distinct person email) · real product events only · last fully-ended week',
+    compute: () => {
+      const done = ((_ph && _ph.weekly) || []).filter(w => { const ws = new Date(w.week_start); return !isNaN(ws) && (ws.getTime() + 7 * 86400000) <= Date.now(); });
+      const v = done.length ? done[done.length - 1].active_engaged : null;
+      return v == null ? null : Number(v);
+    },
+  },
+};
+function mVal(id) { const m = METRICS[id]; return m ? m.compute() : null; }
+function mTest(id) { return METRICS[id].test; }
+function mDoc(id, extra = '') {   // tooltip BODY from the registry (for cardHTML's `info` argument)
+  const m = METRICS[id]; if (!m) return '';
+  return '<span class="src-tag">' + m.src + '</span><br>' + m.desc + '<div class="calc-row">' + m.formula + '</div>' + extra;
+}
+function mInfo(id, extra = '') {  // full ⓘ button (for box titles / inline HTML)
+  const m = METRICS[id]; if (!m) return '';
+  return infoBtn(m.label, mDoc(id, extra));
+}
+
 function thisMonth(arr, dateKey = 'week') {
   const now = new Date();
   return arr.filter(r => {
@@ -1477,12 +1599,7 @@ function renderHome(el) {
   const pdWonAll  = _pd_deals.filter(d => d['Deal - Status'] === 'Won'  && d['Deal - Pipeline'] === '2026 Sales');
   const pdLostAll = _pd_deals.filter(d => d['Deal - Status'] === 'Lost' && d['Deal - Pipeline'] === '2026 Sales');
   const pdWinRate = pdWonAll.length + pdLostAll.length ? pct(pdWonAll.length, pdWonAll.length + pdLostAll.length) : null;
-  const pdActivePaid = _pd_people.filter(p => {
-    if (p['Person - Customer Type'] !== 'Paid Subscription') return false;
-    const rem = p['Person - Date Access Removed'];
-    if (!rem) return true;
-    const d = pdParseDate(rem); return pdValidDate(d) && d > _now;
-  }).length;
+  const pdActivePaid = mVal('active_paid');   // METRIC REGISTRY — single definition
 
   const mods = [
     { name: 'Pipedrive Deals',  last: _pd_deals_imported_at  ? { _ts: _pd_deals_imported_at }  : null, dk: '_ts' },
@@ -1631,8 +1748,8 @@ function renderHome(el) {
         '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with <b>Status = Won</b> and <b>Won time</b> in the current calendar month. The ▲/▼ compares to last calendar month.<br><div class="calc-row">Filter: Pipeline = "2026 Sales" AND Status = "Won" AND Won time in current month</div>'],
       ['Revenue (this month)', pdRevThisMonth || null, revLastMonth || null, '$', 'vs last month · 2026 Sales',
         '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Sum of <b>Deal Value</b> for all Won deals with Won time in the current calendar month. The ▲/▼ compares to last calendar month.<br><div class="calc-row">SUM(Deal Value) where Status = "Won" AND Won time in current month</div>'],
-      ['Win rate (2026 Sales)', pdInsightsWinRate().rate, null, '%', 'Won ÷ Contacts · past ' + pdInsightsWinRate().months + ' mo · matches Pipedrive',
-        '<span class="src-tag">Pipedrive · Insights</span><br><b>Win rate = Won ÷ Contacts entered</b> — the funnel conversion Pipedrive reports (' + pdInsightsWinRate().won + ' won ÷ ' + pdInsightsWinRate().contact + ' contacts = ' + fmtPct(pdInsightsWinRate().rate) + ', past ' + pdInsightsWinRate().months + ' months).<br><div class="calc-row">Won ÷ Contacts-Made × 100</div>Not to be confused with the <b>close rate</b> Won ÷ (Won + Lost) = ' + fmtPct(pdWinRate) + ' (the % of already-<i>closed</i> deals that were won), which reads far higher because most deals are still open.'],
+      ['Win rate (2026 Sales)', mVal('win_rate'), null, '%', 'Won ÷ Contacts · past ' + omModel().months + ' mo · matches Pipedrive',
+        mDoc('win_rate', 'Currently: ' + omModel().wonCount + ' won ÷ ' + omModel().counts[0] + ' contacts, past ' + omModel().months + ' months. The close rate here is ' + fmtPct(mVal('close_rate')) + '.')],
       ['Active paid subscribers', pdActivePaid || null, null, null, 'Target: 600',
         '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND either no Date Access Removed, or Date Access Removed is in the future.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
     ])}
@@ -1761,14 +1878,8 @@ function renderExec(el) {
 
   // ── Pull headline numbers from every source ─────────────────────────────
   // Sales (Pipedrive)
-  // ACTIVE paying customers: same definition as the Home tab (type = Paid
-  // Subscription AND access not removed), so the two screens always agree.
-  const paidPeople = _pd_people.filter(p => {
-    if (p['Person - Customer Type'] !== 'Paid Subscription') return false;
-    const rem = p['Person - Date Access Removed'];
-    if (!rem) return true;
-    const d = pdParseDate(rem); return pdValidDate(d) && d > today;
-  });
+  // ACTIVE paying customers: METRIC REGISTRY predicate — one definition everywhere.
+  const paidPeople = _pd_people.filter(mTest('active_paid'));
   const allWon = _pd_deals.filter(d => d['Deal - Status'] === 'Won');
   const wonARR = allWon.reduce((s,d) => s + (parseFloat(d['Deal - Value'])||0), 0);
   const wonThisMonth = allWon.filter(d => {
@@ -1799,13 +1910,10 @@ function renderExec(el) {
   // Activity (PostHog)
   const phWeekly = (_ph.weekly || []).slice(-1)[0] || {};
   const phWeeklyPrev = (_ph.weekly || []).slice(-2,-1)[0] || {};
-  // Last FULLY-ENDED week (exclude the current partial week so "last week" isn't low)
-  const _phDoneEx = (_ph.weekly || []).filter(w => { const ws = new Date(w.week_start); return !isNaN(ws) && (ws.getTime() + 7 * 86400000) <= Date.now(); });
-  const auNow  = _phDoneEx.length     ? Number(_phDoneEx[_phDoneEx.length - 1].active_users) : null;
-  const auPrev = _phDoneEx.length > 1 ? Number(_phDoneEx[_phDoneEx.length - 2].active_users) : null;
-  // "did something in-product" — a known person who did a real product action.
-  const _engVal = _phDoneEx.length ? _phDoneEx[_phDoneEx.length - 1].active_engaged : null;
-  const auEng  = (_engVal == null) ? null : Number(_engVal);
+  // Active users: METRIC REGISTRY (last fully-ended week; known people only)
+  const auNow  = mVal('active_users_week');
+  const auPrev = METRICS.active_users_week.computePrev();
+  const auEng  = mVal('active_engaged_week');
   const dauMau = (_ph.dauMau || []).slice(-1)[0] || {};
   const segments = _ph.segments || [];
 
@@ -1893,7 +2001,7 @@ function renderExec(el) {
       ['Churned this month', churnedThisMonth.length || null, null, null, 'paid subscribers lost'],
       ['Active trials', activeTrial.length || null, null, null, 'in progress'],
       ['Active users (last week)', auNow, auPrev, null, (auEng != null ? auEng + ' did something in-product · ' : '') + 'known people · last full week',
-        '<span class="src-tag">Live · PostHog (Giraffe/SDK)</span><br><b>Showed up (' + fmtNum(auNow) + '):</b> distinct <b>known people</b> (matched to a PostHog identity/email) who triggered any event in Land iQ during the last <b>completed</b> week.<br>' + (auEng != null ? '<b>Did something (' + fmtNum(auEng) + '):</b> of those, the ones who took a <b>real product action</b> (excludes bare page-views, autocapture and clicks).<br>' : '') + '<div class="calc-row">count(distinct person email) per week; anonymous/logged-out browser traffic is excluded — that is why this is far below the raw event-session count.</div>This is <b>usage</b>, not access — for licence-holders see <b>Active paid subscribers</b> on the Sales tab.'],
+        mDoc('active_users_week', auEng != null ? '<b>Did something (' + fmtNum(auEng) + '):</b> ' + METRICS.active_engaged_week.desc : '')],
     ])}
 
     <!-- Narrative (full width) -->
@@ -3624,11 +3732,7 @@ function setActivitySub(sub, rerender = true, data) {
         if (!Object.keys(ea).length) return '';
         const nowQ = new Date();
         const quiet = _pd_people
-          .filter(p => {
-            if (p['Person - Customer Type'] !== 'Paid Subscription') return false;
-            const rem = pdParseDate(p['Person - Date Access Removed']);
-            return !pdValidDate(rem) || rem > nowQ;
-          })
+          .filter(mTest('active_paid'))   // METRIC REGISTRY — was a divergent copy (treated unparseable dates as active)
           .map(p => {
             const em = (p['Person - Email'] || p['Email'] || '').toLowerCase();
             const act = em && ea[em];
@@ -6665,12 +6769,7 @@ function renderWorkstreams(el) {
 
     ${(() => {
       // ── Shared top line: the numbers every workstream feeds ────────────────
-      const now2 = new Date();
-      const activeSeats = _pd_people.filter(p => {
-        if (p['Person - Customer Type'] !== 'Paid Subscription') return false;
-        const rem = pdParseDate(p['Person - Date Access Removed']);
-        return !pdValidDate(rem) || rem > now2;
-      }).length;
+      const activeSeats = mVal('active_paid');   // METRIC REGISTRY — was a divergent copy
       const rev = wsAuto('license_revenue', qr);
       const usage = wsAuto('active_usage', qr);
       const qTarget = TARGET_ARR / 4;
@@ -6880,11 +6979,8 @@ function renderPipedrive(el) {
   // Active paid subscribers always shows current state (people-based, not pipeline-filtered)
   const _now = new Date();
   const paidSubs  = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
-  const activePaidSubs = paidSubs.filter(p => {
-    const rem = p['Person - Date Access Removed'];
-    if (!rem) return true;
-    const d = pdParseDate(rem);
-    return pdValidDate(d) && d > _now;
+  const activePaidSubs = paidSubs.filter(p => {   // METRIC REGISTRY predicate (kept as filter chain for the paidSubs list above)
+    return mTest('active_paid')(p);
   });
 
   const plToggle = `<div style="display:flex;align-items:center;gap:6px;margin-top:6px">
@@ -6913,12 +7009,12 @@ function renderPipedrive(el) {
         '<span class="src-tag">Pipedrive · ' + plLabel + '</span><br>Deals with <b>Status = Lost</b> and <b>Lost time</b> within the selected date range.<br><div class="calc-row">Pipeline = "' + plLabel + '" AND Status = "Lost" AND Lost time in range</div>Currently showing: <b>' + range.label + '</b>'],
       ['Close rate (' + plLabel + ')', wonDeals.length + lostDeals.length ? pct(wonDeals.length, wonDeals.length + lostDeals.length) : null, null, '%', 'Won ÷ (Won + Lost) · ' + range.label,
         '<span class="src-tag">Pipedrive · ' + plLabel + '</span><br><b>Close rate = Won ÷ (Won + Lost)</b> for deals CLOSED within the selected range — the % of resolved deals that were won. Open deals are excluded, so this reads much higher than Pipedrive\'s <b>win rate</b> (Won ÷ Contacts entered, ' + fmtPct(pdInsightsWinRate().rate) + ' — see OPTI-MAX).<br><div class="calc-row">Won.count / (Won.count + Lost.count) × 100</div>Currently showing: <b>' + range.label + '</b>'],
-      ['Monthly leads', Math.round(omTargets().leadsCurr * 10) / 10, null, null, 'Target ' + fmt1(omTargets().leadsTarget) + '/mo · OPTI-MAX Stage 1',
-        '<span class="src-tag">Pipedrive · Insights</span><br>New leads reaching <b>Contact Made / Discovery</b> per month (' + pdInsightsWinRate().contact + ' contacts ÷ ' + pdInsightsWinRate().months + ' mo). The <b>target</b> is the OPTI-MAX <b>Stage 1</b> Contact target — set it in the OPTI-MAX model and this card follows.<br><div class="calc-row">Contacts entered ÷ window (months)</div>'],
-      ['Target won / month', Math.round(omTargets().wonTarget * 10) / 10, null, null, 'Now ' + fmt1(omTargets().wonCurr) + '/mo · OPTI-MAX Stage 3',
-        '<span class="src-tag">Calculated · OPTI-MAX</span><br>The <b>Stage 3 Won target</b> from the OPTI-MAX model — the Stage 1 lead target chained through every stage’s target conversion %. Currently <b>' + fmt1(omTargets().wonCurr) + '/mo</b> actual. Change the OPTI-MAX targets to move this.<br><div class="calc-row">Lead target × meeting% × neg% × order% × invoice% × won%</div>'],
+      ['Monthly leads', Math.round(mVal('monthly_leads') * 10) / 10, null, null, 'Target ' + fmt1(omTargets().leadsTarget) + '/mo · OPTI-MAX Stage 1',
+        mDoc('monthly_leads')],
+      ['Target won / month', Math.round(mVal('target_won') * 10) / 10, null, null, 'Now ' + fmt1(omTargets().wonCurr) + '/mo · OPTI-MAX Stage 3',
+        mDoc('target_won')],
       ['Active paid subscribers', activePaidSubs.length || null, null, null, 'Target: 600 · as of today',
-        '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND (Date Access Removed is blank OR is a future date). Always shows current snapshot: not affected by the date range or pipeline filter.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
+        mDoc('active_paid', 'Always shows the current snapshot: not affected by the date range or pipeline filter.')],
       ['People (total)', _pd_people.length || null, null, null, null,
         '<span class="src-tag">Pipedrive · People CSV</span><br>Total row count of the imported People CSV. All contacts regardless of type, licence status, or date. This is the raw import size.<br>Last imported: <b>' + (_pd_people_imported_at ? fmtDate(_pd_people_imported_at) : 'unknown') + '</b>'],
     ])}
@@ -7149,12 +7245,7 @@ function renderPdRevenue(sc) {
   const totalBooked  = wonDeals.reduce((s, d) => s + (parseFloat(d['Deal - Value']) || 0), 0);
 
   // ── ACTIVE GROSS REVENUE (real sum of contract values for still-active customers) ─
-  const activePaid   = _pd_people.filter(p => {
-    if (p['Person - Customer Type'] !== 'Paid Subscription') return false;
-    const rem = p['Person - Date Access Removed'];
-    if (!rem) return true;
-    const d = pdParseDate(rem); return pdValidDate(d) && d > today;
-  });
+  const activePaid   = _pd_people.filter(mTest('active_paid'));   // METRIC REGISTRY
   const avgDealVal   = wonDeals.length ? totalBooked / wonDeals.length : 0;
 
   // Real gross: add up the actual won-deal value of every organisation that still
