@@ -1,7 +1,30 @@
 # FY2026-27 Targets — integration plan
 
-Extracted from the FY27 revenue/pricing forecast (Land iQ 3.0). Status: **planned,
-not yet built.** Decisions below are locked; build in the phases at the end.
+Extracted from the FY27 revenue/pricing forecast (Land iQ 3.0). Status:
+**IMPLEMENTED 2026-07-28** (phases 1–3; phase 4 waits on a Pipedrive tier field).
+
+## Implementation status — target by target
+
+| Target | Status | Where it lives |
+|---|---|---|
+| Total revenue $1.61M | ✅ live | Exec Brief "Revenue won · FY2026-27" key card (FY27-window won deals vs $1.61M; prev. $2.4M shown as secondary) · registry `fy27_revenue` |
+| Licence rev $1.56M / advisory $50k | ✅ shown | Split named on the same card's sub-line; advisory targeted on the Workstreams Advisory KPI ($12.5k/qtr default) |
+| Total licences 750 | ✅ live | Home hero "/750" progress bar (prev. 600 as secondary) + Exec "Active paying customers" card (% of 750) |
+| New licences 624 | ✅ live | Exec "New licences (FY27)" card · registry `fy27_new_licences` · Workstreams net-seats target 156/qtr |
+| Retention 70% → 126 of 180 | ✅ live | Exec "Existing base retained" card · registry `fy27_base_retention` (base − paid churn since 1 Jul 2026) |
+| Tier mix 500 Base / 250 Premium | ⚠ target-only | Exec "Tier mix target" card — live split needs a **Licence Tier field in Pipedrive** (sync picks it up automatically) |
+| Pricing $2,000 / $4,000 | ✅ config | `liq_fy27` (price_base / price_premium), shown on the tier-mix card |
+| Cost/licence $3,499 → $584 | ✅ config | `liq_fy27`; both figures shown on the margin card + narrative bullet |
+| Margin 13% → >70% | ✅ live | Exec "Licence margin (current)" card · registry `licence_margin` (real blended price vs current cost) + narrative bullet |
+| Royalty/WSP-IP upside | — noted only | Untargeted upside; not tracked (per plan) |
+
+All targets/assumptions are **editable in the Exec Brief "FY27 model settings" box**
+(admin-only, stored in `liq_fy27`) — no code change needed to adjust the model.
+Guardrails: registry entries are tooltip-safe by construction; tests §6b cover the
+FY-window edges (a timezone bug on 1-Jul was caught by these tests before ship),
+retention, margin math, and config flow-through.
+
+Decisions below were locked before the build; phases at the end record the plan.
 
 FY2026-27 = 1 Jul 2026 → 30 Jun 2027 (we are at the start of it).
 

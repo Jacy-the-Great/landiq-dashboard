@@ -334,8 +334,38 @@ body.viewer .admin-only{display:none !important}
 // AUTH: Email OTP via Supabase Auth
 // State machine: initialising → authenticated ↔ refreshing → unauthenticated
 // ─────────────────────────────────────────
-const TARGET_USERS = 600;
-const TARGET_ARR = 2400000;
+const TARGET_USERS = 600;      // previous business-case seat target (kept as secondary reference)
+const TARGET_ARR = 2400000;    // previous revenue target (kept as secondary reference)
+
+// ── FY2026-27 model (Land iQ 3.0 forecast) ───────────────────────────────────
+// Targets + assumptions from the FY27 revenue/pricing forecast. Owner-editable in
+// the Exec Brief "FY27 model settings" box (stored in localStorage 'liq_fy27');
+// nothing here requires a code change to adjust. See docs/FY27_TARGETS_PLAN.md.
+const FY27_DEF = {
+  fy_start: '2026-07-01',       // FY2026-27 = 1 Jul 2026 → 30 Jun 2027
+  total_rev: 1610000,           // total forecast revenue
+  licence_rev: 1560000,         // net licence revenue
+  advisory_rev: 50000,          // fee-for-service advisory
+  total_licences: 750,          // licences by end of FY27
+  new_licences: 624,            // new licence sales across FY27
+  retained_target: 126,         // 70% of the 180-customer base
+  base_customers: 180,          // the existing base at FY27 start
+  retention_pct: 70,
+  base_target: 500,             // Base-tier licences ($2,000) — target only until Pipedrive tags tier
+  premium_target: 250,          // Premium-tier licences ($4,000) — target only
+  price_base: 2000,
+  price_premium: 4000,
+  cost_per_licence_now: 3499,   // current third-party pass-through (Giraffe $2,915 + Aerometrex $584)
+  cost_per_licence_30: 584,     // Land iQ 3.0 cost base (Giraffe removed)
+  margin_target: 70,            // % licence margin target under 3.0
+};
+function fy27() { try { return { ...FY27_DEF, ...JSON.parse(localStorage.getItem('liq_fy27') || '{}') }; } catch { return { ...FY27_DEF }; } }
+window.fy27Save = (k, v) => { const o = fy27(); o[k] = (k === 'fy_start') ? v : (parseFloat(String(v).replace(/[^0-9.\-]/g, '')) || 0); localStorage.setItem('liq_fy27', JSON.stringify(o)); if (typeof renderTab === 'function' && activeTab) renderTab(activeTab); };
+window.fy27Reset = () => { localStorage.removeItem('liq_fy27'); if (typeof renderTab === 'function' && activeTab) renderTab(activeTab); };
+// Parse fy_start as LOCAL date components — new Date('YYYY-MM-DD') is UTC
+// midnight, which in Sydney is 10am local and silently excluded early-morning
+// deals on day one of the FY (caught by tests §6b).
+function fy27Range() { const f = fy27(); const [y, m, d] = String(f.fy_start || '2026-07-01').split('-').map(Number); const from = new Date(y, (m || 1) - 1, d || 1); const to = new Date(y + 1, (m || 1) - 1, 0, 23, 59, 59, 999); return { from, to }; }
 
 let _authState   = 'initialising'; // 'initialising'|'authenticated'|'unauthenticated'|'refreshing'
 let _authSession = null;
@@ -1376,6 +1406,47 @@ const METRICS = {
       return v == null ? null : Number(v);
     },
   },
+  // ── FY2026-27 model metrics (targets editable in Exec Brief · liq_fy27) ─────
+  fy27_revenue: {
+    label: 'Revenue won this financial year',
+    src: 'Pipedrive · deals — nightly API sync',
+    desc: 'Total value of deals won since the start of FY2026-27 (1 Jul 2026), across all pipelines — new sales and renewals both count toward the $1.61M forecast. Advisory fee-for-service revenue is tracked separately on the Workstreams board.',
+    formula: 'SUM(Deal Value) over Status = Won AND Won time in FY27 (1 Jul 2026 → 30 Jun 2027)',
+    compute: () => { const r = fy27Range(); return _pd_deals.filter(d => d['Deal - Status'] === 'Won' && (() => { const t = pdParseDate(d['Deal - Won time']); return pdValidDate(t) && t >= r.from && t <= r.to; })()).reduce((s, d) => s + (parseFloat(d['Deal - Value']) || 0), 0); },
+  },
+  fy27_new_licences: {
+    label: 'New licences sold this financial year',
+    src: 'Pipedrive · deal products — nightly API sync',
+    desc: 'Seats sold on deals won since 1 Jul 2026 (from each deal\'s attached products), toward the 624 new-licence FY27 target.',
+    formula: 'SUM(Product quantity) over Status = Won AND Won time in FY27',
+    compute: () => { const r = fy27Range(); return _pd_deals.filter(d => d['Deal - Status'] === 'Won' && (() => { const t = pdParseDate(d['Deal - Won time']); return pdValidDate(t) && t >= r.from && t <= r.to; })()).reduce((s, d) => s + (parseFloat(d['Deal - Product quantity']) || 0), 0); },
+  },
+  fy27_base_retention: {
+    label: 'Existing base retained',
+    src: 'Pipedrive · People — nightly API sync',
+    desc: 'Of the customer base at FY27 start (config: 180), how many have NOT churned since 1 Jul 2026. Churn = Customer Type became Access Revoked with a previous type including Paid Subscription and a removal date inside FY27. Target: 126 retained (70%).',
+    formula: 'base at FY27 start − paid churn since 1 Jul 2026',
+    compute: () => {
+      const f = fy27(); const r = fy27Range();
+      const churned = _pd_people.filter(p => p['Person - Customer Type'] === 'Access Revoked'
+        && String(p['Person - Previous Customer Type'] || '').includes('Paid Subscription')
+        && (() => { const t = pdParseDate(p['Person - Date Access Removed']); return pdValidDate(t) && t >= r.from && t <= r.to; })()).length;
+      return Math.max(0, (f.base_customers || 0) - churned);
+    },
+  },
+  licence_margin: {
+    label: 'Licence margin (current)',
+    src: 'Calculated · Pipedrive won deals + FY27 model costs',
+    desc: 'The share of each licence dollar Land iQ keeps after third-party pass-through costs (currently Giraffe $2,915 + Aerometrex $584 = $3,499 per licence; falls to $584 under Land iQ 3.0). Uses the real blended average price per licence from won deals. Target: >70% under the 3.0 model.',
+    formula: '(avg realised price per licence − cost per licence) ÷ avg price × 100',
+    compute: () => {
+      const f = fy27();
+      const rev = METRICS.won_revenue_2026.compute(); const lic = METRICS.licences_sold.compute();
+      if (!lic || !rev) return null;
+      const avgPrice = rev / lic;
+      return pct(avgPrice - (f.cost_per_licence_now || 0), avgPrice);
+    },
+  },
 };
 function mVal(id) { const m = METRICS[id]; return m ? m.compute() : null; }
 function mTest(id) { return METRICS[id].test; }
@@ -1609,8 +1680,12 @@ function renderHome(el) {
     { name: 'Marketing content',last: content[content.length - 1],   dk: 'date' },
   ];
 
-  // ── HEADLINE NUMBER (#9): active paying customers toward 600 ──────────────
-  const heroPct = Math.min(100, Math.round(pct(pdActivePaid, TARGET_USERS) || 0));
+  // ── HEADLINE NUMBER (#9): licences toward the FY27 target (750) ────────────
+  // FY27 model is primary; the previous 600-seat target stays as a secondary
+  // reference line (owner's decision: show both).
+  const _f27 = fy27();
+  const heroTarget = _f27.total_licences || TARGET_USERS;
+  const heroPct = Math.min(100, Math.round(pct(pdActivePaid, heroTarget) || 0));
   const heroCol = heroPct >= 80 ? '#2a7a4b' : heroPct >= 50 ? '#2e8bc0' : '#c25a00';
 
   // ── WHAT CHANGED (#4): flag big moves: completed periods only ─────────────
@@ -1655,16 +1730,17 @@ function renderHome(el) {
   el.innerHTML = `
     <div class="box" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
       <div>
-        <div style="font-size:12px;color:var(--tl);text-transform:uppercase;letter-spacing:.5px;font-weight:600">Active paying customers</div>
-        <div style="font-size:46px;font-weight:700;color:${heroCol};line-height:1.05">${fmtNum(pdActivePaid)}<span style="font-size:20px;color:var(--tl);font-weight:500"> / ${TARGET_USERS}</span></div>
+        <div style="font-size:12px;color:var(--tl);text-transform:uppercase;letter-spacing:.5px;font-weight:600">Active paying customers ${mInfo('active_paid')}</div>
+        <div style="font-size:46px;font-weight:700;color:${heroCol};line-height:1.05">${fmtNum(pdActivePaid)}<span style="font-size:20px;color:var(--tl);font-weight:500"> / ${fmtNum(heroTarget)}</span></div>
+        <div style="font-size:11px;color:var(--tl);margin-top:2px">FY2026-27 target: ${fmtNum(_f27.retained_target)} retained + ${fmtNum(_f27.new_licences)} new · previous target ${fmtNum(TARGET_USERS)}</div>
       </div>
       <div style="flex:1;min-width:220px">
         <div style="height:14px;border-radius:7px;background:var(--bg2);overflow:hidden">
           <div style="height:100%;border-radius:7px;background:${heroCol};width:${heroPct}%;transition:width .4s"></div>
         </div>
         <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:12px;color:var(--tl)">
-          <span>${heroPct}% of target</span>
-          <span>${Math.max(0, TARGET_USERS - pdActivePaid)} to go</span>
+          <span>${heroPct}% of FY27 target</span>
+          <span>${Math.max(0, heroTarget - pdActivePaid)} to go</span>
         </div>
       </div>
     </div>
@@ -1953,6 +2029,11 @@ function renderExec(el) {
     bullets.push(`<b>${activeTrial.length}</b> active trial${activeTrial.length>1?'s':''} in progress.`);
   if (pipelineValue > 0)
     bullets.push(`Open pipeline: <b>${fmtCur(pipelineValue)}</b> across ${openDeals.length} deals (2026 Sales).`);
+  {
+    const _fb = fy27(); const _m = mVal('licence_margin');
+    if (_m != null)
+      bullets.push(`Licence margin is <b>${fmtPct(_m)}</b> on a $${fmtNum(_fb.cost_per_licence_now)}/licence third-party cost. Land iQ 3.0 cuts that cost to <b>$${fmtNum(_fb.cost_per_licence_30)}</b> — at half the price, roughly four times the margin per seat (target >${_fb.margin_target}%).`);
+  }
   if (auNow)
     bullets.push(`PostHog: <b>${fmtNum(auNow)}</b> known users showed up last week${auEng != null ? `, <b>${fmtNum(auEng)}</b> did something in-product` : ''} (last full week)${trend(auNow, auPrev)}.`);
   if (dauMau.dau_mau_pct)
@@ -1976,8 +2057,14 @@ function renderExec(el) {
       ${bar}
     </div>`;
   }
-  const revToTarget = pct(wonARR, TARGET_ARR);
-  const subsToTarget = pct(paidPeople.length, TARGET_USERS);
+  // FY27 model (primary targets; the old 600 / $2.4M stay as secondary references)
+  const F = fy27();
+  const fyRev = mVal('fy27_revenue');
+  const fyNewLic = mVal('fy27_new_licences');
+  const fyRetained = mVal('fy27_base_retention');
+  const fyMargin = mVal('licence_margin');
+  const revToTarget = pct(fyRev, F.total_rev);
+  const subsToTarget = pct(paidPeople.length, F.total_licences);
 
   el.innerHTML = `
     <div class="section-header">
@@ -1990,10 +2077,19 @@ function renderExec(el) {
 
     <!-- The three key executive metrics (highlighted) -->
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px">
-      ${keyCard('Active paying customers', fmtNum(paidPeople.length), `${fmtPct(subsToTarget)} of ${fmtNum(TARGET_USERS)} target`, subsToTarget)}
-      ${keyCard('Total revenue won', fmtDollar(Math.round(wonARR)), `${fmtPct(revToTarget)} of $2.4M target`, revToTarget)}
+      ${keyCard('Active paying customers', fmtNum(paidPeople.length), `${fmtPct(subsToTarget)} of ${fmtNum(F.total_licences)} FY27 target · prev. ${fmtNum(TARGET_USERS)}`, subsToTarget)}
+      ${keyCard('Revenue won · FY2026-27', fmtDollar(Math.round(fyRev || 0)), `${fmtPct(revToTarget)} of ${fmtCur(F.total_rev)} FY27 forecast (${fmtCur(F.licence_rev)} licence + ${fmtCur(F.advisory_rev)} advisory) · prev. $2.4M`, revToTarget)}
       ${keyCard('Open sales pipeline', fmtDollar(Math.round(pipelineValue)), `${openDeals.length} open deals · 2026 Sales`, null)}
     </div>
+
+    <!-- FY2026-27 model progress -->
+    ${cardsHTML([
+      ['New licences (FY27)', fyNewLic || null, null, null, 'Target ' + fmtNum(F.new_licences) + ' this financial year', mDoc('fy27_new_licences')],
+      ['Existing base retained', fyRetained, null, null, 'Target ' + fmtNum(F.retained_target) + ' of ' + fmtNum(F.base_customers) + ' (' + F.retention_pct + '%)', mDoc('fy27_base_retention')],
+      ['Tier mix target', null, null, null, fmtNum(F.base_target) + ' Base ($' + fmtNum(F.price_base) + ') + ' + fmtNum(F.premium_target) + ' Premium ($' + fmtNum(F.price_premium) + ')',
+        '<span class="src-tag">FY27 model · target only</span><br>The Land iQ 3.0 two-tier pricing mix. <b>Live tracking switches on once Pipedrive carries a Licence Tier field</b> — the nightly sync will pick it up automatically. Until then this card shows the target split only.'],
+      ['Licence margin (current)', fyMargin, null, '%', 'Target >' + F.margin_target + '% under Land iQ 3.0 · cost $' + fmtNum(F.cost_per_licence_now) + ' → $' + fmtNum(F.cost_per_licence_30) + '/licence', mDoc('licence_margin')],
+    ])}
 
     <!-- Supporting metrics -->
     ${cardsHTML([
@@ -2051,6 +2147,16 @@ function renderExec(el) {
           </tr>`).join('')}</tbody>
         </table>`;
       })()}
+    </div>
+
+    <!-- FY27 model settings (admin-only, drives the FY27 targets everywhere) -->
+    <div class="box admin-only" style="background:#f0f7ff;border:1px solid #cfe3f0">
+      <div class="box-title" style="font-size:12px">FY2026-27 model settings <span style="font-size:10px;font-weight:400;color:var(--tl)">from the FY27 forecast · edits save automatically and update the cards above · see docs/FY27_TARGETS_PLAN.md</span></div>
+      <div style="display:flex;gap:10px 18px;flex-wrap:wrap;font-size:12px;align-items:center">
+        ${[['total_rev','Total revenue $'],['licence_rev','Licence revenue $'],['advisory_rev','Advisory $'],['total_licences','Total licences'],['new_licences','New licences'],['base_customers','Base at FY start'],['retained_target','Retained target'],['base_target','Base tier #'],['premium_target','Premium tier #'],['price_base','Base price $'],['price_premium','Premium price $'],['cost_per_licence_now','Cost/licence now $'],['cost_per_licence_30','Cost/licence 3.0 $'],['margin_target','Margin target %']].map(([k,lbl]) =>
+          `<label style="display:inline-flex;align-items:center;gap:4px;color:var(--tl)">${lbl}<input class="om-input" style="width:78px" type="number" step="any" value="${F[k]}" onchange="fy27Save('${k}',this.value)"></label>`).join('')}
+        <button class="btn-cancel" onclick="fy27Reset()" style="font-size:11px">↺ Reset to forecast defaults</button>
+      </div>
     </div>
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
@@ -6064,7 +6170,7 @@ const WORKSTREAMS = [
   ]},
   { section: 'Growth & Commercial', items: [
     { id:'advisory', name:'Advisory Revenue', owner:'Mark Elakawi', outcome:'Fee-for-service advisory work won & delivered', kpis:[
-      { id:'adv_rev',        label:'Advisory revenue ($/qtr)',               type:'auto', auto:'advisory_rev', drill:'pipedrive', manualFallback:true, unit:'$' },
+      { id:'adv_rev',        label:'Advisory revenue ($/qtr)',               type:'auto', auto:'advisory_rev', drill:'pipedrive', manualFallback:true, unit:'$', defaultTarget:12500 },   // FY27 forecast: $50k/yr ÷ 4
       { id:'adv_pipe',       label:'Advisory pipeline ($)',                  type:'auto', auto:'advisory_pipe', drill:'pipedrive', manualFallback:true, unit:'$' },
       { id:'adv_signed',     label:'Engagements signed',                     type:'auto', auto:'advisory_signed', drill:'pipedrive', manualFallback:true, unit:'count' },
       { id:'adv_util',       label:'Delivery / utilisation',                 type:'manual', unit:'%' },
@@ -6081,8 +6187,8 @@ const WORKSTREAMS = [
       { id:'deal_leads',     label:'New Pipedrive deal leads created',       type:'auto', auto:'deal_leads_created', drill:'pipedrive' },
       { id:'deals_created_avg', label:'Avg deals created per month / week',  type:'auto', auto:'deals_created_avg', drill:'pipedrive', defaultTarget:45 },
       { id:'lead_conv',      label:'Lead-to-paid conversion',                type:'auto', auto:'lead_conversion', drill:'pipedrive' },
-      { id:'net_seats',      label:'Net new paid seats',                     type:'auto', auto:'net_new_seats', drill:'pipedrive' },
-      { id:'lic_rev',        label:'License revenue ($/qtr)',                type:'auto', auto:'license_revenue', drill:'pipedrive' },
+      { id:'net_seats',      label:'Net new paid seats',                     type:'auto', auto:'net_new_seats', drill:'pipedrive', defaultTarget:156 },   // FY27 forecast: 624 new licences/yr ÷ 4
+      { id:'lic_rev',        label:'License revenue ($/qtr)',                type:'auto', auto:'license_revenue', drill:'pipedrive', defaultTarget:390000 },   // FY27 forecast: $1.56M licence revenue/yr ÷ 4
       { id:'pipe_cover',     label:'Pipeline coverage (× quarterly target)', type:'auto', auto:'pipeline_coverage', drill:'pipedrive', proposed:true },
     ]},
     { id:'strategic', name:'Strategic Licenses & Workflow Deep Dives', owner:'Bernie No / Grace Zhuang', outcome:'Centrally-funded licenses placed · workflow insights harvested', kpis:[

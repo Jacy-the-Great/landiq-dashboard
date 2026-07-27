@@ -19,6 +19,21 @@ Format: `## YYYY-MM-DD — Short title` + a few lines. Use absolute dates.
 
 ---
 
+## 2026-07-28 — FY2026-27 targets implemented (Exec Brief + registry + tests)
+Audit found NONE of the FY27 email targets had been built (plan existed only).
+Now implemented per the locked plan: editable `liq_fy27` config (all targets +
+assumptions, admin box in Exec Brief); Home hero → /750 licences with 600 as
+secondary; Exec revenue card → $1.61M FY27 ($1.56M licence + $50k advisory,
+$2.4M secondary); new Exec cards for new-licences-FY27, base retention (180 −
+paid churn since 1 Jul 2026, target 126), tier mix (target-only until Pipedrive
+carries a Licence Tier field), licence margin (blended price vs $3,499 cost,
+target >70% under 3.0); margin narrative bullet; Workstreams quarterly defaults
+(advisory $12.5k, net seats 156, licence rev $390k). Four new registry entries +
+five tests (§6b). **The tests caught a timezone bug before ship**: `new
+Date('2026-07-01')` is UTC midnight = 10am Sydney, so deals won before 10am on
+1 Jul fell outside the FY window — fy27Range now parses local date components.
+Status table: docs/FY27_TARGETS_PLAN.md.
+
 ## 2026-07-28 — Metric registry (reliability Phase 3)
 `METRICS` in index.html is now the single source of truth for 10 key metrics
 (active_paid, active_trials, win_rate, close_rate, monthly_leads, target_won,

@@ -62,6 +62,9 @@ function extractBalanced(startPat) {
 }
 
 const pieces = {
+  FY27_DEF: extractBalanced(/const FY27_DEF = \{/),
+  fy27: extractBalanced(/function fy27\(\) \{/),
+  fy27Range: extractBalanced(/function fy27Range\(\) \{/),
   pct: extractLine(/const pct = /),
   pdParseDate: extractBalanced(/const pdParseDate = /),
   pdValidDate: extractLine(/const pdValidDate = /),
@@ -92,7 +95,7 @@ function makeSandbox({ deals = [], people = [], ph = { weekly: [] }, ls = {} } =
     Date: class extends Date { constructor(...a) { a.length ? super(...a) : super(FIXED_NOW.getTime()); } static now() { return FIXED_NOW.getTime(); } },
   };
   vm.createContext(sandbox);
-  const bundle = ['pct', 'pdParseDate', 'pdValidDate', 'isTrialType', 'OM_FS', 'omReached', 'omModel', 'METRICS', 'mVal', 'mTest', 'mDoc']
+  const bundle = ['FY27_DEF', 'fy27', 'fy27Range', 'pct', 'pdParseDate', 'pdValidDate', 'isTrialType', 'OM_FS', 'omReached', 'omModel', 'METRICS', 'mVal', 'mTest', 'mDoc']
     .map(k => pieces[k]).join('\n');
   vm.runInContext(bundle + '\nthis.__x = { pct, pdParseDate, pdValidDate, isTrialType, omReached, omModel, METRICS, mVal, mTest, mDoc };', sandbox);
   return sandbox.__x;
@@ -185,6 +188,36 @@ console.log('\n6. Metric registry (single source of truth for value AND tooltip)
   check('active_engaged_week from the same complete week (30)', x.mVal('active_engaged_week') === 30, `got ${x.mVal('active_engaged_week')}`);
   check('tooltip body is generated from the registry (mDoc contains src + formula)',
     x.mDoc('active_paid').includes(x.METRICS.active_paid.src) && x.mDoc('active_paid').includes(x.METRICS.active_paid.formula));
+}
+
+// ── 6b. FY2026-27 model metrics (targets from the FY27 forecast email) ───────
+console.log('\n6b. FY27 model (window edges, retention, margin)');
+{
+  const fyDeals = [
+    // margin fixture: 2026 Sales, won BEFORE FY27 (so they don't pollute fy27_revenue)
+    { 'Deal - Pipeline': '2026 Sales', 'Deal - Status': 'Won', 'Deal - Won time': '2026-03-01 10:00:00', 'Deal - Value': '8000', 'Deal - Product quantity': '1' },
+    { 'Deal - Pipeline': '2026 Sales', 'Deal - Status': 'Won', 'Deal - Won time': '2026-04-01 10:00:00', 'Deal - Value': '8000', 'Deal - Product quantity': '1' },
+    // FY27 window edges (any pipeline counts toward FY27 revenue)
+    { 'Deal - Pipeline': '2027 Renewals', 'Deal - Status': 'Won', 'Deal - Won time': '2026-06-30 23:00:00', 'Deal - Value': '1000', 'Deal - Product quantity': '9' },  // day BEFORE FY27 → excluded
+    { 'Deal - Pipeline': '2027 Renewals', 'Deal - Status': 'Won', 'Deal - Won time': '2026-07-01 09:00:00', 'Deal - Value': '4000', 'Deal - Product quantity': '2' },  // first day → included
+    { 'Deal - Pipeline': '2027 Renewals', 'Deal - Status': 'Won', 'Deal - Won time': '2027-06-30 12:00:00', 'Deal - Value': '8000', 'Deal - Product quantity': '3' },  // last day → included
+    { 'Deal - Pipeline': '2027 Renewals', 'Deal - Status': 'Won', 'Deal - Won time': '2027-07-01 09:00:00', 'Deal - Value': '999',  'Deal - Product quantity': '9' },  // FY28 → excluded
+    { 'Deal - Pipeline': '2027 Renewals', 'Deal - Status': 'Open' },                                                                                                    // open → excluded
+  ];
+  const fyPeople = [
+    { 'Person - Customer Type': 'Access Revoked', 'Person - Previous Customer Type': 'Contact Register, Paid Subscription', 'Person - Date Access Removed': '2026-08-01' }, // paid churn IN FY27 → counts
+    { 'Person - Customer Type': 'Access Revoked', 'Person - Previous Customer Type': 'Paid Subscription', 'Person - Date Access Removed': '2026-05-01' },                   // churned BEFORE FY27 → no
+    { 'Person - Customer Type': 'Access Revoked', 'Person - Previous Customer Type': '2 Week Trial Licence', 'Person - Date Access Removed': '2026-08-01' },                // trial churn → no
+    { 'Person - Customer Type': 'Paid Subscription' },
+  ];
+  const x = makeSandbox({ deals: fyDeals, people: fyPeople });
+  check('FY27 revenue counts 1 Jul 2026 → 30 Jun 2027 only (4000+8000=12000)', x.mVal('fy27_revenue') === 12000, `got ${x.mVal('fy27_revenue')}`);
+  check('FY27 new licences windowed the same way (2+3=5)', x.mVal('fy27_new_licences') === 5, `got ${x.mVal('fy27_new_licences')}`);
+  check('base retention = 180 − 1 paid churn inside FY27 = 179', x.mVal('fy27_base_retention') === 179, `got ${x.mVal('fy27_base_retention')}`);
+  const margin = x.mVal('licence_margin');   // avg price 16000÷2=8000; (8000−3499)÷8000 = 56.2625%
+  check('licence margin = (8000−3499)÷8000 ≈ 56.3%', margin != null && Math.abs(margin - 56.2625) < 0.01, `got ${margin}`);
+  const x2 = makeSandbox({ deals: fyDeals, people: fyPeople, ls: { liq_fy27: JSON.stringify({ cost_per_licence_now: 584 }) } });
+  check('config override flows through (3.0 cost $584 → margin ≈ 92.7%)', Math.abs(x2.mVal('licence_margin') - ((8000 - 584) / 8000 * 100)) < 0.01, `got ${x2.mVal('licence_margin')}`);
 }
 
 // ── 7. Drift guards — render sites must USE the registry ─────────────────────
