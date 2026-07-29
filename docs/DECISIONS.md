@@ -19,6 +19,22 @@ Format: `## YYYY-MM-DD — Short title` + a few lines. Use absolute dates.
 
 ---
 
+## 2026-07-29 — Three-agent review panel (UX/UI · Accuracy · Communication)
+Independent specialist reviews + a cross-discussion round; all converged ≥8.5/10
+with their proposed packages (Accuracy 6.0→9.0, UX 5.0→8.5, Comms 5.5→8.5 — two
+reviewers honestly LOWERED current scores after seeing peers' evidence).
+**Nothing implemented — recommendations only**, recorded in full in
+docs/REVIEW_PANEL_2026-07.md. Highest-signal findings: `--bg2`/`--bor` CSS vars
+used 51× but never defined (FY27 progress-bar tracks invisible); dead font
+@import; metric-bearing config (liq_fy27/liq_optimax) is per-browser localStorage
+so admin target edits don't reach viewers (divergent numbers); fy27_new_licences
+counts renewal seats toward the 624 "new" target; ph_weekly_stats SQL omits
+active_engaged (likely silently-null metric); two "win rate" surfaces plot close
+rate; ':' empty-value artifact ~77 sites; zeros render as "no data"; old
+600/$2.4M targets still DRIVE several tabs' calculations. Consensus #1: one
+target story — everything derives from fy27(), old targets as labelled secondary
+only.
+
 ## 2026-07-28 — FY2026-27 targets implemented (Exec Brief + registry + tests)
 Audit found NONE of the FY27 email targets had been built (plan existed only).
 Now implemented per the locked plan: editable `liq_fy27` config (all targets +
