@@ -4,7 +4,7 @@ Independent specialist reviews (UX/UI · Accuracy · Communication) of the dashb
 and its recent builds (metric registry, OPTI-MAX rolling window, FY27 targets,
 roles, test harness), followed by a cross-discussion round in which each reviewer
 saw the others' findings, resolved overlaps/ownership, and re-scored.
-**Recommendations only — nothing here has been implemented.** Line numbers refer
+**Status: first pass implemented 2026-07-29** — items 1,2,3,4,5,7,8,11,17(contrast),18(partial) are DONE (see DECISIONS.md). Items 6,9,10,12,13,14,15,16,19,20 and all Substantial items remain open. Line numbers refer
 to index.html at commit `e5d642d` and will drift.
 
 ## Final scores

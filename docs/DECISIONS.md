@@ -19,6 +19,28 @@ Format: `## YYYY-MM-DD — Short title` + a few lines. Use absolute dates.
 
 ---
 
+## 2026-07-29 — Review-panel first pass implemented
+Implemented the agreed high-ROI fixes (see REVIEW_PANEL_2026-07.md for the full
+package; ✅ items there are now done):
+- **Repairs:** defined `--bg2`/`--bor` (51 refs were invalid → invisible progress
+  tracks/borders); moved the font `@import` to a `<link>` (it was ignored per
+  spec, so DM Sans never loaded); darkened `--tl` to clear WCAG AA; replaced 101
+  bare-colon placeholders with em dashes + 27 corrupted prose colons.
+- **Truth in rendering:** `numOr(value, hasSource)` — zero is a real measurement,
+  "no data" means an absent source; applied to 13 cards. Tier-mix card shows
+  "500 / 250 (target only)" instead of "no data".
+- **Labels:** the "Win rate by month" chart and the manual "Win %" column plot
+  Won ÷ (Won+Lost) = CLOSE rate; renamed. No maths changed.
+- **Metric-meaning changes (approved):** `fy27_new_licences` counts new-business
+  pipelines only (renewals/onboarding/internal excluded via
+  `isNewBusinessPipeline`), so renewed seats can't inflate the 624 target;
+  `fy27_base_retention` counts churn of the pre-FY27 cohort only.
+Tests 55 → 67, all green; new guards cover renewal-seat exclusion, cohort
+membership, zero semantics, the cardHTML null-check, and ':' never returning.
+Deferred to a second pass: config→Supabase sync (the divergent-numbers bug), the
+single-target-source sweep, pipeline-coverage card, Licences-view windowing,
+Sales-funnel stage-history parity, and the vocabulary sweep.
+
 ## 2026-07-29 — Three-agent review panel (UX/UI · Accuracy · Communication)
 Independent specialist reviews + a cross-discussion round; all converged ≥8.5/10
 with their proposed packages (Accuracy 6.0→9.0, UX 5.0→8.5, Comms 5.5→8.5 — two
