@@ -4,20 +4,29 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Land iQ Performance</title>
+<!-- Fonts must load via <link> in <head>: an @import placed after other CSS rules
+     is ignored per spec, so DM Sans/DM Mono never loaded and the whole app (plus
+     every chart) fell back to system-ui. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <style>
 :root {
   --navy:#1a3c5e; --navy2:#24527f; --acc:#2e8bc0; --acc2:#e8f3f9;
-  --sur:#f4f6f8; --wh:#fff; --tx:#1a2733; --tm:#4a5f70; --tl:#8a9fb0;
+  --sur:#f4f6f8; --wh:#fff; --tx:#1a2733; --tm:#4a5f70; --tl:#6b8298;
   --bd:#dde5ec; --gr:#2a7a4b; --gr2:#e8f5ee; --wa:#c25a00; --wa2:#fdf0e6;
   --re:#c0392b; --re2:#fdecea;
+  /* --bg2 (fill/track) and --bor (border) were used 51× but never defined, so
+     every progress-bar track, many table separators and some button backgrounds
+     rendered as invalid declarations = invisible. Defined here to match intent. */
+  --bg2:#e9eef3; --bor:#dde5ec;
   --shadow:0 1px 3px rgba(0,0,0,.08),0 4px 12px rgba(0,0,0,.06);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'DM Sans',system-ui,sans-serif;background:var(--sur);color:var(--tx);font-size:14px;min-height:100vh}
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
 
 /* LOCK */
 #lock{position:fixed;inset:0;background:var(--navy);display:flex;align-items:center;justify-content:center;z-index:9999;flex-direction:column;gap:24px}
@@ -784,7 +793,7 @@ async function loadPostHogLive(forceRefresh = false) {
     _ph.loaded = (_ph.weekly.length > 0) || (_ph.summary != null);
     _ph.error = failed.length ? failed.join(' · ') : null;
     _ph.refreshedAt = new Date();
-    if (failed.length) console.warn('PostHog: some queries failed :', _ph.error);
+    if (failed.length) console.warn('PostHog — some queries failed :', _ph.error);
   } catch (e) {
     _ph.error = e.message || 'PostHog RPC failed';
     console.warn('PostHog live load failed:', e.message);
@@ -926,7 +935,7 @@ const METRIC_DOCS = [
   ['deal source performance', 'Pipedrive · Deals', 'Closed deals grouped by <b>Source channel</b>; bars show won vs lost counts per source.'],
   ['won deals by category', 'Pipedrive · Deals', 'Won deals grouped by the <b>Category</b> field (New Organisation / Increase Licences / Convert from Central Funding etc.).'],
   ['won deals by owner', 'Pipedrive · Deals', 'Won deals grouped by <b>Deal Owner</b>.'],
-  ['pipeline stage snapshot', 'Pipedrive · Deals', 'Every deal\'s CURRENT stage, split by status (open / won / lost). Snapshot: not date-filtered.'],
+  ['pipeline stage snapshot', 'Pipedrive · Deals', 'Every deal\'s CURRENT stage, split by status (open / won / lost). Snapshot — not date-filtered.'],
   ['sales conversion funnel :', 'Pipedrive · Deals', 'Deals created in the selected period that <b>reached each stage or beyond</b> (won deals count as having reached every stage). Stage % = this stage ÷ previous stage.'],
   ['sales funnel conversion by month', 'Pipedrive · Deals', 'Each cell: of the deals <b>created that month</b> that reached the earlier stage, the share that also reached the next stage. Reads month-on-month change in each stage-to-stage conversion. Recent months understate later stages (deals still in flight); low-volume months read noisily.'],
   ['sales performance over time', 'Pipedrive · Deals', 'Deals won and licences won (Σ Deal - Product quantity), both by Won time, per week / month / quarter, plus average won deal value per period, each against its target. Deals & licences target 3/week · 12/month · 36/quarter; average deal value target $14,000.'],
@@ -1048,7 +1057,7 @@ function injectFlags(root) {
     const dot = document.createElement('span');
     dot.className = 'flag-dot' + (status ? ' ' + status : '');
     dot.dataset.fk = key;
-    dot.title = status ? `Trust: ${status}: click to change` : 'Unrated: click to set trust';
+    dot.title = status ? `Trust: ${status} — click to change` : 'Unrated — click to set trust';
     el.appendChild(dot);
     // Hide toggle: lets a reviewer curate this metric out of the everyday view.
     const isHidden = !!_hiddenMetrics[key];
@@ -1056,7 +1065,7 @@ function injectFlags(root) {
     eye.className = 'hide-toggle';
     eye.dataset.hk = key;
     eye.textContent = isHidden ? 'show' : 'hide';
-    eye.title = isHidden ? 'Hidden from the everyday view: click to show' : 'Click to hide this from the everyday view';
+    eye.title = isHidden ? 'Hidden from the everyday view — click to show' : 'Click to hide this from the everyday view';
     el.appendChild(eye);
     if (isHidden && el.parentElement) el.parentElement.classList.add('metric-hidden');
   });
@@ -1078,7 +1087,7 @@ function injectFlags(root) {
     eye.className = 'hide-toggle';
     eye.dataset.hk = hk;
     eye.textContent = hidden ? 'show' : 'hide';
-    eye.title = hidden ? 'Sub-tab hidden from the everyday view: click to show' : 'Hide this whole sub-tab from the everyday view';
+    eye.title = hidden ? 'Sub-tab hidden from the everyday view — click to show' : 'Hide this whole sub-tab from the everyday view';
     wrap.appendChild(eye);
   });
 }
@@ -1092,7 +1101,7 @@ document.addEventListener('click', e => {
   const next = order[(order.indexOf(cur) + 1) % order.length];
   if (next) _metricFlags[dot.dataset.fk] = next; else delete _metricFlags[dot.dataset.fk];
   dot.className = 'flag-dot' + (next ? ' ' + next : '');
-  dot.title = next ? `Trust: ${next}: click to change` : 'Unrated: click to set trust';
+  dot.title = next ? `Trust: ${next} — click to change` : 'Unrated — click to set trust';
   saveMetricFlags();
   updateFlagLegend();
 });
@@ -1109,7 +1118,7 @@ document.addEventListener('click', e => {
   const container = eye.closest('[data-hide-container]') || (eye.parentElement && eye.parentElement.parentElement);
   if (container) container.classList.toggle('metric-hidden', nowHidden);
   eye.textContent = nowHidden ? 'show' : 'hide';
-  eye.title = nowHidden ? 'Hidden from the everyday view: click to show' : 'Click to hide this from the everyday view';
+  eye.title = nowHidden ? 'Hidden from the everyday view — click to show' : 'Click to hide this from the everyday view';
   saveHiddenMetrics();
   updateFlagLegend();
 });
@@ -1193,7 +1202,7 @@ function confirmClear() {
 // ─────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────
-const fmtDate = d => d ? new Date(d).toLocaleDateString('en-AU', { day:'2-digit', month:'short', year:'numeric' }) : ':';
+const fmtDate = d => d ? new Date(d).toLocaleDateString('en-AU', { day:'2-digit', month:'short', year:'numeric' }) : '—';
 // Combined LinkedIn post impressions for a tracker week: the sum of every team
 // member's column (js/jm/lb/sk). Per-person figures are legacy; only the combined
 // total is ever shown. Returns null when the week has no LinkedIn data at all.
@@ -1204,9 +1213,9 @@ const liImp = r => {
 };
 // Chart axis labels: '16 Mar': readable at a glance (vs raw '03-16')
 const shortDate = s => { const d = new Date(s); return isNaN(d) ? (s || '') : d.toLocaleDateString('en-AU', { day:'numeric', month:'short' }); };
-const fmtNum  = n => n != null ? Number(n).toLocaleString() : ':';
-const fmt1    = n => n != null ? (Math.round(Number(n) * 10) / 10).toLocaleString() : ':';   // 1-decimal number
-const fmtPct  = n => n != null ? Number(n).toFixed(1) + '%' : ':';
+const fmtNum  = n => n != null ? Number(n).toLocaleString() : '—';
+const fmt1    = n => n != null ? (Math.round(Number(n) * 10) / 10).toLocaleString() : '—';   // 1-decimal number
+const fmtPct  = n => n != null ? Number(n).toFixed(1) + '%' : '—';
 // Duration parsing for webinar times: accepts "49m 34s", "49:34", "49m", "45" (mins)
 function parseMinSec(s) {
   if (s == null || s === '') return null;
@@ -1219,9 +1228,9 @@ function parseMinSec(s) {
   if (m) return Math.round(+m[1] * 60);
   return null;
 }
-const fmtMinSec = sec => sec == null ? ':' : Math.floor(sec / 60) + ':' + String(Math.round(sec % 60)).padStart(2, '0');
-const fmtDollar = n => n != null ? '$' + Number(n).toLocaleString() : ':';
-const fmtCur = n => { if (n == null) return ':'; if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M'; if (n >= 1000) return '$' + (n/1000).toFixed(n >= 10000 ? 0 : 1) + 'k'; return '$' + Math.round(n).toLocaleString(); };
+const fmtMinSec = sec => sec == null ? '—' : Math.floor(sec / 60) + ':' + String(Math.round(sec % 60)).padStart(2, '0');
+const fmtDollar = n => n != null ? '$' + Number(n).toLocaleString() : '—';
+const fmtCur = n => { if (n == null) return '—'; if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M'; if (n >= 1000) return '$' + (n/1000).toFixed(n >= 10000 ? 0 : 1) + 'k'; return '$' + Math.round(n).toLocaleString(); };
 const pct = (a, b) => (a != null && b && b !== 0) ? (a / b * 100) : null;
 
 // Authoritative "win rate" = Won ÷ Contacts entered (funnel conversion), from the
@@ -1535,7 +1544,7 @@ function buildNav() {
     const hidden = !!_hiddenMetrics[hk];
     return `<span data-hide-container class="${hidden ? 'metric-hidden' : ''}" style="display:inline-flex;align-items:center">
       <button class="nav-btn${t.id === activeTab ? ' active' : ''}" onclick="switchTab('${t.id}')">${t.label}</button>
-      <span class="hide-toggle" data-hk="${hk}" title="${hidden ? 'Tab hidden from the everyday view: click to show' : 'Hide this whole tab from the everyday view'}">${hidden ? 'show' : 'hide'}</span>
+      <span class="hide-toggle" data-hk="${hk}" title="${hidden ? 'Tab hidden from the everyday view — click to show' : 'Hide this whole tab from the everyday view'}">${hidden ? 'show' : 'hide'}</span>
     </span>`;
   }).join('');
 }
@@ -1626,7 +1635,7 @@ function tableHTML(key, rows, cols, idField, showAllKey) {
     </div>
     <div class="tbl-scroll"><table>
       <thead><tr>${cols.map(c => `<th>${c.label}</th>`).join('')}<th></th></tr></thead>
-      <tbody>${visible.map(row => `<tr>${cols.map(c => `<td>${c.render ? c.render(row) : (row[c.key] != null ? row[c.key] : ':')}</td>`).join('')}
+      <tbody>${visible.map(row => `<tr>${cols.map(c => `<td>${c.render ? c.render(row) : (row[c.key] != null ? row[c.key] : '—')}</td>`).join('')}
         <td><button class="btn-del" onclick="delRow('${key}','${row[idField] || row.week || row._id}','${idField}')"">Delete</button></td>
       </tr>`).join('')}</tbody>
     </table></div>
@@ -1771,7 +1780,7 @@ function renderHome(el) {
       const li = liImp;
       const row = (label, curr, prev, money) => {
         if (curr == null && prev == null) return '';
-        const f = v => v == null ? ':' : money ? fmtCur(v) : fmtNum(v);
+        const f = v => v == null ? '—' : money ? fmtCur(v) : fmtNum(v);
         let chg = '<span style="color:var(--tl)">:</span>';
         if (curr != null && prev != null && prev !== 0) {
           const p = Math.round((curr - prev) / prev * 100);
@@ -2115,7 +2124,7 @@ function renderExec(el) {
         const recent = _pd_deals
           .filter(d => d['Deal - Status'] === 'Won' || d['Deal - Status'] === 'Lost')
           .map(d => ({
-            title:  d['Deal - Title'] || d['Title'] || ':',
+            title:  d['Deal - Title'] || d['Title'] || '—',
             org:    d['Deal - Organisation'] || d['Organisation'] || '',
             status: d['Deal - Status'],
             value:  parseFloat(d['Deal - Value']) || 0,
@@ -2141,7 +2150,7 @@ function renderExec(el) {
             <td style="padding:5px 8px;text-align:center">
               <span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:${d.status==='Won'?'rgba(42,122,75,.12)':'rgba(224,82,82,.1)'};color:${d.status==='Won'?'#2a7a4b':'#e05252'}">${d.status}</span>
             </td>
-            <td style="padding:5px 8px;text-align:right;font-weight:600">${d.value ? fmtCur(d.value) : ':'}</td>
+            <td style="padding:5px 8px;text-align:right;font-weight:600">${d.value ? fmtCur(d.value) : '—'}</td>
             <td style="padding:5px 8px;text-align:right;color:var(--tl)">${fmtDate(d.date).slice(0,6)}</td>
             <td style="padding:5px 8px;color:var(--tl)">${d.owner}</td>
           </tr>`).join('')}</tbody>
@@ -3220,7 +3229,7 @@ function setActivitySub(sub, rerender = true, data) {
         '<tr>' +
         '<td>' + (r.week_start||'').slice(0,10) + '</td>' +
         '<td style="text-align:right">' + fmtNum(r.active_users) + '</td>' +
-        '<td style="text-align:right">' + (r.active_engaged != null ? fmtNum(r.active_engaged) : ':') + '</td>' +
+        '<td style="text-align:right">' + (r.active_engaged != null ? fmtNum(r.active_engaged) : '—') + '</td>' +
         '<td style="text-align:right">' + fmtNum(r.login_users) + '</td>' +
         '<td style="text-align:right">' + fmtNum(r.new_users) + '</td>' +
         '<td style="text-align:right">' + fmtNum(r.total_events) + '</td>' +
@@ -3236,8 +3245,8 @@ function setActivitySub(sub, rerender = true, data) {
         '<td style="text-align:right">' + fmtNum(r.logins) + '</td>' +
         '<td style="text-align:right">' + fmtNum(r.active_users) + '</td>' +
         '<td style="text-align:right">' + fmtNum(r.new_users) + '</td>' +
-        '<td style="text-align:right">' + (r.dau_mau != null ? r.dau_mau.toFixed(1)+'%' : ':') + '</td>' +
-        '<td style="text-align:right">' + (r.avg_session != null ? r.avg_session+'m' : ':') + '</td>' +
+        '<td style="text-align:right">' + (r.dau_mau != null ? r.dau_mau.toFixed(1)+'%' : '—') + '</td>' +
+        '<td style="text-align:right">' + (r.avg_session != null ? r.avg_session+'m' : '—') + '</td>' +
         '<td style="color:var(--tl)">' + (r.notes||':') + '</td>' +
         '<td><button class="btn-del" onclick="delRow(\'activity_giraffe\',\'' + r._id + '\',\'_id\')">Delete</button></td>' +
         '</tr>'
@@ -3497,7 +3506,7 @@ function setActivitySub(sub, rerender = true, data) {
         '<td style="text-align:right">' + fmtNum(r.logins) + '</td>' +
         '<td style="text-align:right">' + fmtNum(r.active_users) + '</td>' +
         '<td style="text-align:right">' + fmtNum(r.sessions) + '</td>' +
-        '<td style="text-align:right">' + (r.avg_session!=null?r.avg_session+'m':':') + '</td>' +
+        '<td style="text-align:right">' + (r.avg_session!=null?r.avg_session+'m':'—') + '</td>' +
         '<td style="font-weight:500">' + (r.top_feature||':') + '</td>' +
         '<td style="color:var(--tl)">' + (r.notes||':') + '</td>' +
         '<td><button class="btn-del" onclick="delRow(\'activity_labs\',\'' + r._id + '\',\'_id\')">Delete</button></td>' +
@@ -3604,7 +3613,7 @@ function setActivitySub(sub, rerender = true, data) {
       const p = field => r.cohort_size > 0 && r[field] != null ? Math.round(r[field]/r.cohort_size*100) : null;
       const cell = (v, bold) => {
         const bg = heatColour(v); const col = heatText(v);
-        return `<td style="text-align:center;background:${bg};color:${col};font-weight:${bold?700:500};border-radius:4px;padding:5px 8px;font-size:12px">${v!=null?v+'%':':'}</td>`;
+        return `<td style="text-align:center;background:${bg};color:${col};font-weight:${bold?700:500};border-radius:4px;padding:5px 8px;font-size:12px">${v!=null?v+'%':'—'}</td>`;
       };
       return `<tr>
         <td style="font-size:11px;color:var(--tm);padding:4px 8px;white-space:nowrap">${shortDate(r.cohort_week)}</td>
@@ -3666,7 +3675,7 @@ function setActivitySub(sub, rerender = true, data) {
               <td style="font-size:11px;font-weight:600;padding:6px 8px">Avg</td>
               <td></td>
               <td style="text-align:center;background:${heatColour(100)};color:${heatText(100)};font-weight:700;border-radius:4px;padding:5px 8px;font-size:12px">100%</td>
-              ${[avgW1,avgW2,avgW4,avgW8].map(v => `<td style="text-align:center;background:${heatColour(v)};color:${heatText(v)};font-weight:700;border-radius:4px;padding:5px 8px;font-size:12px">${v!=null?v+'%':':'}</td>`).join('')}
+              ${[avgW1,avgW2,avgW4,avgW8].map(v => `<td style="text-align:center;background:${heatColour(v)};color:${heatText(v)};font-weight:700;border-radius:4px;padding:5px 8px;font-size:12px">${v!=null?v+'%':'—'}</td>`).join('')}
             </tr></tfoot>
           </table>
         </div>` : '<div class="no-data">No retention data. Run SQL migration to enable.</div>'}
@@ -3844,7 +3853,7 @@ function setActivitySub(sub, rerender = true, data) {
             const act = em && ea[em];
             if (!act || !act.last_seen) return null;
             const days = Math.floor((nowQ - new Date(act.last_seen)) / 86400000);
-            return days >= 14 ? { name: p['Person - Name'] || em, org: p['Person - Organisation'] || ':', days, activeDays: act.active_days } : null;
+            return days >= 14 ? { name: p['Person - Name'] || em, org: p['Person - Organisation'] || '—', days, activeDays: act.active_days } : null;
           })
           .filter(Boolean)
           .sort((a, b) => a.days - b.days)
@@ -4134,7 +4143,7 @@ function renderTraining(el) {
       ['Users given access (total)', cumulative || null, null, null, null,
         '<span class="src-tag">Pipedrive · People</span><br>Total count of all Pipedrive people with any <b>Date Access Granted</b> date set: across all time and all licence types.<br><div class="calc-row">COUNT where Date Access Granted is not null</div>Falls back to sum of manually entered attendee counts if Pipedrive is not loaded.'],
       ['Currently onboarding', inOnboard + awaiting || null, null, null, 'Pipedrive: Onboarding Pipeline',
-        '<span class="src-tag">Pipedrive · General Onboarding Pipeline</span><br>Deals currently at <b>In Onboarding</b> (' + inOnboard + ') or <b>Awaiting Onboarding</b> (' + awaiting + ') stages. Current open deal snapshot: not date-filtered.<br><div class="calc-row">Stage = "In Onboarding" OR "Awaiting Onboarding"</div>'],
+        '<span class="src-tag">Pipedrive · General Onboarding Pipeline</span><br>Deals currently at <b>In Onboarding</b> (' + inOnboard + ') or <b>Awaiting Onboarding</b> (' + awaiting + ') stages. Current open deal snapshot — not date-filtered.<br><div class="calc-row">Stage = "In Onboarding" OR "Awaiting Onboarding"</div>'],
       ['In 2-month growth', growth2m || null, null, null, 'Pipedrive: Onboarding Pipeline',
         '<span class="src-tag">Pipedrive · General Onboarding Pipeline</span><br>Deals at the <b>2 Month Growth Period</b> stage. These customers have completed initial training and are in the post-training follow-up phase.<br><div class="calc-row">Stage = "2 Month Growth Period"</div>'],
       ['Active trials', trialActive + trialMid || null, null, null, 'Pipedrive: Trial Pipeline',
@@ -4244,7 +4253,7 @@ function setTrainingSub(sub, rerender = true, barData, data, webinars, convMonth
             <td>${fmtDate(r.date)}</td>
             <td><strong>${r.score}</strong> / 5</td>
             <td>${fmtNum(r.sample)}</td>
-            <td style="color:var(--tl)">${r.notes || ':'}</td>
+            <td style="color:var(--tl)">${r.notes || '—'}</td>
             <td><button class="btn-del" onclick="delRow('proficiency','${r._id}','_id')">Delete</button></td>
           </tr>`).join('')}</tbody>
         </table>` : '<div class="no-data">No proficiency audits logged yet. Goal: 80%+ of users onboarded, trained and competent. Run spot-check audits (e.g. call users) and log the average score here.</div>'}
@@ -4409,7 +4418,7 @@ function setTrainingSub(sub, rerender = true, barData, data, webinars, convMonth
       <div class="section-block" style="margin-top:0">
         <h3>Training ROI: trained vs untrained orgs ${infoBtn('Training ROI',
           `<p>Compares the PostHog engagement profile of <b>paying orgs that received training sessions</b> (from the manual training log) against those that did not.</p>
-          <p><b>Power user</b>: in PostHog top-25 most active users. <b>At-risk</b>: not seen in the last 14 days but were previously active.</p>
+          <p><b>Power user</b>: in PostHog top-25 most active users. <b>At-risk</b> — not seen in the last 14 days but were previously active.</p>
           <p>PostHog matching is by user email address: orgs with no email in PostHog are excluded from the signal columns.</p>
           <span class="src-tag">Training log · Pipedrive People · PostHog</span>`)}</h3>
         ${cardsHTML([
@@ -4553,7 +4562,7 @@ function renderWeeklyTracker(el) {
         <td colspan="${colSpan}" style="font-weight:700;font-size:11px;color:var(--acc);padding:6px 10px;letter-spacing:.6px;text-transform:uppercase">${sec.label}${toggle}</td>
       </tr>`;
       if (isWb && hideWb) {
-        bodyRows += `<tr><td colspan="${colSpan}" style="padding:8px 10px 8px 20px;color:var(--tl);font-size:12px;font-style:italic">Hidden: this comes straight from the source spreadsheet and is messy. See the <b>Marketing</b> page for the clean webinar funnel and attendance insights.</td></tr>`;
+        bodyRows += `<tr><td colspan="${colSpan}" style="padding:8px 10px 8px 20px;color:var(--tl);font-size:12px;font-style:italic">Hidden — this comes straight from the source spreadsheet and is messy. See the <b>Marketing</b> page for the clean webinar funnel and attendance insights.</td></tr>`;
         return;
       }
       sec.rows.forEach(row => {
@@ -4739,7 +4748,7 @@ function renderMarketing(el) {
   const addCalEv = (dateStr, type, title, status) => {
     if (!dateStr) return;
     const d = String(dateStr).slice(0, 10);
-    if (!status && d > todayIso) return;   // logs are past-only: nothing projected
+    if (!status && d > todayIso) return;   // logs are past-only — nothing projected
     (calEvents[d] = calEvents[d] || []).push({ type, title: title || type, status });
   };
   data.forEach(c => addCalEv(c.date, c.type || 'Other', c.title));
@@ -4917,17 +4926,17 @@ function renderMarketing(el) {
           </tr></thead>
           <tbody>${[...wbPerf].reverse().map(w => `<tr>
             <td>${fmtDate(w.date)}</td>
-            <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${w.title||''}">${w.title || ':'}</td>
+            <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${w.title||''}">${w.title || '—'}</td>
             <td>${fmtNum(w.emailsSent)}</td>
-            <td>${w.emailOpenRate!=null?fmtPct(w.emailOpenRate):':'}</td>
-            <td>${w.emailClickRate!=null?fmtPct(w.emailClickRate):':'}</td>
+            <td>${w.emailOpenRate!=null?fmtPct(w.emailOpenRate):'—'}</td>
+            <td>${w.emailClickRate!=null?fmtPct(w.emailClickRate):'—'}</td>
             <td>${fmtNum(w.regPageViews)}</td>
             <td>${fmtNum(w.registered)}</td>
             <td>${fmtNum(w.attended)}</td>
-            <td>${w.attendRate!=null?`<span class="conv-pct ${w.attendRate>60?'good':w.attendRate>40?'mid':'bad'}">${fmtPct(w.attendRate)}</span>`:':'}</td>
+            <td>${w.attendRate!=null?`<span class="conv-pct ${w.attendRate>60?'good':w.attendRate>40?'mid':'bad'}">${fmtPct(w.attendRate)}</span>`:'—'}</td>
             <td>${w.avgSec!=null?fmtMinSec(w.avgSec):(w.avgTime||':')}</td>
             <td>${w.lenSec!=null?fmtMinSec(w.lenSec):'<span style="color:var(--tl)">60:00*</span>'}</td>
-            <td>${w.engageRatio!=null?`<span class="conv-pct ${w.engageRatio>75?'good':w.engageRatio>55?'mid':'bad'}">${fmtPct(w.engageRatio)}</span>${w.lenAssumed?'<span style="color:var(--tl)">*</span>':''}`:':'}</td>
+            <td>${w.engageRatio!=null?`<span class="conv-pct ${w.engageRatio>75?'good':w.engageRatio>55?'mid':'bad'}">${fmtPct(w.engageRatio)}</span>${w.lenAssumed?'<span style="color:var(--tl)">*</span>':''}`:'—'}</td>
             <td>${fmtNum(w.reactions)}</td>
             <td style="white-space:nowrap">
               <button class="btn-del" style="background:var(--acc2);color:var(--acc)" onclick="editWebinar('${w._id}')">Edit</button>
@@ -4983,9 +4992,9 @@ function renderMarketing(el) {
           <tbody>${[...trackerRecent].reverse().map(r => `<tr>
             <td>${fmtDate(r.week)}</td>
             <td>${fmtNum(r.wbEmailSend)}</td>
-            <td>${r.wbEmailOpen != null ? fmtPct(r.wbEmailOpen) : ':'}</td>
-            <td>${r.wbEmailCtr != null ? fmtPct(r.wbEmailCtr) : ':'}</td>
-            <td>${r.wbRegPage != null ? fmtPct(r.wbRegPage) : ':'}</td>
+            <td>${r.wbEmailOpen != null ? fmtPct(r.wbEmailOpen) : '—'}</td>
+            <td>${r.wbEmailCtr != null ? fmtPct(r.wbEmailCtr) : '—'}</td>
+            <td>${r.wbRegPage != null ? fmtPct(r.wbRegPage) : '—'}</td>
             <td>${fmtNum(r.wbReg)}</td>
           </tr>`).join('')}</tbody>
         </table></div>
@@ -5003,8 +5012,8 @@ function renderMarketing(el) {
           <thead><tr><th>Week</th><th>Open Rate</th><th>CTR</th></tr></thead>
           <tbody>${[...trackerRecent].reverse().map(r => `<tr>
             <td>${fmtDate(r.week)}</td>
-            <td>${r.edmOpen != null ? fmtPct(r.edmOpen) : ':'}</td>
-            <td>${r.edmCtr != null ? fmtPct(r.edmCtr) : ':'}</td>
+            <td>${r.edmOpen != null ? fmtPct(r.edmOpen) : '—'}</td>
+            <td>${r.edmCtr != null ? fmtPct(r.edmCtr) : '—'}</td>
           </tr>`).join('')}</tbody>
         </table></div>
       </details>` : ''}
@@ -5105,7 +5114,7 @@ function renderMarketing(el) {
         ${plannedUpcoming.length ? `<table class="conv-table" style="margin-bottom:10px">
           <thead><tr><th>Date</th><th>Type</th><th>Title</th><th>Status</th><th></th></tr></thead>
           <tbody>${plannedUpcoming.map(p => `<tr>
-            <td>${fmtDate(p.date)}</td><td>${p.type || ':'}</td><td>${p.title || ':'}</td>
+            <td>${fmtDate(p.date)}</td><td>${p.type || '—'}</td><td>${p.title || '—'}</td>
             <td>${p.status === 'confirmed' ? 'Confirmed' : 'Proposed'} <button class="btn-del" style="background:var(--acc2);color:var(--acc)" onclick="togglePlannedStatus('${p._id}')">${p.status === 'confirmed' ? '→ proposed' : '→ confirm'}</button></td>
             <td><button class="btn-del" onclick="delRow('planned_events','${p._id}','_id')">Delete</button></td>
           </tr>`).join('')}</tbody>
@@ -5213,16 +5222,16 @@ function renderMarketing(el) {
       ${tableHTML('content', data, [
         { key: 'date',    label: 'Date',    render: r => fmtDate(r.date) },
         { key: 'type',    label: 'Type',    render: r => `<span class="badge badge-${r.type.toLowerCase().replace(' ','-')}">${r.type}</span>` },
-        { key: 'title',   label: 'Title',   render: r => r.title || ':' },
+        { key: 'title',   label: 'Title',   render: r => r.title || '—' },
         { key: 'metric',  label: 'Primary', render: r => {
           if (r.type==='LinkedIn') return fmtNum(r.impressions) + ' imp';
           if (r.type==='YouTube') return fmtNum(r.ytviews) + ' views';
           if (r.type==='EDM') return fmtNum(r.opens) + ' opens';
           if (r.type==='Viva Engage') return fmtNum(r.vivaviews) + ' views';
           if (r.type==='Speaking') return fmtNum(r.leads) + ' leads';
-          return ':';
+          return '—';
         }},
-        { key: 'outcome', label: 'Outcome', render: r => r.outcome ? r.outcome.substring(0,40)+'…' : ':' },
+        { key: 'outcome', label: 'Outcome', render: r => r.outcome ? r.outcome.substring(0,40)+'…' : '—' },
       ], '_id')}
     </div>
 
@@ -5258,8 +5267,8 @@ function renderMarketing(el) {
                       <span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${col}"></span>${type}
                     </td>
                     <td style="text-align:center;padding:5px 6px;color:var(--tl)">${m.pieces}</td>
-                    <td style="text-align:right;padding:5px 6px">${m.trialDeals || ':'}</td>
-                    <td style="text-align:right;padding:5px 6px">${m.wonDeals || ':'}</td>
+                    <td style="text-align:right;padding:5px 6px">${m.trialDeals || '—'}</td>
+                    <td style="text-align:right;padding:5px 6px">${m.wonDeals || '—'}</td>
                     <td style="text-align:right;padding:5px 6px;font-weight:700;color:${avgCol}">${m.avgDeals}</td>
                   </tr>`;
                 }).join('')}
@@ -5969,7 +5978,7 @@ function pdNormaliseDeals(rows) {
 
 // ── REQUIRED-FIELD VALIDATION ────────────────────────────────────────────────
 // The dashboard declares the fields each indicator depends on, then checks every
-// import for them: so a Pipedrive export that dropped a column (e.g. the People
+// import for them — so a Pipedrive export that dropped a column (e.g. the People
 // export without Customer Type) is caught and flagged instead of silently
 // zeroing metrics.
 const PD_FIELDS = {
@@ -6133,7 +6142,7 @@ function pdRangeToggleHTML() {
 // The team's main reference screen. KPI types:
 //   auto     : computed live from Pipedrive / PostHog / tracker (LIVE badge)
 //   manual   : number entered on the board, per quarter, stamped who+when
-//   milestone: status chip: not started / in progress / done
+//   milestone: status chip — not started / in progress / done
 const WORKSTREAMS = [
   { section: 'Customer & Marketing', items: [
     { id:'brand', name:'Brand & Strategic Comms', owner:'Jacy Macnee', outcome:'Consistent NSW Gov brand · strong market positioning', kpis:[
@@ -6367,7 +6376,7 @@ function wsEffective() {
 }
 // Value/target formatting by unit.
 function wsFmt(num, unit) {
-  if (num == null) return ':';
+  if (num == null) return '—';
   if (unit === '$') return fmtCur(num);
   if (unit === '%') return fmtPct(num);
   const u = unit && !['count', ''].includes(unit) ? ' ' + unit : '';
@@ -6408,7 +6417,7 @@ function wsAuto(key, qr) {
       const li = wks.reduce((s, r) => s + (liImp(r) || 0), 0);
       const viva = load('content').filter(c => c.type === 'Viva Engage' && (() => { const x = new Date(c.date || ''); return !isNaN(x) && x >= qr.from && x <= qr.to; })())
         .reduce((s, c) => s + (c.vivaviews || 0), 0);
-      if (!wks.length && !viva) return { disp: ':', sub: 'no tracker weeks or Viva Engage content in ' + qr.label };
+      if (!wks.length && !viva) return { disp: '—', sub: 'no tracker weeks or Viva Engage content in ' + qr.label };
       return { num: li + viva, disp: fmtNum(li + viva), sub: fmtNum(li) + ' LinkedIn (tracker) + ' + fmtNum(viva) + ' Viva Engage (content log) · ' + qr.label };
     }
     case 'deal_leads_created': {
@@ -6424,7 +6433,7 @@ function wsAuto(key, qr) {
     }
     case 'email_rates': {
       const wks = load('weekly_tracker').filter(r => { const d = new Date(r.week); return !isNaN(d) && d >= qr.from && d <= qr.to && r.edmOpen != null; });
-      if (!wks.length) return { disp: ':', sub: 'no email data in ' + qr.label };
+      if (!wks.length) return { disp: '—', sub: 'no email data in ' + qr.label };
       const o = wks.reduce((s, r) => s + (r.edmOpen || 0), 0) / wks.length;
       const c = wks.reduce((s, r) => s + (r.edmCtr || 0), 0) / wks.length;
       return { num: o, disp: fmtPct(o) + ' / ' + fmtPct(c), sub: 'avg open / click · ' + qr.label };
@@ -6439,16 +6448,16 @@ function wsAuto(key, qr) {
     }
     case 'active_usage': {
       const act = _ph.emailActivity || [];
-      if (!act.length) return { disp: ':', sub: 'needs email matching (run posthog_add_emails.sql)' };
+      if (!act.length) return { disp: '—', sub: 'needs email matching (run posthog_add_emails.sql)' };
       const emails = new Set(act.filter(r => { const d = new Date(r.last_seen); return !isNaN(d) && (now - d) < 30 * 86400000; }).map(r => (r.email || '').toLowerCase()));
       const paid = _pd_people.filter(p => p['Person - Customer Type'] === 'Paid Subscription');
       const used = paid.filter(p => emails.has((p['Person - Email'] || p['Email'] || '').toLowerCase())).length;
       const pctv = paid.length ? used / paid.length * 100 : null;
-      return { num: pctv, disp: pctv != null ? fmtPct(pctv) : ':', sub: used + ' of ' + paid.length + ' paid seats active in last 30d' };
+      return { num: pctv, disp: pctv != null ? fmtPct(pctv) : '—', sub: used + ' of ' + paid.length + ' paid seats active in last 30d' };
     }
     case 'onboarding_active': {
       const ob = _pd_deals.filter(d => d['Deal - Pipeline'] === 'General Onboarding Pipeline');
-      if (!ob.length) return { disp: ':', sub: 'no onboarding deals' };
+      if (!ob.length) return { disp: '—', sub: 'no onboarding deals' };
       const done = ob.filter(d => ['Onboarding Complete', 'Maintenance', 'Month 11!', '2 Month Growth Period'].includes(d['Deal - Stage']) || d['Deal - Status'] === 'Won').length;
       return { num: done / ob.length * 100, disp: fmtPct(done / ob.length * 100), sub: done + ' of ' + ob.length + ' past onboarding · snapshot' };
     }
@@ -6469,7 +6478,7 @@ function wsAuto(key, qr) {
     case 'lead_conversion': {
       const won = _pd_deals.filter(d => d['Deal - Status'] === 'Won' && inQ(d['Deal - Won time'])).length;
       const lost = _pd_deals.filter(d => d['Deal - Status'] === 'Lost' && inQ(d['Deal - Lost time'])).length;
-      if (!won && !lost) return { disp: ':', sub: 'no closed deals in ' + qr.label };
+      if (!won && !lost) return { disp: '—', sub: 'no closed deals in ' + qr.label };
       return { num: won / (won + lost) * 100, disp: fmtPct(won / (won + lost) * 100), sub: won + ' won / ' + lost + ' lost · ' + qr.label };
     }
     case 'net_new_seats': {
@@ -6512,7 +6521,7 @@ function wsAuto(key, qr) {
     }
     case 'feature_adoption': {
       const rows = _ph.featureAdoption || [];
-      if (!rows.length) return { disp: ':', sub: 'no usage data' };
+      if (!rows.length) return { disp: '—', sub: 'no usage data' };
       const top = rows.slice(0, 8);
       const avg = top.reduce((s, r) => s + (Number(r.adoption_pct) || 0), 0) / top.length;
       return { num: avg, disp: fmtPct(avg), sub: 'avg adoption · top ' + top.length + ' features · all time' };
@@ -6523,7 +6532,7 @@ function wsAuto(key, qr) {
       if (_pd_people_imported_at) ages.push((now - new Date(_pd_people_imported_at)) / 86400000);
       const lastDay = (_ph.daily || []).reduce((mx, r) => (r.day && r.day > mx ? r.day : mx), '');
       if (lastDay) ages.push((now - new Date(lastDay)) / 86400000);
-      if (!ages.length) return { disp: ':', sub: 'no data sources loaded' };
+      if (!ages.length) return { disp: '—', sub: 'no data sources loaded' };
       const worst = Math.ceil(Math.max(...ages));
       return { num: worst <= 7 ? 100 : 0, disp: worst <= 7 ? '✓ Yes' : '✗ No', sub: 'oldest source: ' + worst + ' day' + (worst === 1 ? '' : 's') + ' · target ≤7', lowerBetter: false };
     }
@@ -6543,7 +6552,7 @@ function wsAuto(key, qr) {
     }
     case 'campaign_engage': {
       const items = load('content').filter(c => { const x = new Date(c.date || ''); return !isNaN(x) && x >= qr.from && x <= qr.to; });
-      if (!items.length) return { disp: ':', sub: 'no content logged in ' + qr.label };
+      if (!items.length) return { disp: '—', sub: 'no content logged in ' + qr.label };
       const reach = items.reduce((s, c) => s + (c.impressions || 0) + (c.ytviews || 0) + (c.vivaviews || 0) + (c.recipients || 0), 0);
       const eng = items.reduce((s, c) => s + (c.reactions || 0) + (c.comments || 0) + (c.shares || 0) + (c.clicks || 0) + (c.edmclicks || 0) + (c.vivareactions || 0), 0);
       return { num: reach, disp: fmtNum(reach) + ' reach · ' + fmtNum(eng) + ' engaged', sub: items.length + ' content items in ' + qr.label + ' · content log' };
@@ -6565,26 +6574,26 @@ function wsAuto(key, qr) {
         const rem = pdParseDate(p['Person - Date Access Removed']);
         if (!pdValidDate(rem) || rem > a) kept++;
       });
-      if (!due) return { disp: ':', sub: 'no renewal anniversaries fall in ' + qr.label };
+      if (!due) return { disp: '—', sub: 'no renewal anniversaries fall in ' + qr.label };
       return { num: kept / due * 100, disp: fmtPct(kept / due * 100), sub: kept + ' of ' + due + ' seats retained past their anniversary · assumes 12-month terms' };
     }
     // ── PROPOSED upgrades (tabled as better-practice alternatives) ──────────
     case 'engagement_rate': {
       const items = load('content').filter(c => { const x = new Date(c.date || ''); return !isNaN(x) && x >= qr.from && x <= qr.to && (c.impressions || 0) > 0; });
-      if (!items.length) return { disp: ':', sub: 'no content with impressions in ' + qr.label };
+      if (!items.length) return { disp: '—', sub: 'no content with impressions in ' + qr.label };
       const imp = items.reduce((s, c) => s + (c.impressions || 0), 0);
       const eng = items.reduce((s, c) => s + (c.reactions || 0) + (c.comments || 0) + (c.shares || 0) + (c.clicks || 0), 0);
       return { num: eng / imp * 100, disp: fmtPct(eng / imp * 100), sub: fmtNum(eng) + ' engagements ÷ ' + fmtNum(imp) + ' impressions · ' + qr.label };
     }
     case 'inbound_enquiries': {
       const wks = load('weekly_tracker').filter(r => { const x = new Date(r.week); return !isNaN(x) && x >= qr.from && x <= qr.to; });
-      if (!wks.length) return { disp: ':', sub: 'no tracker weeks in ' + qr.label };
+      if (!wks.length) return { disp: '—', sub: 'no tracker weeks in ' + qr.label };
       const n = wks.reduce((s, r) => s + (r.purchaseEnq || 0) + (r.eoiTickets || 0), 0);
       return { num: n, disp: fmtNum(n), sub: 'purchase enquiries + EOI tickets · ' + qr.label };
     }
     case 'time_to_value': {
       const act = _ph.emailActivity || [];
-      if (!act.length) return { disp: ':', sub: 'needs email matching (run posthog_add_emails.sql)' };
+      if (!act.length) return { disp: '—', sub: 'needs email matching (run posthog_add_emails.sql)' };
       const em = {}; act.forEach(r => { if (r.email) em[r.email.toLowerCase()] = r; });
       const skip = ['Contact Register', 'Expression of Interest'];
       const cohort = _pd_people.filter(p => {
@@ -6592,7 +6601,7 @@ function wsAuto(key, qr) {
         const g = pdParseDate(p['Person - Date Access Granted']);
         return pdValidDate(g) && g >= qr.from && g <= qr.to && (g.getTime() + 14 * 86400000) <= now.getTime();
       });
-      if (!cohort.length) return { disp: ':', sub: 'no measurable new users in ' + qr.label };
+      if (!cohort.length) return { disp: '—', sub: 'no measurable new users in ' + qr.label };
       const hit = cohort.filter(p => {
         const r = em[(p['Person - Email'] || p['Email'] || '').toLowerCase()]; if (!r) return false;
         const g = pdParseDate(p['Person - Date Access Granted']);
@@ -6603,7 +6612,7 @@ function wsAuto(key, qr) {
     }
     case 'trained_active': {
       const act = _ph.emailActivity || [];
-      if (!act.length) return { disp: ':', sub: 'needs email matching (run posthog_add_emails.sql)' };
+      if (!act.length) return { disp: '—', sub: 'needs email matching (run posthog_add_emails.sql)' };
       const em = {}; act.forEach(r => { if (r.email) em[r.email.toLowerCase()] = r; });
       const skip = ['Contact Register', 'Expression of Interest'];
       const cohort = _pd_people.filter(p => {
@@ -6611,7 +6620,7 @@ function wsAuto(key, qr) {
         const g = pdParseDate(p['Person - Date Access Granted']);
         return pdValidDate(g) && g >= qr.from && g <= qr.to && (g.getTime() + 30 * 86400000) <= now.getTime();
       });
-      if (!cohort.length) return { disp: ':', sub: 'no trained users 30+ days old in ' + qr.label };
+      if (!cohort.length) return { disp: '—', sub: 'no trained users 30+ days old in ' + qr.label };
       const still = cohort.filter(p => {
         const r = em[(p['Person - Email'] || p['Email'] || '').toLowerCase()]; if (!r) return false;
         const g = pdParseDate(p['Person - Date Access Granted']);
@@ -6622,10 +6631,10 @@ function wsAuto(key, qr) {
     }
     case 'cf_utilisation': {
       const act = _ph.emailActivity || [];
-      if (!act.length) return { disp: ':', sub: 'needs email matching (run posthog_add_emails.sql)' };
+      if (!act.length) return { disp: '—', sub: 'needs email matching (run posthog_add_emails.sql)' };
       const recent = new Set(act.filter(r => { const d = new Date(r.last_seen); return !isNaN(d) && (now - d) < 30 * 86400000; }).map(r => (r.email || '').toLowerCase()));
       const cf = _pd_people.filter(p => p['Person - Customer Type'] === 'Centrally Funded Licence');
-      if (!cf.length) return { disp: ':', sub: 'no centrally-funded seats' };
+      if (!cf.length) return { disp: '—', sub: 'no centrally-funded seats' };
       const used = cf.filter(p => recent.has((p['Person - Email'] || p['Email'] || '').toLowerCase())).length;
       return { num: used / cf.length * 100, disp: fmtPct(used / cf.length * 100), sub: used + ' of ' + cf.length + ' centrally-funded seats active in last 30d' };
     }
@@ -6634,7 +6643,7 @@ function wsAuto(key, qr) {
         const cw = new Date(r.cohort_week);
         return !isNaN(cw) && (cw.getTime() + 28 * 86400000) <= now.getTime() && Number(r.cohort_size) > 0;
       });
-      if (!rows.length) return { disp: ':', sub: 'no mature usage cohorts yet' };
+      if (!rows.length) return { disp: '—', sub: 'no mature usage cohorts yet' };
       const size = rows.reduce((s, r) => s + Number(r.cohort_size), 0);
       const kept4 = rows.reduce((s, r) => s + Number(r.retained_w4 || 0), 0);
       return { num: kept4 / size * 100, disp: fmtPct(kept4 / size * 100), sub: fmtNum(kept4) + ' of ' + fmtNum(size) + ' new users still active 4 weeks on · last ' + rows.length + ' cohorts' };
@@ -6738,7 +6747,7 @@ function renderWorkstreams(el) {
       badge = '<span style="font-size:9px;font-weight:700;color:#8a5a00;background:#fdf6e9;border-radius:4px;padding:1px 6px">MANUAL</span>'
         + (k.manualFallback ? ' <span style="font-size:9px;color:var(--tl)">auto once in Pipedrive</span>' : '');
       num = rec ? rec.value : null;
-      valueHTML = `<input type="number" step="any" value="${rec ? rec.value : ''}" placeholder=":"
+      valueHTML = `<input type="number" step="any" value="${rec ? rec.value : ''}" placeholder="—"
         onchange="wsSetVal('${k.id}','${q}',this.value)"
         style="width:86px;padding:4px 7px;border:1.5px solid ${rec ? 'var(--bd)' : '#e6a817'};border-radius:6px;font-size:13px;font-weight:600;font-family:inherit">
         <span style="font-size:10.5px;color:var(--tl)">${k.unit === '$' ? '$' : k.unit === '%' ? '%' : (k.unit || '')}</span>`;
@@ -6777,12 +6786,12 @@ function renderWorkstreams(el) {
   }
 
   function rowHTML(k, st, badge, valueHTML, targetHTML, sub) {
-    if (k.proposed) badge += ' <span title="Suggested addition to the draft KPI set: not yet agreed" style="font-size:9px;font-weight:700;color:#185FA5;background:#e6f1fb;border-radius:4px;padding:1px 6px">PROPOSED</span>';
+    if (k.proposed) badge += ' <span title="Suggested addition to the draft KPI set — not yet agreed" style="font-size:9px;font-weight:700;color:#185FA5;background:#e6f1fb;border-radius:4px;padding:1px 6px">PROPOSED</span>';
     const hk = flagKey('ws ' + k.ref + ' ' + k.label);
     const hidden = !!_hiddenMetrics[hk];
     return `<tr class="${hidden ? 'metric-hidden' : ''}" style="border-bottom:1px solid var(--bg2)${k.proposed ? ';background:#f7fafd' : ''}">
       <td style="padding:7px 6px;width:12px"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${dotCol[st]}"></span></td>
-      <td style="padding:7px 6px;font-size:12.5px"><span style="font-size:9px;font-weight:700;color:var(--tl);background:var(--bg2);border-radius:3px;padding:1px 4px;margin-right:5px" title="Reference code: quote this to request changes">${k.ref}</span>${k.label}${infoBtn(k.ref + ' · ' + k.label, wsKpiDoc(k))}<span class="hide-toggle" data-hk="${hk}" title="${hidden ? 'Hidden from the everyday view: click to show' : 'Click to hide this from the everyday view'}">${hidden ? 'show' : 'hide'}</span><span onclick="wsEditKpi('${k.id}')" title="Edit this KPI (name, measure, target)" style="cursor:pointer;font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--acc);margin-left:6px">✎ edit</span><div style="margin-top:2px">${badge}</div></td>
+      <td style="padding:7px 6px;font-size:12.5px"><span style="font-size:9px;font-weight:700;color:var(--tl);background:var(--bg2);border-radius:3px;padding:1px 4px;margin-right:5px" title="Reference code: quote this to request changes">${k.ref}</span>${k.label}${infoBtn(k.ref + ' · ' + k.label, wsKpiDoc(k))}<span class="hide-toggle" data-hk="${hk}" title="${hidden ? 'Hidden from the everyday view — click to show' : 'Click to hide this from the everyday view'}">${hidden ? 'show' : 'hide'}</span><span onclick="wsEditKpi('${k.id}')" title="Edit this KPI (name, measure, target)" style="cursor:pointer;font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--acc);margin-left:6px">✎ edit</span><div style="margin-top:2px">${badge}</div></td>
       <td style="padding:7px 6px;white-space:nowrap">${valueHTML}${sub ? `<div style="font-size:10px;color:var(--tl);margin-top:2px">${sub}</div>` : ''}</td>
       <td style="padding:7px 6px;text-align:right">${targetHTML}</td>
     </tr>`;
@@ -6822,7 +6831,7 @@ function renderWorkstreams(el) {
               <div style="font-size:11px;color:var(--tl);margin:1px 0 2px">${w.outcome}</div>
               <div style="font-size:11px;font-weight:600;color:var(--acc)">${w.owner}</div>
             </div>
-            <span class="hide-toggle" data-hk="${gk}" title="${gHidden ? 'Hidden from the everyday view: click to show' : 'Hide this whole workstream from the everyday view'}">${gHidden ? 'show' : 'hide'}</span>
+            <span class="hide-toggle" data-hk="${gk}" title="${gHidden ? 'Hidden from the everyday view — click to show' : 'Hide this whole workstream from the everyday view'}">${gHidden ? 'show' : 'hide'}</span>
           </div>
           <table style="width:100%;border-collapse:collapse;margin-top:6px">
             <thead><tr style="border-bottom:1.5px solid var(--bor)">
@@ -6890,9 +6899,9 @@ function renderWorkstreams(el) {
       return `<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px">
         ${tile('Active paying seats', fmtNum(activeSeats) + `<span style="font-size:15px;color:var(--tl);font-weight:500"> / ${TARGET_USERS}</span>`,
           Math.round(seatsPct) + '% of target · shared goal of every workstream', seatsPct, seatsPct >= 80 ? '#2a7a4b' : seatsPct >= 50 ? '#2e8bc0' : '#c25a00')}
-        ${tile('License revenue · ' + qr.label, rev ? rev.disp : ':',
+        ${tile('License revenue · ' + qr.label, rev ? rev.disp : '—',
           revPct != null ? Math.round(revPct) + '% of the ' + fmtCur(qTarget) + ' quarterly pace toward $2.4M' : 'vs ' + fmtCur(qTarget) + ' quarterly pace', revPct, revPct != null && revPct >= 80 ? '#2a7a4b' : '#c25a00')}
-        ${tile('Paid seats actively using Land iQ', usage && usage.num != null ? fmtPct(usage.num) : ':',
+        ${tile('Paid seats actively using Land iQ', usage && usage.num != null ? fmtPct(usage.num) : '—',
           usage && usage.num != null ? usage.sub : 'switches on with email matching: value delivered, not just sold', usage && usage.num != null ? usage.num : null, '#2e8bc0')}
       </div>`;
     })()}
@@ -6902,7 +6911,7 @@ function renderWorkstreams(el) {
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#e6a817"></span> within 30%</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#e05252"></span> below</span>
       <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c4c4c4"></span> no target / not started</span>
-      <span><span style="font-size:9px;font-weight:700;color:#185FA5;background:#e6f1fb;border-radius:4px;padding:1px 6px">PROPOSED</span> suggested addition: not yet agreed</span>
+      <span><span style="font-size:9px;font-weight:700;color:#185FA5;background:#e6f1fb;border-radius:4px;padding:1px 6px">PROPOSED</span> suggested addition — not yet agreed</span>
       <span style="margin-left:auto">${isCurrentQ ? qr.label + ' in progress: LIVE numbers build through the quarter' : 'viewing a past quarter'} · targets editable (being set this week)</span>
     </div>
     ${sectionsHTML}`;
@@ -7014,16 +7023,16 @@ function renderTeam(el) {
           ${rows.map(r => `<tr style="border-bottom:1px solid var(--bg2)">
             <td style="padding:7px 8px;font-weight:500">${r.owner}</td>
             <td style="text-align:right;padding:7px 8px;font-weight:600;color:${cellCol(r.s.won, t.won)}">${r.s.won}</td>
-            <td style="text-align:right;padding:7px 8px;font-weight:600;color:${cellCol(r.s.revenue, t.revenue)}">${r.s.revenue?fmtCur(r.s.revenue):':'}</td>
-            <td style="text-align:right;padding:7px 8px;color:${r.s.winrate!=null?cellCol(r.s.winrate,t.winrate):'var(--tl)'}">${r.s.winrate!=null?fmtPct(r.s.winrate):':'}</td>
-            <td style="text-align:right;padding:7px 8px">${r.s.avgDeal?fmtCur(r.s.avgDeal):':'}</td>
-            <td style="text-align:right;padding:7px 8px">${r.s.avgCycle!=null?r.s.avgCycle+'d':':'}</td>
+            <td style="text-align:right;padding:7px 8px;font-weight:600;color:${cellCol(r.s.revenue, t.revenue)}">${r.s.revenue?fmtCur(r.s.revenue):'—'}</td>
+            <td style="text-align:right;padding:7px 8px;color:${r.s.winrate!=null?cellCol(r.s.winrate,t.winrate):'var(--tl)'}">${r.s.winrate!=null?fmtPct(r.s.winrate):'—'}</td>
+            <td style="text-align:right;padding:7px 8px">${r.s.avgDeal?fmtCur(r.s.avgDeal):'—'}</td>
+            <td style="text-align:right;padding:7px 8px">${r.s.avgCycle!=null?r.s.avgCycle+'d':'—'}</td>
           </tr>`).join('')}
           <tr style="border-top:2px solid var(--bor);font-weight:700">
             <td style="padding:7px 8px">Team total</td>
             <td style="text-align:right;padding:7px 8px">${totWon}</td>
-            <td style="text-align:right;padding:7px 8px">${totRev?fmtCur(totRev):':'}</td>
-            <td style="text-align:right;padding:7px 8px">${(totWon+totLost)?fmtPct(totWon/(totWon+totLost)*100):':'}</td>
+            <td style="text-align:right;padding:7px 8px">${totRev?fmtCur(totRev):'—'}</td>
+            <td style="text-align:right;padding:7px 8px">${(totWon+totLost)?fmtPct(totWon/(totWon+totLost)*100):'—'}</td>
             <td colspan="2"></td>
           </tr>
         </tbody></table></div>
@@ -7120,7 +7129,7 @@ function renderPipedrive(el) {
       ['Target won / month', Math.round(mVal('target_won') * 10) / 10, null, null, 'Now ' + fmt1(omTargets().wonCurr) + '/mo · OPTI-MAX Stage 3',
         mDoc('target_won')],
       ['Active paid subscribers', activePaidSubs.length || null, null, null, 'Target: 600 · as of today',
-        mDoc('active_paid', 'Always shows the current snapshot: not affected by the date range or pipeline filter.')],
+        mDoc('active_paid', 'Always shows the current snapshot — not affected by the date range or pipeline filter.')],
       ['People (total)', _pd_people.length || null, null, null, null,
         '<span class="src-tag">Pipedrive · People CSV</span><br>Total row count of the imported People CSV. All contacts regardless of type, licence status, or date. This is the raw import size.<br>Last imported: <b>' + (_pd_people_imported_at ? fmtDate(_pd_people_imported_at) : 'unknown') + '</b>'],
     ])}
@@ -7258,7 +7267,7 @@ function pdCleanRows(rows, kind) {
 // verified count from the database. Never fails silently.
 async function pdUploadRows(table, rows, noun) {
   const del = await sb.from(table).delete().gte('imported_at', '1970-01-01T00:00:00Z');
-  if (del.error) { toast('✗ Could not clear old ' + noun + ': ' + del.error.message + ': nothing changed.', 10000); return null; }
+  if (del.error) { toast('✗ Could not clear old ' + noun + ': ' + del.error.message + ' — nothing changed.', 10000); return null; }
   let stored = 0, failed = 0, firstErr = null;
   const batchSize = 100;
   for (let i = 0; i < rows.length; i += batchSize) {
@@ -7551,14 +7560,14 @@ function renderPdRevenue(sc) {
       </div>
       <div style="font-size:12px;color:var(--tm);margin-top:8px">
         At current avg deal value of <strong>${fmtCur(Math.round(avgDealVal))}</strong>, you need
-        <strong>${avgDealVal > 0 ? Math.ceil(arrGap / avgDealVal) : ':'}</strong> more won deals to hit $2.4M.
+        <strong>${avgDealVal > 0 ? Math.ceil(arrGap / avgDealVal) : '—'}</strong> more won deals to hit $2.4M.
       </div>
     </div>
 
     <div class="box">
       <div class="box-title">Growth health ${infoBtn('Growth health',
         `<p>Compares the last 12 months to the 12 months before that, for both new signed revenue and number of deals won.</p>
-        <p><b>Note:</b> a full business-health score would also include a profit/efficiency measure (such as the "Rule of 40"). That needs cost data, which isn\'t in the dashboard: so this shows the growth side only.</p>
+        <p><b>Note:</b> a full business-health score would also include a profit/efficiency measure (such as the "Rule of 40"). That needs cost data, which isn\'t in the dashboard — so this shows the growth side only.</p>
         <span class="src-tag">Pipedrive · Won Deals</span>`)}</div>
       ${(() => {
         const mk = (back) => { const d = new Date(today.getFullYear(), today.getMonth() - back, 1); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'); };
@@ -7573,7 +7582,7 @@ function renderPdRevenue(sc) {
           const col = gr == null ? 'var(--tl)' : gr >= 0 ? '#2a7a4b' : '#e05252';
           return `<div style="background:var(--bg2);border-radius:8px;padding:12px 14px">
             <div style="font-size:12px;color:var(--tl)">${label}</div>
-            <div style="font-size:24px;font-weight:700;color:${col};margin:2px 0">${gr==null?':':(gr>=0?'+':'')+gr+'%'}</div>
+            <div style="font-size:24px;font-weight:700;color:${col};margin:2px 0">${gr==null?'—':(gr>=0?'+':'')+gr+'%'}</div>
             <div style="font-size:11px;color:var(--tl)">${money?fmtCur(now):fmtNum(now)} vs ${money?fmtCur(prev):fmtNum(prev)} prior 12 mo</div>
           </div>`;
         };
@@ -7634,7 +7643,7 @@ function renderPdRevenue(sc) {
         </div>
         <div class="card" style="margin:0">
           <div class="card-label">6-mo run-rate projection</div>
-          <div class="card-value">${avgMonthlyARR>0?fmtCur(avgMonthlyARR*6):':'}</div>
+          <div class="card-value">${avgMonthlyARR>0?fmtCur(avgMonthlyARR*6):'—'}</div>
           <div class="card-sub">${avgMonthlyARR>0?fmtCur(avgMonthlyARR)+'/mo avg':'insufficient history'}</div>
         </div>
       </div>
@@ -7995,7 +8004,7 @@ function renderPdSales(sc) {
   };
   const avgDealAll = kpiWonDeals.length ? kpiWonDeals.reduce((s,d)=>s+(parseFloat(d['Deal - Value'])||0),0)/kpiWonDeals.length : null;
   const arw = (c,p) => (p==null||c==null)?'':(c>p?'▲ ':c<p?'▼ ':'· ');
-  const r1 = x => x==null ? ':' : Math.round(x*10)/10;
+  const r1 = x => x==null ? '—' : Math.round(x*10)/10;
   // Chart series honouring the granularity toggle
   const kpiGran = activeSub.pd_kpi_gran || 'month';
   const kpiN = kpiGran==='week' ? 12 : kpiGran==='quarter' ? 8 : 12;
@@ -8010,24 +8019,24 @@ function renderPdSales(sc) {
 
   const salesKpiBand = kpiBand(
     kpiCardHTML('Deals won (this month)', kCur(kMonths).won ?? null, null, KPI_TGT.won.month, '12/MO',
-      `avg ${r1(kAvg(kMonths,'won'))}/mo · ${arw(kCur(kMonths).won, kPrev(kMonths).won)}last month ${kPrev(kMonths).won ?? ':'}`,
+      `avg ${r1(kAvg(kMonths,'won'))}/mo · ${arw(kCur(kMonths).won, kPrev(kMonths).won)}last month ${kPrev(kMonths).won ?? '—'}`,
       '<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Deals with <b>Status = Won</b> and Won time in the current calendar month, vs the target of 12/month. Sub shows the trailing average and last month.') +
     kpiCardHTML('Deals won (this week)', kCur(kWeeks).won ?? null, null, KPI_TGT.won.week, '3/WK',
-      `avg ${r1(kAvg(kWeeks,'won'))}/wk · ${arw(kCur(kWeeks).won, kPrev(kWeeks).won)}last week ${kPrev(kWeeks).won ?? ':'}`,
+      `avg ${r1(kAvg(kWeeks,'won'))}/wk · ${arw(kCur(kWeeks).won, kPrev(kWeeks).won)}last week ${kPrev(kWeeks).won ?? '—'}`,
       '<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Won deals with Won time in the current week (Mon–Sun), vs the target of 3/week.') +
     kpiCardHTML('Licences won (this month)', kCur(kMonths).lic ?? null, null, KPI_TGT.lic.month, '40/MO',
-      `avg ${r1(kAvg(kMonths,'lic'))}/mo · ${arw(kCur(kMonths).lic, kPrev(kMonths).lic)}last month ${kPrev(kMonths).lic ?? ':'}`,
+      `avg ${r1(kAvg(kMonths,'lic'))}/mo · ${arw(kCur(kMonths).lic, kPrev(kMonths).lic)}last month ${kPrev(kMonths).lic ?? '—'}`,
       '<span class="src-tag">Pipedrive · Deals</span><br>Licence count sold: the sum of <b>Deal - Product quantity</b> (the licence quantity on each deal\'s "Full Platform Access" product) across deals won this month, vs the target of 40/month. One deal can carry many licences, so this runs higher than deals won.<br><div class="calc-row">Σ Product quantity where Status = Won AND Won time in this month</div>') +
     kpiCardHTML('Licences won (this week)', kCur(kWeeks).lic ?? null, null, KPI_TGT.lic.week, '10/WK',
-      `avg ${r1(kAvg(kWeeks,'lic'))}/wk · ${arw(kCur(kWeeks).lic, kPrev(kWeeks).lic)}last week ${kPrev(kWeeks).lic ?? ':'}`,
+      `avg ${r1(kAvg(kWeeks,'lic'))}/wk · ${arw(kCur(kWeeks).lic, kPrev(kWeeks).lic)}last week ${kPrev(kWeeks).lic ?? '—'}`,
       '<span class="src-tag">Pipedrive · Deals</span><br>Sum of <b>Deal - Product quantity</b> across deals won this week, vs the target of 10/week (40/month).') +
     kpiCardHTML('Avg deal value (this month)', kCur(kMonths).avgVal ?? null, '$', KPI_TGT.avgVal, '$14K',
       kCur(kMonths).avgVal == null ? `no wins recorded yet this month${kpiDataNote} · appears with the first win` :
-      `all-time avg ${avgDealAll!=null?fmtCur(avgDealAll):':'} · ${arw(kCur(kMonths).avgVal, kPrev(kMonths).avgVal)}last month ${kPrev(kMonths).avgVal!=null?fmtCur(kPrev(kMonths).avgVal):':'}`,
+      `all-time avg ${avgDealAll!=null?fmtCur(avgDealAll):'—'} · ${arw(kCur(kMonths).avgVal, kPrev(kMonths).avgVal)}last month ${kPrev(kMonths).avgVal!=null?fmtCur(kPrev(kMonths).avgVal):'—'}`,
       '<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Average <b>Deal Value</b> across deals won this month, vs the $14,000 target. Sub shows the all-time average won deal value. Blank until the first win of the month is recorded in the imported data.') +
     kpiCardHTML('Avg deal value (this week)', kCur(kWeeks).avgVal ?? null, '$', KPI_TGT.avgVal, '$14K',
       kCur(kWeeks).avgVal == null ? `no wins recorded yet this week${kpiDataNote} · appears with the first win` :
-      `all-time avg ${avgDealAll!=null?fmtCur(avgDealAll):':'} · ${arw(kCur(kWeeks).avgVal, kPrev(kWeeks).avgVal)}last week ${kPrev(kWeeks).avgVal!=null?fmtCur(kPrev(kWeeks).avgVal):':'}`,
+      `all-time avg ${avgDealAll!=null?fmtCur(avgDealAll):'—'} · ${arw(kCur(kWeeks).avgVal, kPrev(kWeeks).avgVal)}last week ${kPrev(kWeeks).avgVal!=null?fmtCur(kPrev(kWeeks).avgVal):'—'}`,
       '<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Average <b>Deal Value</b> across deals won this week, vs the $14,000 target. Blank until the first win of the week is recorded in the imported data.'),
     'Sales · live totals count wins recorded in the imported Pipedrive data' + (kpiDataNote || '')
   );
@@ -8096,7 +8105,7 @@ function renderPdSales(sc) {
 
     <div class="box" style="margin-top:14px">
       <div class="box-title">Sales conversion funnel: ${range.label} <span style="font-size:11px;font-weight:400;color:var(--tl)">· always 2026 Sales pipeline</span>
-        <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">"Reached stage" · deals created in period · overall conversion: ${funnelOvr!=null?fmtPct(funnelOvr):':'}</span>
+        <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">"Reached stage" · deals created in period · overall conversion: ${funnelOvr!=null?fmtPct(funnelOvr):'—'}</span>
       </div>
       <div class="chart-wrap" style="height:260px"><canvas id="pd-funnel"></canvas></div>
       <table class="conv-table" style="margin-top:14px">
@@ -8108,13 +8117,13 @@ function renderPdSales(sc) {
             const cls=gap==null?'':gap>=0?'good':'bad';
             return `<tr><td>${s}</td>
               <td style="text-align:right;font-weight:500">${cnt}</td>
-              <td style="text-align:right">${rate!=null?`<span class="conv-pct ${rate>=70?'good':rate>=50?'mid':'bad'}">${fmtPct(rate)}</span>`:i===0?'<span style="color:var(--tl)">entry</span>':':'}</td>
-              <td style="text-align:right">${tgt!=null?tgt+'%':':'}</td>
-              <td style="text-align:right">${gap!=null?`<span class="conv-pct ${cls}">${gap>=0?'+':''}${gap}%</span>`:':'}</td>
+              <td style="text-align:right">${rate!=null?`<span class="conv-pct ${rate>=70?'good':rate>=50?'mid':'bad'}">${fmtPct(rate)}</span>`:i===0?'<span style="color:var(--tl)">entry</span>':'—'}</td>
+              <td style="text-align:right">${tgt!=null?tgt+'%':'—'}</td>
+              <td style="text-align:right">${gap!=null?`<span class="conv-pct ${cls}">${gap>=0?'+':''}${gap}%</span>`:'—'}</td>
             </tr>`;
           }).join('')}
           <tr style="border-top:2px solid var(--bd);font-weight:600"><td>Won (total)</td><td style="text-align:right">${funnelWon}</td>
-            <td style="text-align:right">${funnelOvr!=null?`<span class="conv-pct ${funnelOvr>=40?'good':funnelOvr>=25?'mid':'bad'}">${fmtPct(funnelOvr)}</span>`:':'}</td>
+            <td style="text-align:right">${funnelOvr!=null?`<span class="conv-pct ${funnelOvr>=40?'good':funnelOvr>=25?'mid':'bad'}">${fmtPct(funnelOvr)}</span>`:'—'}</td>
             <td colspan="2" style="text-align:right;font-size:11px;color:var(--tl)">overall entry→won</td></tr>
         </tbody>
       </table>
@@ -8135,7 +8144,7 @@ function renderPdSales(sc) {
         return `<div class="pd-funnel-row">
           ${fStages.map((s,i) => `
             ${i>0 ? `<div class="pd-funnel-arrow">
-              <div class="pd-funnel-pct" style="color:${fRts[i]!=null?(fRts[i]>=75?'#2a7a4b':fRts[i]>=50?'#c25a00':'#c0392b'):'#aaa'}">${fRts[i]!=null?fmtPct(fRts[i]):':'}</div>
+              <div class="pd-funnel-pct" style="color:${fRts[i]!=null?(fRts[i]>=75?'#2a7a4b':fRts[i]>=50?'#c25a00':'#c0392b'):'#aaa'}">${fRts[i]!=null?fmtPct(fRts[i]):'—'}</div>
               <div class="pd-funnel-chevron">›</div>
             </div>` : ''}
             <div class="pd-funnel-box">
@@ -8144,7 +8153,7 @@ function renderPdSales(sc) {
             </div>
           `).join('')}
           <div class="pd-funnel-arrow" title="Won ÷ Contact Made deals">
-            <div class="pd-funnel-pct" style="color:${funnelOvr!=null?(funnelOvr>=40?'#2a7a4b':funnelOvr>=25?'#c25a00':'#c0392b'):'#aaa'}">${funnelOvr!=null?fmtPct(funnelOvr):':'}</div>
+            <div class="pd-funnel-pct" style="color:${funnelOvr!=null?(funnelOvr>=40?'#2a7a4b':funnelOvr>=25?'#c25a00':'#c0392b'):'#aaa'}">${funnelOvr!=null?fmtPct(funnelOvr):'—'}</div>
             <div style="font-size:8px;color:var(--tl);line-height:1;text-align:center">of Contact<br>Made</div>
             <div class="pd-funnel-chevron">›</div>
           </div>
@@ -8154,7 +8163,7 @@ function renderPdSales(sc) {
           </div>
         </div>
         <div style="font-size:11px;color:var(--tl);margin-top:6px">
-          <strong>${funnelOvr!=null?fmtPct(funnelOvr):':'}</strong> of Contact Made deals end up Won (${funnelWon} of ${funnelCnts[0]}).
+          <strong>${funnelOvr!=null?fmtPct(funnelOvr):'—'}</strong> of Contact Made deals end up Won (${funnelWon} of ${funnelCnts[0]}).
           For stage-by-stage targets, see the <strong>OPTI-MAX</strong> subtab.
         </div>`;
       })()}
@@ -8218,9 +8227,9 @@ function renderPdSales(sc) {
                 <td style="padding:5px 8px;color:var(--tl);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d['Deal - Organisation']||d['Organisation']||d['Deal - Person']||':'}</td>
                 <td style="padding:5px 8px;color:var(--tl)">${d['Deal - Owner']||':'}</td>
                 <td style="padding:5px 8px;color:var(--tl)">${d['Deal - Source channel']||d['Source channel']||':'}</td>
-                <td style="padding:5px 8px;text-align:right;font-weight:600">${d['Deal - Value']?fmtCur(parseFloat(d['Deal - Value'])):':'}</td>
-                <td style="padding:5px 8px;text-align:right">${pdValidDate(won)?fmtDate(won).slice(0,6):':'}</td>
-                <td style="padding:5px 8px;text-align:right;color:${cycle!=null?(cycle<=30?'#2a7a4b':cycle<=60?'#c25a00':'#e05252'):'#999'}">${cycle!=null?cycle+'d':':'}</td>
+                <td style="padding:5px 8px;text-align:right;font-weight:600">${d['Deal - Value']?fmtCur(parseFloat(d['Deal - Value'])):'—'}</td>
+                <td style="padding:5px 8px;text-align:right">${pdValidDate(won)?fmtDate(won).slice(0,6):'—'}</td>
+                <td style="padding:5px 8px;text-align:right;color:${cycle!=null?(cycle<=30?'#2a7a4b':cycle<=60?'#c25a00':'#e05252'):'#999'}">${cycle!=null?cycle+'d':'—'}</td>
               </tr>`;
             }).join('')}
           </tbody>
@@ -8232,7 +8241,7 @@ function renderPdSales(sc) {
       <div class="box-title">Win / loss analysis: ${range.label} · ${pipelineLabel}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">
         <div>
-          <div style="font-size:12px;color:var(--tl);margin-bottom:8px">Why deals were lost · ${lostDeals.length} lost · close rate <b>${wlOverall!=null?fmtPct(wlOverall):':'}</b></div>
+          <div style="font-size:12px;color:var(--tl);margin-bottom:8px">Why deals were lost · ${lostDeals.length} lost · close rate <b>${wlOverall!=null?fmtPct(wlOverall):'—'}</b></div>
           ${wlReasonEntries.length ? `<div class="chart-wrap" style="height:${Math.max(180, wlReasonEntries.length*34)}px"><canvas id="pd-winloss-reasons"></canvas></div>` : '<div class="no-data">No lost deals in this period.</div>'}
         </div>
         <div>
@@ -8542,7 +8551,7 @@ function renderPdChurn(sc) {
         <div class="card-sub">of ${everPaid.length} ever-paid users</div>
       </div>
       <div class="card">
-        <div class="card-label" style="display:flex;align-items:center;gap:0">Overall churn rate${infoBtn('Overall churn rate','<span class="src-tag">Pipedrive · People</span><br>Revenue churned ÷ total people who ever held a Paid Subscription. All-time figure: not annualised.<br><div class="calc-row">Revenue churned / (Active paid + Revenue churned)</div>')}</div>
+        <div class="card-label" style="display:flex;align-items:center;gap:0">Overall churn rate${infoBtn('Overall churn rate','<span class="src-tag">Pipedrive · People</span><br>Revenue churned ÷ total people who ever held a Paid Subscription. All-time figure — not annualised.<br><div class="calc-row">Revenue churned / (Active paid + Revenue churned)</div>')}</div>
         ${overallChurnRate != null
           ? `<div class="card-value" style="color:${overallChurnRate>30?'var(--re)':overallChurnRate>15?'#c25a00':'var(--gr)'}">${fmtPct(overallChurnRate)}</div><div class="card-sub">all-time · not annualised</div>`
           : '<div class="card-nodata">no data</div>'}
@@ -8621,9 +8630,9 @@ function renderPdChurn(sc) {
                 <td style="padding:5px 8px">${p['Person - Name']||p['Name']||':'}</td>
                 <td style="padding:5px 8px;color:var(--tl)">${p['Person - Organisation']||':'}</td>
                 <td style="padding:5px 8px;color:var(--tl);font-size:11px">${p['Person - Previous Customer Type']||':'}</td>
-                <td style="padding:5px 8px;text-align:right;color:var(--tl)">${pdValidDate(granted)?fmtDate(granted).slice(0,6):':'}</td>
-                <td style="padding:5px 8px;text-align:right;color:#e05252">${pdValidDate(removed)?fmtDate(removed).slice(0,6):':'}</td>
-                <td style="padding:5px 8px;text-align:right;color:${tenDays!=null?(tenDays>=365?'#2a7a4b':tenDays>=90?'#c25a00':'#e05252'):'#999'}">${tenDays!=null?tenDays+'d':':'}</td>
+                <td style="padding:5px 8px;text-align:right;color:var(--tl)">${pdValidDate(granted)?fmtDate(granted).slice(0,6):'—'}</td>
+                <td style="padding:5px 8px;text-align:right;color:#e05252">${pdValidDate(removed)?fmtDate(removed).slice(0,6):'—'}</td>
+                <td style="padding:5px 8px;text-align:right;color:${tenDays!=null?(tenDays>=365?'#2a7a4b':tenDays>=90?'#c25a00':'#e05252'):'#999'}">${tenDays!=null?tenDays+'d':'—'}</td>
               </tr>`;
             }).join('')}
           </tbody>
@@ -9098,7 +9107,7 @@ function renderPdTrials(sc) {
             const conv = i > 0 && reachedStage[i-1] ? pct(n, reachedStage[i-1]) : null;
             const cls = conv == null ? '' : conv > 75 ? 'good' : conv > 40 ? 'mid' : 'bad';
             return `<tr><td style="font-size:12px">${s}</td><td style="text-align:right;font-weight:600">${n}</td>
-              <td style="text-align:right">${conv!=null?`<span class="conv-pct ${cls}">${fmtPct(conv)}</span>`:':'}</td></tr>`;
+              <td style="text-align:right">${conv!=null?`<span class="conv-pct ${cls}">${fmtPct(conv)}</span>`:'—'}</td></tr>`;
           }).join('')}
           <tr style="border-top:2px solid var(--bor)"><td style="font-size:12px;color:var(--re)">Closed Lost</td><td style="text-align:right;font-weight:600;color:var(--re)">${openByStage['Closed Lost']||lostTrials.length}</td><td></td></tr>
           </tbody></table>` : '<div class="no-data">No trial deal data.</div>'}
@@ -9573,7 +9582,7 @@ function renderPdOptimax(sc) {
 
     // ── Col 3: Current % (conversion rate from Pipedrive) ───────────────────
     // Stage 1: no prior stage, show :
-    // Deal value: no conversion %, show :
+    // Deal value — no conversion %, show :
     // Conv stages: from Pipedrive actuals
     let currPctCell;
     if (r.id === 'leads' || r.id === 'dealval' || r.isEntry) {
@@ -9582,7 +9591,7 @@ function renderPdOptimax(sc) {
       const label = (r.id === 'contact' && showImp) ? '<div style="font-size:9px;color:var(--tl)">of impressions</div>' : '';
       currPctCell = r.currPct!=null
         ? `<span class="conv-pct ${r.currPct>=70?'good':r.currPct>=40?'mid':'bad'}">${fmtPct(r.currPct)}</span>${label}`
-        : ':';
+        : '—';
     }
 
     // ── Col 4: Target # per month (computed projected count) ────────────────
@@ -9598,11 +9607,11 @@ function renderPdOptimax(sc) {
     } else if (r.id === 'dealval') {
       tgtCountCell = `<span style="font-weight:600;color:var(--gr)" title="${fmtDollar(avgDealVal)} × (1 + ${dealValTargetPct}%)">${fmtDollar(dealValTarget)}</span><div style="font-size:9px;color:var(--tl)">target avg deal</div>`;
     } else {
-      tgtCountCell = `<span style="font-weight:600;color:var(--gr)">${prj!=null?fmt1(prj):':'}</span>`;
+      tgtCountCell = `<span style="font-weight:600;color:var(--gr)">${prj!=null?fmt1(prj):'—'}</span>`;
     }
 
     // ── Col 5: Target % (editable input) ────────────────────────────────────
-    // Stage 1: no conversion %, show :
+    // Stage 1 — no conversion %, show :
     // Conv stages + deal value: editable % input (deal value allows >100%)
     let tgtPctCell;
     if (r.id === 'leads' || r.isEntry) {
@@ -9632,7 +9641,7 @@ function renderPdOptimax(sc) {
     }
     const actualHTML = actualPct != null
       ? `<span class="conv-pct ${actualPct>=0?'good':'bad'}">${actualPct>=0?'+':''}${actualPct}%</span>`
-      : ':';
+      : '—';
 
     // ── Col 7: Cumulative % Increase ─────────────────────────────────────────
     // Stage 1: same as actual% (first stage, no prior chain)
@@ -9654,7 +9663,7 @@ function renderPdOptimax(sc) {
     }
     const cumulativeHTML = cumulativePct != null
       ? `<span class="conv-pct ${cumulativePct>=0?'good':'bad'}">${cumulativePct>=0?'+':''}${cumulativePct}%</span>`
-      : ':';
+      : '—';
 
     return `<tr>
       <td><div style="font-weight:500;display:flex;align-items:center;gap:2px;flex-wrap:wrap">${r.label}${r.calc?infoBtn(r.label, r.calc):''}</div>${r.desc?`<div style="font-size:11px;color:var(--tl);margin-top:2px">${r.desc}</div>`:''}</td>
@@ -9775,7 +9784,7 @@ function renderPdOptimax(sc) {
     <div class="cards" style="margin-bottom:18px">
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Won ${unitLabel} (${isLic ? 'all time' : 'past ' + monthsElapsed + ' mo'})${infoBtn('Won '+unitLabel,'<span class="src-tag">Pipedrive · 2026 Sales</span><br>Count of '+unitLabel+' with Status = Won.<br><div class="calc-row">'+(isLic?'SUM(Product quantity of won deals)':'COUNT(Won deals)')+'</div>')}</div><div class="card-value">${wonCurr}</div><div class="card-sub">2026 Sales pipeline · ${fmt1(currMoRate)}/mo avg</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Avg licence won cost${infoBtn('Average licence won cost','<span class="src-tag">Pipedrive · Won Deals</span><br>The real average price per licence once discounts are factored in.<br><div class="calc-row">Total won revenue ÷ total licences sold (Product quantity)<br>'+(licCostFromData?fmtDollar(qtyWonValue)+' ÷ '+totalLicencesSold.toLocaleString()+' = '+fmtDollar(avgLicWonCost):'no Product quantity yet: assumed')+'</div>')}</div><div class="card-value">${fmtDollar(avgLicWonCost)}</div><div class="card-sub">${licCostFromData?totalLicencesSold.toLocaleString()+' licences sold':'assumed: add Product quantity'}</div></div>
-      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Projected won / month${infoBtn('Projected won / month','<span class="src-tag">Calculated</span><br>Won '+unitLabel+' per month if every target conversion rate is hit.<br><div class="calc-row">Monthly Contact target × chained target % at each stage</div>')}</div><div class="card-value" style="color:var(--gr)">${projWon!=null?fmt1(projWon):':'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">${projImpPct>=0?'+':''}${projImpPct}% vs ${fmt1(currMoRate)}/mo current</div>`:''}</div>
+      <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Projected won / month${infoBtn('Projected won / month','<span class="src-tag">Calculated</span><br>Won '+unitLabel+' per month if every target conversion rate is hit.<br><div class="calc-row">Monthly Contact target × chained target % at each stage</div>')}</div><div class="card-value" style="color:var(--gr)">${projWon!=null?fmt1(projWon):'—'}</div>${projImpPct!=null?`<div class="card-sub" style="color:var(--gr)">${projImpPct>=0?'+':''}${projImpPct}% vs ${fmt1(currMoRate)}/mo current</div>`:''}</div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Revenue / month (current)${infoBtn('Revenue / month (current)','<span class="src-tag">Pipedrive · Won Deals</span><br>Current won run-rate × average deal value.<br><div class="calc-row">(Won deals ÷ months since first deal) × avg deal value ('+fmtDollar(avgDealVal)+')</div>')}</div><div class="card-value">${fmtDollar(currRevMonth)}</div><div class="card-sub">${fmtDollar(currRevYear)}/yr at current rate</div></div>
       <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Revenue / month (target)${infoBtn('Revenue / month (target)','<span class="src-tag">Calculated</span><br>Projected won run-rate × average deal value.<br><div class="calc-row">(Projected won ÷ months) × avg deal value</div>')}</div><div class="card-value" style="color:var(--gr)">${fmtDollar(projRevMonth)}</div><div class="card-sub" style="color:var(--gr)">+${fmtDollar(projRevMonth-currRevMonth)}/mo uplift</div></div>
     </div>
@@ -10152,9 +10161,9 @@ function renderPdHealth(sc) {
       <td style="text-align:center;font-size:11px;color:${o.scoreTrain>=15?'#2a7a4b':o.scoreTrain>=10?'#555':'#e05252'}">${o.scoreTrain}/20</td>
       <td style="text-align:center;font-size:11px;color:${o.scoreVal>=10?'#2a7a4b':o.scoreVal>=5?'#555':'#e05252'}">${o.scoreVal}/15</td>
       <td style="text-align:center;font-size:11px;color:${o.scorePH>=15?'#2a7a4b':o.scorePH>=10?'#555':'#e05252'}">${o.scorePH}/20${o.lastUsed?`<br><span style="color:var(--tl);font-size:10px">${fmtDate(o.lastUsed).slice(0,6)}</span>`:''}</td>
-      <td style="text-align:center;font-size:11px;">${o.tCount || ':'}</td>
-      <td style="text-align:center;font-size:11px;">${o.accessDate ? fmtDate(o.accessDate).slice(0,6) : ':'}</td>
-      <td style="text-align:right;font-size:11px;">${o.dealValue ? fmtCur(o.dealValue) : ':'}</td>
+      <td style="text-align:center;font-size:11px;">${o.tCount || '—'}</td>
+      <td style="text-align:center;font-size:11px;">${o.accessDate ? fmtDate(o.accessDate).slice(0,6) : '—'}</td>
+      <td style="text-align:right;font-size:11px;">${o.dealValue ? fmtCur(o.dealValue) : '—'}</td>
     </tr>`).join('');
 
   sc.innerHTML = `
@@ -10302,7 +10311,7 @@ function showExportGuide() {
       <div style="display:flex;gap:16px;flex-wrap:wrap">
         ${col('💰 Deals CSV', 'var(--navy)', [
           step(1, '<b>Deals</b> (left sidebar) → switch to <b>List view</b> (the rows icon, not the kanban board).'),
-          step(2, 'Set the filter to <b>“All deals”</b> and owner to <b>“Everyone”</b>: so you get won <i>and</i> lost <i>and</i> open, for everyone.'),
+          step(2, 'Set the filter to <b>“All deals”</b> and owner to <b>“Everyone”</b> — so you get won <i>and</i> lost <i>and</i> open, for everyone.'),
           step(3, 'Click the <b>columns / gear icon</b> and switch on: Value, Status, Stage, Pipeline, Won time, Deal created, Owner, Source, Organisation.'),
           step(4, 'Tick the <b>checkbox in the header row</b> to select all (click “Select all NN” if it appears).'),
           step(5, 'Click <b>“⋯” → Export filter results → CSV</b>. If asked, choose <b>All columns</b>.'),
