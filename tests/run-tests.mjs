@@ -65,6 +65,9 @@ const pieces = {
   FY27_DEF: extractBalanced(/const FY27_DEF = \{/),
   fy27: extractBalanced(/function fy27\(\) \{/),
   fy27Range: extractBalanced(/function fy27Range\(\) \{/),
+  NON_NEW_BUSINESS_PIPELINES: extractLine(/const NON_NEW_BUSINESS_PIPELINES = /),
+  isNewBusinessPipeline: extractBalanced(/function isNewBusinessPipeline\(/),
+  numOr: extractLine(/const numOr = /),
   pct: extractLine(/const pct = /),
   pdParseDate: extractBalanced(/const pdParseDate = /),
   pdValidDate: extractLine(/const pdValidDate = /),
@@ -95,9 +98,9 @@ function makeSandbox({ deals = [], people = [], ph = { weekly: [] }, ls = {} } =
     Date: class extends Date { constructor(...a) { a.length ? super(...a) : super(FIXED_NOW.getTime()); } static now() { return FIXED_NOW.getTime(); } },
   };
   vm.createContext(sandbox);
-  const bundle = ['FY27_DEF', 'fy27', 'fy27Range', 'pct', 'pdParseDate', 'pdValidDate', 'isTrialType', 'OM_FS', 'omReached', 'omModel', 'METRICS', 'mVal', 'mTest', 'mDoc']
+  const bundle = ['FY27_DEF', 'fy27', 'fy27Range', 'NON_NEW_BUSINESS_PIPELINES', 'isNewBusinessPipeline', 'numOr', 'pct', 'pdParseDate', 'pdValidDate', 'isTrialType', 'OM_FS', 'omReached', 'omModel', 'METRICS', 'mVal', 'mTest', 'mDoc']
     .map(k => pieces[k]).join('\n');
-  vm.runInContext(bundle + '\nthis.__x = { pct, pdParseDate, pdValidDate, isTrialType, omReached, omModel, METRICS, mVal, mTest, mDoc };', sandbox);
+  vm.runInContext(bundle + '\nthis.__x = { pct, pdParseDate, pdValidDate, isTrialType, omReached, omModel, METRICS, mVal, mTest, mDoc, numOr, isNewBusinessPipeline };', sandbox);
   return sandbox.__x;
 }
 
@@ -197,27 +200,61 @@ console.log('\n6b. FY27 model (window edges, retention, margin)');
     // margin fixture: 2026 Sales, won BEFORE FY27 (so they don't pollute fy27_revenue)
     { 'Deal - Pipeline': '2026 Sales', 'Deal - Status': 'Won', 'Deal - Won time': '2026-03-01 10:00:00', 'Deal - Value': '8000', 'Deal - Product quantity': '1' },
     { 'Deal - Pipeline': '2026 Sales', 'Deal - Status': 'Won', 'Deal - Won time': '2026-04-01 10:00:00', 'Deal - Value': '8000', 'Deal - Product quantity': '1' },
-    // FY27 window edges (any pipeline counts toward FY27 revenue)
-    { 'Deal - Pipeline': '2027 Renewals', 'Deal - Status': 'Won', 'Deal - Won time': '2026-06-30 23:00:00', 'Deal - Value': '1000', 'Deal - Product quantity': '9' },  // day BEFORE FY27 → excluded
-    { 'Deal - Pipeline': '2027 Renewals', 'Deal - Status': 'Won', 'Deal - Won time': '2026-07-01 09:00:00', 'Deal - Value': '4000', 'Deal - Product quantity': '2' },  // first day → included
-    { 'Deal - Pipeline': '2027 Renewals', 'Deal - Status': 'Won', 'Deal - Won time': '2027-06-30 12:00:00', 'Deal - Value': '8000', 'Deal - Product quantity': '3' },  // last day → included
-    { 'Deal - Pipeline': '2027 Renewals', 'Deal - Status': 'Won', 'Deal - Won time': '2027-07-01 09:00:00', 'Deal - Value': '999',  'Deal - Product quantity': '9' },  // FY28 → excluded
-    { 'Deal - Pipeline': '2027 Renewals', 'Deal - Status': 'Open' },                                                                                                    // open → excluded
+    // FY27 window edges — new-business pipeline
+    { 'Deal - Pipeline': '2026 Sales', 'Deal - Status': 'Won', 'Deal - Won time': '2026-06-30 23:00:00', 'Deal - Value': '1000', 'Deal - Product quantity': '9' },  // day BEFORE FY27 → excluded
+    { 'Deal - Pipeline': '2026 Sales', 'Deal - Status': 'Won', 'Deal - Won time': '2026-07-01 09:00:00', 'Deal - Value': '4000', 'Deal - Product quantity': '2' },  // first day → included
+    { 'Deal - Pipeline': '2026 Sales', 'Deal - Status': 'Won', 'Deal - Won time': '2027-06-30 12:00:00', 'Deal - Value': '8000', 'Deal - Product quantity': '3' },  // last day → included
+    { 'Deal - Pipeline': '2026 Sales', 'Deal - Status': 'Won', 'Deal - Won time': '2027-07-01 09:00:00', 'Deal - Value': '999',  'Deal - Product quantity': '9' },  // FY28 → excluded
+    { 'Deal - Pipeline': '2026 Sales', 'Deal - Status': 'Open' },                                                                                                    // open → excluded
+    // Renewal won INSIDE FY27: revenue counts toward $1.61M, seats must NOT count as "new"
+    { 'Deal - Pipeline': '2027 Renewals', 'Deal - Status': 'Won', 'Deal - Won time': '2026-09-01 10:00:00', 'Deal - Value': '6000', 'Deal - Product quantity': '7' },
   ];
   const fyPeople = [
-    { 'Person - Customer Type': 'Access Revoked', 'Person - Previous Customer Type': 'Contact Register, Paid Subscription', 'Person - Date Access Removed': '2026-08-01' }, // paid churn IN FY27 → counts
-    { 'Person - Customer Type': 'Access Revoked', 'Person - Previous Customer Type': 'Paid Subscription', 'Person - Date Access Removed': '2026-05-01' },                   // churned BEFORE FY27 → no
-    { 'Person - Customer Type': 'Access Revoked', 'Person - Previous Customer Type': '2 Week Trial Licence', 'Person - Date Access Removed': '2026-08-01' },                // trial churn → no
+    // pre-FY27 cohort, churned inside FY27 → the only one that reduces retention
+    { 'Person - Customer Type': 'Access Revoked', 'Person - Previous Customer Type': 'Contact Register, Paid Subscription', 'Person - Date Access Granted': '2025-09-01', 'Person - Date Access Removed': '2026-08-01' },
+    { 'Person - Customer Type': 'Access Revoked', 'Person - Previous Customer Type': 'Paid Subscription', 'Person - Date Access Granted': '2025-09-01', 'Person - Date Access Removed': '2026-05-01' }, // churned BEFORE FY27 → no
+    { 'Person - Customer Type': 'Access Revoked', 'Person - Previous Customer Type': '2 Week Trial Licence', 'Person - Date Access Granted': '2025-09-01', 'Person - Date Access Removed': '2026-08-01' }, // trial churn → no
+    // acquired DURING FY27 then churned → must NOT decrement the pre-existing base
+    { 'Person - Customer Type': 'Access Revoked', 'Person - Previous Customer Type': 'Paid Subscription', 'Person - Date Access Granted': '2026-08-15', 'Person - Date Access Removed': '2027-01-10' },
     { 'Person - Customer Type': 'Paid Subscription' },
   ];
   const x = makeSandbox({ deals: fyDeals, people: fyPeople });
-  check('FY27 revenue counts 1 Jul 2026 → 30 Jun 2027 only (4000+8000=12000)', x.mVal('fy27_revenue') === 12000, `got ${x.mVal('fy27_revenue')}`);
+  check('FY27 revenue counts 1 Jul 2026 → 30 Jun 2027 only, all pipelines (4000+8000+6000=18000)', x.mVal('fy27_revenue') === 18000, `got ${x.mVal('fy27_revenue')}`);
   check('FY27 new licences windowed the same way (2+3=5)', x.mVal('fy27_new_licences') === 5, `got ${x.mVal('fy27_new_licences')}`);
-  check('base retention = 180 − 1 paid churn inside FY27 = 179', x.mVal('fy27_base_retention') === 179, `got ${x.mVal('fy27_base_retention')}`);
-  const margin = x.mVal('licence_margin');   // avg price 16000÷2=8000; (8000−3499)÷8000 = 56.2625%
+  check('renewal seats do NOT count as new licences (the 7-seat renewal is excluded)', x.mVal('fy27_new_licences') === 5, `got ${x.mVal('fy27_new_licences')} — renewal leaked in`);
+  check('isNewBusinessPipeline: 2026 Sales yes; renewals/onboarding/internal no',
+    x.isNewBusinessPipeline('2026 Sales') && x.isNewBusinessPipeline('Cold Outreach')
+    && !x.isNewBusinessPipeline('2027 Renewals') && !x.isNewBusinessPipeline('General Onboarding Pipeline') && !x.isNewBusinessPipeline('WSP Internal Pipeline'));
+  check('base retention = 180 − 1 (only the pre-FY27 cohort churn counts) = 179', x.mVal('fy27_base_retention') === 179, `got ${x.mVal('fy27_base_retention')}`);
+  check('a customer WON during FY27 who churns does not reduce the base', x.mVal('fy27_base_retention') === 179, `got ${x.mVal('fy27_base_retention')} — FY27-acquired churn leaked in`);
+  // Margin gets its OWN fixture: it reads every won 2026-Sales deal, so sharing
+  // the FY27 window fixture above would silently change the expected average.
+  const marginDeals = [
+    { 'Deal - Pipeline': '2026 Sales', 'Deal - Status': 'Won', 'Deal - Won time': '2026-03-01 10:00:00', 'Deal - Value': '8000', 'Deal - Product quantity': '1' },
+    { 'Deal - Pipeline': '2026 Sales', 'Deal - Status': 'Won', 'Deal - Won time': '2026-04-01 10:00:00', 'Deal - Value': '8000', 'Deal - Product quantity': '1' },
+  ];
+  const xm = makeSandbox({ deals: marginDeals });
+  const margin = xm.mVal('licence_margin');   // avg price 16000÷2=8000; (8000−3499)÷8000 = 56.2625%
   check('licence margin = (8000−3499)÷8000 ≈ 56.3%', margin != null && Math.abs(margin - 56.2625) < 0.01, `got ${margin}`);
-  const x2 = makeSandbox({ deals: fyDeals, people: fyPeople, ls: { liq_fy27: JSON.stringify({ cost_per_licence_now: 584 }) } });
-  check('config override flows through (3.0 cost $584 → margin ≈ 92.7%)', Math.abs(x2.mVal('licence_margin') - ((8000 - 584) / 8000 * 100)) < 0.01, `got ${x2.mVal('licence_margin')}`);
+  const xm2 = makeSandbox({ deals: marginDeals, ls: { liq_fy27: JSON.stringify({ cost_per_licence_now: 584 }) } });
+  check('config override flows through (3.0 cost $584 → margin ≈ 92.7%)', Math.abs(xm2.mVal('licence_margin') - ((8000 - 584) / 8000 * 100)) < 0.01, `got ${xm2.mVal('licence_margin')}`);
+}
+
+// ── 6c. Zero-vs-no-data and the empty-value placeholder ─────────────────────
+console.log('\n6c. Zero is a real number; "no data" means absent source');
+{
+  const { numOr } = makeSandbox();
+  check('numOr(0, hasSource) === 0 (renders "0", not "no data")', numOr(0, true) === 0);
+  check('numOr(5, hasSource) === 5', numOr(5, true) === 5);
+  check('numOr(anything, no source) === null (renders "no data")', numOr(0, false) === null && numOr(7, false) === null);
+  check('numOr(null/undefined, hasSource) === 0', numOr(null, true) === 0 && numOr(undefined, true) === 0);
+  // cardHTML must test disp against null, not truthiness, or a formatted "0" could vanish
+  check('cardHTML renders on `disp != null` (not truthiness)', /\$\{disp != null \?/.test(html),
+    'cardHTML reverted to a truthy check — a zero value would render as "no data"');
+  // The bare-colon placeholder must not come back
+  const colonPlaceholders = (html.match(/[:?]\s*':'/g) || []).length;
+  check('no bare-colon empty-value placeholders remain (em dash instead)', colonPlaceholders === 0,
+    `found ${colonPlaceholders} — use '—' for empty values`);
 }
 
 // ── 7. Drift guards — render sites must USE the registry ─────────────────────

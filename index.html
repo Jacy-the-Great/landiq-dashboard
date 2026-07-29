@@ -376,6 +376,14 @@ window.fy27Reset = () => { localStorage.removeItem('liq_fy27'); if (typeof rende
 // deals on day one of the FY (caught by tests §6b).
 function fy27Range() { const f = fy27(); const [y, m, d] = String(f.fy_start || '2026-07-01').split('-').map(Number); const from = new Date(y, (m || 1) - 1, d || 1); const to = new Date(y + 1, (m || 1) - 1, 0, 23, 59, 59, 999); return { from, to }; }
 
+// Pipelines that do NOT represent a NEW licence sale. Renewals are existing
+// customers (counting them as "new" would inflate the 624 target the moment
+// renewals start closing); onboarding is post-sale (double-count); the rest are
+// internal/non-commercial. Anything else — incl. a future new sales pipeline —
+// counts as new business by default.
+const NON_NEW_BUSINESS_PIPELINES = ['2027 Renewals', 'General Onboarding Pipeline', 'WSP Internal Pipeline', 'Feedback Pipeline'];
+function isNewBusinessPipeline(p) { return !NON_NEW_BUSINESS_PIPELINES.includes(String(p || '').trim()); }
+
 let _authState   = 'initialising'; // 'initialising'|'authenticated'|'unauthenticated'|'refreshing'
 let _authSession = null;
 let _authEmail   = null;
@@ -1426,19 +1434,21 @@ const METRICS = {
   fy27_new_licences: {
     label: 'New licences sold this financial year',
     src: 'Pipedrive · deal products — nightly API sync',
-    desc: 'Seats sold on deals won since 1 Jul 2026 (from each deal\'s attached products), toward the 624 new-licence FY27 target.',
-    formula: 'SUM(Product quantity) over Status = Won AND Won time in FY27',
-    compute: () => { const r = fy27Range(); return _pd_deals.filter(d => d['Deal - Status'] === 'Won' && (() => { const t = pdParseDate(d['Deal - Won time']); return pdValidDate(t) && t >= r.from && t <= r.to; })()).reduce((s, d) => s + (parseFloat(d['Deal - Product quantity']) || 0), 0); },
+    desc: 'Seats sold on <b>new-business</b> deals won since 1 Jul 2026 (from each deal\'s attached products), toward the 624 new-licence FY27 target. Renewals, onboarding and internal pipelines are excluded so a renewed seat is never counted as a new sale.',
+    formula: 'SUM(Product quantity) over Status = Won AND Won time in FY27 AND pipeline is new-business',
+    compute: () => { const r = fy27Range(); return _pd_deals.filter(d => isNewBusinessPipeline(d['Deal - Pipeline']) && d['Deal - Status'] === 'Won' && (() => { const t = pdParseDate(d['Deal - Won time']); return pdValidDate(t) && t >= r.from && t <= r.to; })()).reduce((s, d) => s + (parseFloat(d['Deal - Product quantity']) || 0), 0); },
   },
   fy27_base_retention: {
     label: 'Existing base retained',
     src: 'Pipedrive · People — nightly API sync',
-    desc: 'Of the customer base at FY27 start (config: 180), how many have NOT churned since 1 Jul 2026. Churn = Customer Type became Access Revoked with a previous type including Paid Subscription and a removal date inside FY27. Target: 126 retained (70%).',
-    formula: 'base at FY27 start − paid churn since 1 Jul 2026',
+    desc: 'Of the customers who were already on the books at FY27 start (config: 180), how many have <b>not</b> churned since 1 Jul 2026. Only churn of that <b>pre-existing cohort</b> counts — a customer won during FY27 who later leaves does not reduce this number (they were never part of the base). Target: 126 retained (70%).',
+    formula: 'base at FY27 start − paid churn of customers granted access before 1 Jul 2026',
     compute: () => {
       const f = fy27(); const r = fy27Range();
       const churned = _pd_people.filter(p => p['Person - Customer Type'] === 'Access Revoked'
         && String(p['Person - Previous Customer Type'] || '').includes('Paid Subscription')
+        // Cohort test: only people who already had access before FY27 started.
+        && (() => { const g = pdParseDate(p['Person - Date Access Granted']); return pdValidDate(g) && g < r.from; })()
         && (() => { const t = pdParseDate(p['Person - Date Access Removed']); return pdValidDate(t) && t >= r.from && t <= r.to; })()).length;
       return Math.max(0, (f.base_customers || 0) - churned);
     },
@@ -1575,17 +1585,28 @@ function destroyAllCharts() {
 // ─────────────────────────────────────────
 // SUMMARY CARD BUILDER
 // ─────────────────────────────────────────
+// Zero is a real measurement; "no data" means the SOURCE is absent.
+// Call sites used to pass `count || null`, which turned a true 0 into "no data"
+// — e.g. "Churned this month — no data" hid the good news of zero churn, and
+// "New licences (FY27) — no data" was false when the answer was 0.
+// Use: numOr(count, _pd_deals.length > 0)  → 0 renders "0", empty source renders "no data".
+const numOr = (value, hasSource) => hasSource ? (value ?? 0) : null;
+
 function cardHTML(label, value, prev, type, sub, info) {
-  let disp = value == null ? null : type === '$' ? fmtDollar(value) : type === '%' ? fmtPct(value) : fmtNum(value);
+  // A string value is already formatted (e.g. a target-only "500 / 250") and is
+  // shown verbatim rather than run through the numeric formatters.
+  let disp = value == null ? null
+    : typeof value === 'string' ? value
+    : type === '$' ? fmtDollar(value) : type === '%' ? fmtPct(value) : fmtNum(value);
   let changeHTML = '';
-  if (value != null && prev != null && prev !== 0) {
+  if (typeof value === 'number' && prev != null && prev !== 0) {
     const d = ((value - prev) / prev * 100).toFixed(1);
     const up = value >= prev;
     changeHTML = `<div class="card-change ${up ? 'up' : 'dn'}">${up ? '▲' : '▼'} ${d}%</div>`;
   }
   return `<div class="card">
     <div class="card-label" style="display:flex;align-items:center;gap:0;flex-wrap:wrap">${label}${info ? infoBtn(label, info) : ''}</div>
-    ${disp ? `<div class="card-value">${disp}</div>` : '<div class="card-nodata">no data</div>'}
+    ${disp != null ? `<div class="card-value">${disp}</div>` : '<div class="card-nodata">no data</div>'}
     ${changeHTML}
     ${sub ? `<div class="card-sub">${sub}</div>` : ''}
   </div>`;
@@ -1829,13 +1850,13 @@ function renderHome(el) {
 `;
   el.innerHTML += `
     ${cardsHTML([
-      ['Won deals (this month)', pdWonThisMonth.length || null, wonLastMonth.length || null, null, 'vs last month · 2026 Sales',
+      ['Won deals (this month)', numOr(pdWonThisMonth.length, _pd_deals.length > 0), numOr(wonLastMonth.length, _pd_deals.length > 0), null, 'vs last month · 2026 Sales',
         '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with <b>Status = Won</b> and <b>Won time</b> in the current calendar month. The ▲/▼ compares to last calendar month.<br><div class="calc-row">Filter: Pipeline = "2026 Sales" AND Status = "Won" AND Won time in current month</div>'],
-      ['Revenue (this month)', pdRevThisMonth || null, revLastMonth || null, '$', 'vs last month · 2026 Sales',
+      ['Revenue (this month)', numOr(pdRevThisMonth, _pd_deals.length > 0), numOr(revLastMonth, _pd_deals.length > 0), '$', 'vs last month · 2026 Sales',
         '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Sum of <b>Deal Value</b> for all Won deals with Won time in the current calendar month. The ▲/▼ compares to last calendar month.<br><div class="calc-row">SUM(Deal Value) where Status = "Won" AND Won time in current month</div>'],
       ['Win rate (2026 Sales)', mVal('win_rate'), null, '%', 'Won ÷ Contacts · past ' + omModel().months + ' mo · matches Pipedrive',
         mDoc('win_rate', 'Currently: ' + omModel().wonCount + ' won ÷ ' + omModel().counts[0] + ' contacts, past ' + omModel().months + ' months. The close rate here is ' + fmtPct(mVal('close_rate')) + '.')],
-      ['Active paid subscribers', pdActivePaid || null, null, null, 'Target: 600',
+      ['Active paid subscribers', numOr(pdActivePaid, _pd_people.length > 0), null, null, 'Target: 600',
         '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND either no Date Access Removed, or Date Access Removed is in the future.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
     ])}
 
@@ -1861,13 +1882,13 @@ function renderHome(el) {
             const d = pdParseDate(rem); return pdValidDate(d) && d > new Date();
           });
           return [
-            ['Won deals (last 30d)', wonLast30.length || null, null, null, 'from 2026 Sales',
+            ['Won deals (last 30d)', numOr(wonLast30.length, _pd_deals.length > 0), null, null, 'from 2026 Sales',
               '<span class="src-tag">Pipedrive · 2026 Sales</span><br>Deals with Status = Won and <b>Won time within 30 days of today</b>. Rolling 30-day window, not calendar month.<br><div class="calc-row">Status = "Won" AND Won time ≥ (today − 30 days)</div>'],
-            ['Open deals (pipeline)', openDeals.length || null, null, null, '2026 Sales · current',
+            ['Open deals (pipeline)', numOr(openDeals.length, _pd_deals.length > 0), null, null, '2026 Sales · current',
               '<span class="src-tag">Pipedrive · 2026 Sales</span><br>All deals with <b>Status = Open</b> in the 2026 Sales pipeline. Current snapshot: no date filter applied. Includes deals at any stage.'],
-            ['Active trials (all types)', trialPeople.length || null, null, null, 'current snapshot',
+            ['Active trials (all types)', numOr(trialPeople.length, _pd_people.length > 0), null, null, 'current snapshot',
               '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type containing "trial"</b> (2 Week Trial Licence, Extended Trial Licence, etc.) AND either no Date Access Removed, or Date Access Removed is in the future.<br><div class="calc-row">isTrialType(Customer Type) AND (Access Removed is null OR Access Removed > today)</div>'],
-            ['Active paid subscribers', pdActivePaid || null, null, null, 'Target: 600',
+            ['Active paid subscribers', numOr(pdActivePaid, _pd_people.length > 0), null, null, 'Target: 600',
               '<span class="src-tag">Pipedrive · People</span><br>People with <b>Customer Type = "Paid Subscription"</b> AND either no Date Access Removed, or Date Access Removed is in the future.<br><div class="calc-row">Customer Type = "Paid Subscription" AND (Access Removed is null OR Access Removed > today)</div>'],
           ].map(args => cardHTML(...args)).join('');
         })()}
@@ -1887,9 +1908,9 @@ function renderHome(el) {
           const content = load('content');
           const postsThisMonth = thisMonth(content, 'date').length;
           return [
-            ['Webinars held (2026)', wbThisYear.length || null, null, null, 'held to date',
+            ['Webinars held (2026)', numOr(wbThisYear.length, webinars.length > 0), null, null, 'held to date',
               '<span class="src-tag">Manual · Webinar log</span><br>Count of 2026 webinars that have <b>already been held</b> (date on or before today). Upcoming/planned webinars with a future date are excluded, so this reflects webinars actually delivered. Entered in the Marketing tab.'],
-            ['Content posts this month', postsThisMonth || null, null, null, null,
+            ['Content posts this month', numOr(postsThisMonth, content.length > 0), null, null, null,
               '<span class="src-tag">Manual · Content log</span><br>Count of content log entries with <b>date in the current calendar month</b>. All content types included (LinkedIn, YouTube, EDM, etc.). Entered in the Marketing tab.'],
           ].map(args => cardHTML(...args)).join('');
         })()}
@@ -2093,18 +2114,19 @@ function renderExec(el) {
 
     <!-- FY2026-27 model progress -->
     ${cardsHTML([
-      ['New licences (FY27)', fyNewLic || null, null, null, 'Target ' + fmtNum(F.new_licences) + ' this financial year', mDoc('fy27_new_licences')],
+      ['New licences (FY27)', numOr(fyNewLic, _pd_deals.length > 0), null, null, 'Target ' + fmtNum(F.new_licences) + ' this financial year', mDoc('fy27_new_licences')],
       ['Existing base retained', fyRetained, null, null, 'Target ' + fmtNum(F.retained_target) + ' of ' + fmtNum(F.base_customers) + ' (' + F.retention_pct + '%)', mDoc('fy27_base_retention')],
-      ['Tier mix target', null, null, null, fmtNum(F.base_target) + ' Base ($' + fmtNum(F.price_base) + ') + ' + fmtNum(F.premium_target) + ' Premium ($' + fmtNum(F.price_premium) + ')',
+      ['Tier mix (target only)', fmtNum(F.base_target) + ' / ' + fmtNum(F.premium_target), null, null,
+        fmtNum(F.base_target) + ' Base ($' + fmtNum(F.price_base) + ') + ' + fmtNum(F.premium_target) + ' Premium ($' + fmtNum(F.price_premium) + ') · live once Pipedrive tags each deal',
         '<span class="src-tag">FY27 model · target only</span><br>The Land iQ 3.0 two-tier pricing mix. <b>Live tracking switches on once Pipedrive carries a Licence Tier field</b> — the nightly sync will pick it up automatically. Until then this card shows the target split only.'],
       ['Licence margin (current)', fyMargin, null, '%', 'Target >' + F.margin_target + '% under Land iQ 3.0 · cost $' + fmtNum(F.cost_per_licence_now) + ' → $' + fmtNum(F.cost_per_licence_30) + '/licence', mDoc('licence_margin')],
     ])}
 
     <!-- Supporting metrics -->
     ${cardsHTML([
-      ['Won this month', wonThisMonth.length || null, null, null, wonThisMonth.length ? fmtCur(wonThisMonth.reduce((s,d)=>s+(parseFloat(d['Deal - Value'])||0),0)) + ' new revenue' : null],
-      ['Churned this month', churnedThisMonth.length || null, null, null, 'paid subscribers lost'],
-      ['Active trials', activeTrial.length || null, null, null, 'in progress'],
+      ['Won this month', numOr(wonThisMonth.length, _pd_deals.length > 0), null, null, wonThisMonth.length ? fmtCur(wonThisMonth.reduce((s,d)=>s+(parseFloat(d['Deal - Value'])||0),0)) + ' new revenue' : null],
+      ['Churned this month', numOr(churnedThisMonth.length, _pd_people.length > 0), null, null, 'paid subscribers lost'],
+      ['Active trials', numOr(activeTrial.length, _pd_people.length > 0), null, null, 'in progress'],
       ['Active users (last week)', auNow, auPrev, null, (auEng != null ? auEng + ' did something in-product · ' : '') + 'known people · last full week',
         mDoc('active_users_week', auEng != null ? '<b>Did something (' + fmtNum(auEng) + '):</b> ' + METRICS.active_engaged_week.desc : '')],
     ])}
@@ -2282,7 +2304,7 @@ function renderSales(el) {
       { key: 'won',     label: 'Won',     render: r => fmtNum(r.won) },
       { key: 'lost',    label: 'Lost',    render: r => fmtNum(r.lost) },
       { key: 'wonVal',  label: 'Won $',   render: r => fmtDollar(r.wonVal) },
-      { key: 'winRate', label: 'Win %',   render: r => fmtPct(r.winRate) },
+      { key: 'winRate', label: 'Close %', render: r => fmtPct(r.winRate) },
       { key: 'revenue', label: 'Revenue', render: r => fmtDollar(r.revenue) },
     ], 'week')}
   `;
@@ -8081,7 +8103,7 @@ function renderPdSales(sc) {
         '<span class="src-tag">Pipedrive · ' + pipelineLabel + '</span><br>Sum of <b>Deal Value</b> for won deals, grouped by the calendar month of their <b>Won time</b>. Target line is $2.4M ÷ 12.<br><div class="calc-row">SUM(Deal Value) per month · ' + range.label + '</div>')}<span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:6px">${range.label}</span></div>
       <div class="chart-wrap" style="height:230px"><canvas id="pd-rev-month"></canvas></div></div>
 
-    <div class="box"><div class="box-title">Win rate by month: ${range.label} · ${pipelineLabel}</div>
+    <div class="box"><div class="box-title">Close rate by month — of decided deals only: ${range.label} · ${pipelineLabel}</div>
       <div class="chart-wrap" style="height:210px"><canvas id="pd-winrate"></canvas></div></div>
 
     <div class="box"><div class="box-title">Won vs Lost by month: ${range.label} · ${pipelineLabel}</div>
@@ -8319,7 +8341,7 @@ function renderPdSales(sc) {
       data: {
         labels: months12.map(m => monthLabel(m)),
         datasets: [
-          { label:'Win rate', data:months12.map(m=>winRateByMonth[m]), borderColor:'#2e8bc0', borderWidth:2, tension:.3, pointRadius:3, fill:false, spanGaps:true },
+          { label:'Close rate', data:months12.map(m=>winRateByMonth[m]), borderColor:'#2e8bc0', borderWidth:2, tension:.3, pointRadius:3, fill:false, spanGaps:true },
           { label:'50% target', data:months12.map(()=>50), borderColor:'#c25a00', borderDash:[6,4], borderWidth:2, pointRadius:0, fill:false },
         ]
       },
