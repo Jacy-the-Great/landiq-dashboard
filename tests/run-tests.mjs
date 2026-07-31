@@ -79,6 +79,18 @@ const pieces = {
   mVal: extractBalanced(/function mVal\(/),
   mTest: extractBalanced(/function mTest\(/),
   mDoc: extractBalanced(/function mDoc\(/),
+  ENG_BANDS: extractLine(/const ENG_BANDS = /),
+  engBandIdx: extractLine(/const engBandIdx = /),
+  engSplitRows: extractBalanced(/function engSplitRows\(/),
+  engParseHealth: extractBalanced(/function engParseHealth\(/),
+  ENG_MONTHS: extractLine(/const ENG_MONTHS = /),
+  engParseUsage: extractBalanced(/function engParseUsage\(/),
+  engHealthWeeks: extractLine(/function engHealthWeeks\(\)/),
+  engHealthLatest: extractLine(/function engHealthLatest\(\)/),
+  engUsage: extractLine(/function engUsage\(\)/),
+  engTrainedKey: extractBalanced(/function engTrainedKey\(/),
+  engOrgStats: extractBalanced(/function engOrgStats\(/),
+  engPeople: extractBalanced(/function engPeople\(/),
 };
 
 console.log('\n1. Extraction');
@@ -89,18 +101,23 @@ if (Object.values(pieces).some(v => !v)) finish();
 
 // ── Sandbox: run the REAL functions with fixtures + a fixed "now" ────────────
 const FIXED_NOW = new Date('2026-07-26T10:00:00');
-function makeSandbox({ deals = [], people = [], ph = { weekly: [] }, ls = {} } = {}) {
+function makeSandbox({ deals = [], people = [], ph = { weekly: [] }, ls = {}, cache = {} } = {}) {
   const store = { ...ls };
   const sandbox = {
     console,
     localStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } },
     _pd_deals: deals, _pd_people: people, _ph: ph,
+    // Minimal data-layer stand-in: the real load() reads _cache[KEYS[key]].
+    KEYS: { health_weeks: 'engagement_health_weeks', usage_daily: 'engagement_usage_daily' },
+    _cache: cache,
     Date: class extends Date { constructor(...a) { a.length ? super(...a) : super(FIXED_NOW.getTime()); } static now() { return FIXED_NOW.getTime(); } },
   };
+  sandbox.load = k => sandbox._cache[sandbox.KEYS[k] || k] || [];
   vm.createContext(sandbox);
-  const bundle = ['FY27_DEF', 'fy27', 'fy27Range', 'NON_NEW_BUSINESS_PIPELINES', 'isNewBusinessPipeline', 'numOr', 'pct', 'pdParseDate', 'pdValidDate', 'isTrialType', 'OM_FS', 'omReached', 'omModel', 'METRICS', 'mVal', 'mTest', 'mDoc']
-    .map(k => pieces[k]).join('\n');
-  vm.runInContext(bundle + '\nthis.__x = { pct, pdParseDate, pdValidDate, isTrialType, omReached, omModel, METRICS, mVal, mTest, mDoc, numOr, isNewBusinessPipeline };', sandbox);
+  const bundle = ['FY27_DEF', 'fy27', 'fy27Range', 'NON_NEW_BUSINESS_PIPELINES', 'isNewBusinessPipeline', 'numOr', 'pct', 'pdParseDate', 'pdValidDate', 'isTrialType', 'OM_FS', 'omReached', 'omModel',
+    'ENG_BANDS', 'engBandIdx', 'engSplitRows', 'engParseHealth', 'ENG_MONTHS', 'engParseUsage', 'engHealthWeeks', 'engHealthLatest', 'engUsage', 'engOrgStats', 'engTrainedKey', 'engPeople',
+    'METRICS', 'mVal', 'mTest', 'mDoc'].map(k => pieces[k]).join('\n');
+  vm.runInContext(bundle + '\nthis.__x = { pct, pdParseDate, pdValidDate, isTrialType, omReached, omModel, METRICS, mVal, mTest, mDoc, numOr, isNewBusinessPipeline, engParseHealth, engParseUsage, engPeople, engHealthLatest, engOrgStats };', sandbox);
   return sandbox.__x;
 }
 
@@ -255,6 +272,96 @@ console.log('\n6c. Zero is a real number; "no data" means absent source');
   const colonPlaceholders = (html.match(/[:?]\s*':'/g) || []).length;
   check('no bare-colon empty-value placeholders remain (em dash instead)', colonPlaceholders === 0,
     `found ${colonPlaceholders} — use '—' for empty values`);
+}
+
+// ── 6c. Engagement data (health bands + usage) ───────────────────────────────
+console.log('\n6c. Engagement — paste parsers, weekly snapshots, person join');
+{
+  // Health paste mirroring the real Power BI export, including the junk rows it appends.
+  const healthPaste = [
+    'Person - Email\tOrganisation\tCustomer Health Score\tCHS (Last Week)',
+    'a@dphi.nsw.gov.au\tDPHI\tMonitor\tAttention',      // improved
+    'B@Landcom.nsw.gov.au\tLandcom\tAttention\tAttention', // held (upper-case email → must lowercase)
+    'c@landcom.nsw.gov.au\tLandcom\tAttention\tMonitor',   // declined
+    'd@dphi.nsw.gov.au\tDPHI\tGood\tMonitor',              // improved
+    'Total\t\t\t',
+    'Applied filters:',
+    'is_latest_snapshot is not False',
+  ].join('\n');
+  const usagePaste = [
+    'timestamp - Year\ttimestamp - Month\ttimestamp - Day\tLabs Events\tLand iQ Events\tLand iQ Events (excl. Site Search)',
+    '2026\tFebruary\t9\t31\t30\t3',
+    '2026\tFebruary\t10\t203\t4059\t1520',
+    '2026\tMarch\t1\t400\t600\t200',
+    'Total\t522675\t27271\t8828',
+    'Applied filters:',
+  ].join('\n');
+
+  const x = makeSandbox();
+  check('health parser strips header/Total/filter rows (4 people)', x.engParseHealth(healthPaste).length === 4, `got ${x.engParseHealth(healthPaste).length}`);
+  check('health parser lowercases emails (join key must match Pipedrive)', x.engParseHealth(healthPaste).every(r => r.e === r.e.toLowerCase()));
+  check('usage parser strips Total/filter rows and maps month names (3 days)', x.engParseUsage(usagePaste).length === 3, `got ${x.engParseUsage(usagePaste).length}`);
+  check('usage parser builds ISO dates', x.engParseUsage(usagePaste)[0].date === '2026-02-09', `got ${x.engParseUsage(usagePaste)[0].date}`);
+  check('usage parser keeps the excl-Site-Search column', x.engParseUsage(usagePaste)[1].coreExSs === 1520);
+
+  // Registry metrics over a stored snapshot, joined to Pipedrive people.
+  const rows = x.engParseHealth(healthPaste);
+  const cache = { engagement_health_weeks: [{ week: '2026-07-26', rows }] };
+  const people = [
+    { 'Person - Email': 'a@dphi.nsw.gov.au', 'Person - Customer Type': 'Paid Subscription', 'Person - Date Access Granted': '2026-07-01', 'Person - Last Trained': '2026-07-10' },
+    { 'Person - Email': 'b@landcom.nsw.gov.au', 'Person - Customer Type': 'Paid Subscription', 'Person - Date Access Granted': '2025-01-01' },
+    { 'Person - Email': 'c@landcom.nsw.gov.au', 'Person - Customer Type': '2 Week Trial Licence', 'Person - Date Access Granted': '2026-06-01' },
+    // d@ deliberately absent → match rate must be 75%, not 100%
+  ];
+  const y = makeSandbox({ people, cache });
+  check('attention rate = 2 of 4 = 50%', Math.abs(y.mVal('attention_rate') - 50) < 1e-9, `got ${y.mVal('attention_rate')}`);
+  check('attention rate is flagged lower-is-better', y.METRICS.attention_rate.lowerBetter === true);
+  check('improved = 2, declined = 1', y.mVal('health_improved') === 2 && y.mVal('health_declined') === 1, `improved ${y.mVal('health_improved')} declined ${y.mVal('health_declined')}`);
+  check('paying customers in Attention = 1 (b; c is trial, d unmatched)', y.mVal('paid_in_attention') === 1, `got ${y.mVal('paid_in_attention')}`);
+  check('match rate exposes the unmatched person (75%)', Math.abs(y.mVal('health_match_rate') - 75) < 1e-9, `got ${y.mVal('health_match_rate')}`);
+  const j = y.engPeople();
+  check('person join finds the Pipedrive training field by name', j.trainedKey === 'Person - Last Trained', `got ${j.trainedKey}`);
+  check('join carries tenure + trained flag through', j.rows.find(r => r.email === 'a@dphi.nsw.gov.au').trained === true);
+  check('training effect returns null when too few to compare honestly', y.mVal('training_effect') === null);
+  const z = makeSandbox({ people: [], cache });
+  check('training effect is null when Pipedrive has no training field', z.mVal('training_effect') === null);
+  check('labs share needs 2+ months (null on a single partial month)', z.mVal('labs_share') === null);
+
+  // ── Trial cohort: current type OR previous type must put someone in the cohort ──
+  const trialRows = x.engParseHealth([
+    'Person - Email\tOrganisation\tCustomer Health Score\tCHS (Last Week)',
+    't1@x.gov.au\tOrgA\tAttention\tAttention',   // still on trial, quiet
+    't2@x.gov.au\tOrgA\tMonitor\tAttention',     // still on trial, engaging
+    't3@x.gov.au\tOrgA\tMonitor\tMonitor',       // converted to paid
+    't4@x.gov.au\tOrgA\tAttention\tAttention',   // lapsed
+    'p1@x.gov.au\tOrgA\tMonitor\tMonitor',       // never trialled — must be excluded
+  ].join('\n'));
+  const trialPeople = [
+    { 'Person - Email': 't1@x.gov.au', 'Person - Customer Type': '2 Week Trial Licence', 'Person - Date Access Granted': '2026-07-20', 'Person - Last Trained': '2026-07-22' },
+    { 'Person - Email': 't2@x.gov.au', 'Person - Customer Type': 'Extended Trial Licence', 'Person - Date Access Granted': '2026-07-01' },
+    { 'Person - Email': 't3@x.gov.au', 'Person - Customer Type': 'Paid Subscription', 'Person - Previous Customer Type': 'Contact Register, 2 Week Trial Licence', 'Person - Date Access Granted': '2026-05-01' },
+    { 'Person - Email': 't4@x.gov.au', 'Person - Customer Type': 'Access Revoked', 'Person - Previous Customer Type': '2 Week Trial Licence', 'Person - Date Access Granted': '2026-04-01' },
+    { 'Person - Email': 'p1@x.gov.au', 'Person - Customer Type': 'Paid Subscription', 'Person - Date Access Granted': '2025-01-01' },
+  ];
+  const t = makeSandbox({ people: trialPeople, cache: { engagement_health_weeks: [{ week: '2026-07-26', rows: trialRows }] } });
+  const tj = t.engPeople().rows;
+  check('trial cohort spans current AND previous customer type (4, not 2)', tj.filter(r => r.everTrial).length === 4, `got ${tj.filter(r => r.everTrial).length}`);
+  check('a never-trialled paid customer stays out of the cohort', tj.find(r => r.email === 'p1@x.gov.au').everTrial === false);
+  check('converted trial detected (paid now + trial in history)', tj.find(r => r.email === 't3@x.gov.au').trialConverted === true);
+  check('lapsed trial detected (access revoked + trial in history)', tj.find(r => r.email === 't4@x.gov.au').trialLapsed === true);
+  check('trials not engaging = 1 of 2 current trials = 50%', Math.abs(t.mVal('trial_attention_rate') - 50) < 1e-9, `got ${t.mVal('trial_attention_rate')}`);
+  check('trial conversion = 1 of 4 ever-trialled = 25%', Math.abs(t.mVal('trial_conversion') - 25) < 1e-9, `got ${t.mVal('trial_conversion')}`);
+  check('trained-early flag set when training falls within 30 days of access', tj.find(r => r.email === 't1@x.gov.au').trainedEarly === true);
+  check('trained-early is false for an untrained trial user', tj.find(r => r.email === 't2@x.gov.au').trainedEarly === false);
+
+  // Organisation grouping — reads {o, now}. Getting the field names wrong here once
+  // rendered "across 0 organisations" with a full dataset loaded.
+  const os = t.engOrgStats();
+  check('org stats group by the snapshot org field (1 org, 5 people)', os.length === 1 && os[0].n === 5, JSON.stringify(os));
+  check('org attention rate counts the CURRENT band (2 of 5 = 40%)', Math.abs(os[0].rate - 40) < 1e-9, `got ${os[0].rate}`);
+  const os2 = makeSandbox({ cache }).engOrgStats();
+  check('org stats find every organisation in the snapshot (2 orgs)', os2.length === 2, JSON.stringify(os2.map(x => x.o)));
+  check('org stats sort worst-first', os2[0].rate >= os2[os2.length - 1].rate);
 }
 
 // ── 7. Drift guards — render sites must USE the registry ─────────────────────

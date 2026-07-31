@@ -611,7 +611,7 @@ document.getElementById('lock-password').addEventListener('keydown', e => { if (
 // DATA LAYER (Supabase)
 // ─────────────────────────────────────────
 
-const KEYS = { sales:'sales', trials:'trials', website:'website', website_daily:'website_daily', training:'training', content:'content', webinars:'webinars', linkedin_weekly:'linkedin_weekly', edm_2m:'edm_2m', weekly_tracker:'weekly_tracker', activity_giraffe:'activity_giraffe', activity_sdk:'activity_sdk', activity_labs:'activity_labs', proficiency:'proficiency', planned_events:'planned_events' };
+const KEYS = { sales:'sales', trials:'trials', website:'website', website_daily:'website_daily', training:'training', content:'content', webinars:'webinars', linkedin_weekly:'linkedin_weekly', edm_2m:'edm_2m', weekly_tracker:'weekly_tracker', activity_giraffe:'activity_giraffe', activity_sdk:'activity_sdk', activity_labs:'activity_labs', proficiency:'proficiency', planned_events:'planned_events', health_weeks:'engagement_health_weeks', usage_daily:'engagement_usage_daily' };
 
 // In-memory cache: loaded from Supabase on init, kept in sync on every save
 const _cache = {};
@@ -1314,6 +1314,162 @@ function omTargets() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// ENGAGEMENT DATA — customer health bands + Labs/Core usage.
+// Source: two Power BI exports of the Land iQ semantic model, pasted in weekly
+// (admin only). The band thresholds live in the semantic model, so the dashboard
+// consumes the labels as given and never recomputes them.
+// Health is stored as DATED WEEKLY SNAPSHOTS so a record of weeks accrues from
+// the first import; re-importing a week overwrites it rather than duplicating.
+// See docs/ENGAGEMENT_TAB_PLAN.md.
+// ═════════════════════════════════════════════════════════════════════════════
+const ENG_BANDS = ['Attention', 'Monitor', 'Good'];        // worst → best
+const engBandIdx = b => ENG_BANDS.indexOf(String(b || '').trim());
+// Split a pasted table (Excel paste = tab-separated; also tolerates commas).
+function engSplitRows(text) {
+  return String(text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    .map(l => (l.includes('\t') ? l.split('\t') : l.split(',')).map(c => c.trim().replace(/^"|"$/g, '')));
+}
+// Health paste → [{e,o,now,prev}]. Expects: Person - Email · Organisation ·
+// Customer Health Score · CHS (Last Week). Skips the header, blanks, and the
+// trailing "Total"/"Applied filters:" rows Power BI appends.
+function engParseHealth(text) {
+  const rows = engSplitRows(text);
+  const out = [];
+  for (const r of rows) {
+    const [e, o, now, prev] = [r[0] || '', r[1] || '', r[2] || '', r[3] || ''];
+    if (!e || !e.includes('@')) continue;                       // header/total/filter rows have no email
+    if (engBandIdx(now) < 0 && engBandIdx(prev) < 0) continue;   // no usable band
+    out.push({ e: e.toLowerCase(), o, now, prev });
+  }
+  return out;
+}
+// Usage paste → [{date,labs,core,coreExSs}]. Expects: Year · Month · Day ·
+// Labs Events · Land iQ Events · Land iQ Events (excl. Site Search).
+const ENG_MONTHS = { january:1, february:2, march:3, april:4, may:5, june:6, july:7, august:8, september:9, october:10, november:11, december:12 };
+function engParseUsage(text) {
+  const out = [];
+  for (const r of engSplitRows(text)) {
+    const y = parseInt(r[0], 10);
+    const mRaw = String(r[1] || '').toLowerCase();
+    const m = ENG_MONTHS[mRaw] || parseInt(r[1], 10);
+    const d = parseInt(r[2], 10);
+    if (!y || !m || !d || y < 2000 || m > 12 || d > 31) continue;   // header/Total/filter rows
+    const num = v => { const n = parseFloat(String(v).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : 0; };
+    out.push({ date: y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0'),
+      labs: num(r[3]), core: num(r[4]), coreExSs: num(r[5]) });
+  }
+  return out.sort((a, b) => a.date < b.date ? -1 : 1);
+}
+// Weekly health snapshots, oldest first.
+function engHealthWeeks() { return (load('health_weeks') || []).slice().sort((a, b) => (a.week || '') < (b.week || '') ? -1 : 1); }
+function engHealthLatest() { const w = engHealthWeeks(); return w.length ? w[w.length - 1] : null; }
+function engUsage() { return (load('usage_daily') || []).slice().sort((a, b) => a.date < b.date ? -1 : 1); }
+
+// Pipedrive "trained" field: the owner adds a date field in Pipedrive (e.g.
+// "Last Trained"); the nightly sync picks up custom fields automatically by name,
+// so match flexibly rather than hard-coding one spelling. Returns the key found.
+function engTrainedKey() {
+  const p = (typeof _pd_people !== 'undefined' ? _pd_people : [])[0];
+  if (!p) return null;
+  return Object.keys(p).find(k => /trained|training/i.test(k) && /date|last|trained/i.test(k)) || null;
+}
+// Attention rate per organisation, worst first. Snapshot rows are {e,o,now,prev} —
+// organisation is `o` and the current band is `now` (a mismatch here silently
+// produced "across 0 organisations" once, hence the test).
+function engOrgStats() {
+  const snap = engHealthLatest();
+  if (!snap || !Array.isArray(snap.rows)) return [];
+  const orgs = [...new Set(snap.rows.map(r => r.o).filter(Boolean))];
+  return orgs.map(o => {
+    const rs = snap.rows.filter(r => r.o === o);
+    const att = rs.filter(r => r.now === 'Attention').length;
+    return { o, n: rs.length, att, rate: pct(att, rs.length) };
+  }).sort((a, b) => (b.rate - a.rate) || (b.n - a.n));
+}
+// PERSON-LEVEL JOIN: health bands ↔ Pipedrive people, on email.
+// This is the join that makes training effectiveness measurable per person.
+function engPeople() {
+  const snap = engHealthLatest();
+  if (!snap || !Array.isArray(snap.rows)) return { rows: [], matched: 0, total: 0, matchPct: null, trainedKey: null };
+  const byEmail = {};
+  for (const p of (typeof _pd_people !== 'undefined' ? _pd_people : [])) {
+    const em = String(p['Person - Email'] || p['Email'] || '').toLowerCase().trim();
+    if (em) byEmail[em] = p;
+  }
+  const tKey = engTrainedKey();
+  const now = new Date();
+  let matched = 0;
+  const rows = snap.rows.map(h => {
+    const p = byEmail[h.e] || null;
+    if (p) matched++;
+    const granted = p ? pdParseDate(p['Person - Date Access Granted']) : null;
+    const trainedAt = (p && tKey) ? pdParseDate(p[tKey]) : null;
+    const ct = p ? (p['Person - Customer Type'] || '') : '';
+    const prevCt = p ? String(p['Person - Previous Customer Type'] || '') : '';
+    const onTrial = p ? isTrialType(ct) : false;
+    // "Ever on a trial" spans current type OR the comma-separated history, so people
+    // who have since converted or lapsed stay in the cohort.
+    const everTrial = onTrial || isTrialType(prevCt);
+    // Trained EARLY = within 30 days of getting access. Trial lengths vary (2-week vs
+    // extended), so a fixed early window is more honest than assuming a trial length.
+    const trainedEarly = (pdValidDate(trainedAt) && pdValidDate(granted))
+      ? (trainedAt >= granted && (trainedAt - granted) <= 30 * 86400000) : false;
+    return {
+      email: h.e, org: h.o || (p ? p['Person - Organisation'] : '') || '',
+      band: h.now, prevBand: h.prev,
+      move: (engBandIdx(h.now) >= 0 && engBandIdx(h.prev) >= 0) ? engBandIdx(h.now) - engBandIdx(h.prev) : null,
+      matchedPipedrive: !!p,
+      custType: ct,
+      isPaid: ct === 'Paid Subscription',
+      isTrial: onTrial,
+      everTrial,
+      trialConverted: everTrial && ct === 'Paid Subscription',
+      trialLapsed: everTrial && ct === 'Access Revoked',
+      tenureDays: pdValidDate(granted) ? Math.floor((now - granted) / 86400000) : null,
+      trainedAt: pdValidDate(trainedAt) ? trainedAt : null,
+      trained: pdValidDate(trainedAt),
+      trainedEarly,
+    };
+  });
+  return { rows, matched, total: rows.length, matchPct: rows.length ? pct(matched, rows.length) : null, trainedKey: tKey, week: snap.week };
+}
+
+// Import handlers (admin only). Data goes through save() so it lands in Supabase
+// and is shared with every viewer — not stuck in one browser.
+window.engImportHealth = () => {
+  const ta = document.getElementById('eng-health-paste');
+  const wk = document.getElementById('eng-health-week');
+  const rows = engParseHealth(ta ? ta.value : '');
+  if (!rows.length) { toast('✗ No health rows found. Copy the four columns from Excel (including the header) and paste again.', 8000); return; }
+  const week = (wk && wk.value) ? wk.value : new Date().toISOString().slice(0, 10);
+  const weeks = (load('health_weeks') || []).filter(w => w.week !== week);   // re-import overwrites that week
+  weeks.push({ week, rows, at: new Date().toISOString(), by: (_authEmail || '').split('@')[0] });
+  save('health_weeks', weeks);
+  const bands = ENG_BANDS.map(b => b + ' ' + rows.filter(r => r.now === b).length).join(' · ');
+  toast(`✓ ${rows.length} people stored for week ${week} (${bands}). ${weeks.length} week${weeks.length === 1 ? '' : 's'} on record.`, 8000);
+  if (ta) ta.value = '';
+  renderActivity();
+};
+window.engImportUsage = () => {
+  const ta = document.getElementById('eng-usage-paste');
+  const rows = engParseUsage(ta ? ta.value : '');
+  if (!rows.length) { toast('✗ No usage rows found. Copy the six columns from Excel (including the header) and paste again.', 8000); return; }
+  const byDate = {};
+  for (const r of (load('usage_daily') || [])) byDate[r.date] = r;
+  for (const r of rows) byDate[r.date] = r;                                   // newer import wins per day
+  const merged = Object.values(byDate).sort((a, b) => a.date < b.date ? -1 : 1);
+  save('usage_daily', merged);
+  toast(`✓ ${rows.length} days imported · ${merged.length} days on record (${merged[0].date} → ${merged[merged.length - 1].date}).`, 8000);
+  if (ta) ta.value = '';
+  renderActivity();
+};
+window.engDeleteWeek = week => {
+  if (!confirm('Remove the health snapshot for week ' + week + '?')) return;
+  save('health_weeks', (load('health_weeks') || []).filter(w => w.week !== week));
+  renderActivity();
+};
+
+// ═════════════════════════════════════════════════════════════════════════════
 // METRIC REGISTRY — the single source of truth for key metrics.
 // Each entry declares the metric ONCE: its source, its human-readable formula,
 // AND the actual computation. Render sites call mVal(id) for the number and
@@ -1451,6 +1607,90 @@ const METRICS = {
         && (() => { const g = pdParseDate(p['Person - Date Access Granted']); return pdValidDate(g) && g < r.from; })()
         && (() => { const t = pdParseDate(p['Person - Date Access Removed']); return pdValidDate(t) && t >= r.from && t <= r.to; })()).length;
       return Math.max(0, (f.base_customers || 0) - churned);
+    },
+  },
+  // ── Engagement (customer health bands + product usage) ─────────────────────
+  attention_rate: {
+    label: 'Attention rate',
+    src: 'Power BI · customer health export (weekly, manual)',
+    desc: 'The share of scored people sitting in the <b>Attention</b> band — the least-engaged group. <b>Lower is better.</b> The bands are set in the Land iQ semantic model and are known to be strict (almost nobody currently scores Good), so read the <b>direction week to week</b>, not the level.',
+    formula: 'people in Attention ÷ all scored people × 100',
+    lowerBetter: true,
+    compute: () => { const s = engHealthLatest(); if (!s || !s.rows || !s.rows.length) return null; return pct(s.rows.filter(r => r.now === 'Attention').length, s.rows.length); },
+    computePrev: () => { const s = engHealthLatest(); if (!s || !s.rows || !s.rows.length) return null; return pct(s.rows.filter(r => r.prev === 'Attention').length, s.rows.filter(r => engBandIdx(r.prev) >= 0).length); },
+  },
+  health_improved: {
+    label: 'People who improved band',
+    src: 'Power BI · customer health export (weekly, manual)',
+    desc: 'People who moved to a better health band since last week (for example Attention → Monitor). Shown alongside how many held their band and how many slipped.',
+    formula: 'count(band this week is better than band last week)',
+    compute: () => { const s = engHealthLatest(); if (!s || !s.rows) return null; return s.rows.filter(r => engBandIdx(r.now) > engBandIdx(r.prev) && engBandIdx(r.prev) >= 0).length; },
+  },
+  health_declined: {
+    label: 'People who slipped a band',
+    src: 'Power BI · customer health export (weekly, manual)',
+    desc: 'People who moved to a worse health band since last week. This is the number to act on first.',
+    formula: 'count(band this week is worse than band last week)',
+    lowerBetter: true,
+    compute: () => { const s = engHealthLatest(); if (!s || !s.rows) return null; return s.rows.filter(r => engBandIdx(r.now) >= 0 && engBandIdx(r.prev) >= 0 && engBandIdx(r.now) < engBandIdx(r.prev)).length; },
+  },
+  paid_in_attention: {
+    label: 'Paying customers needing attention',
+    src: 'Power BI health export joined to Pipedrive people (by email)',
+    desc: 'People with an <b>active paid licence</b> who are in the Attention band. These are the renewal risks — the earliest warning available against the FY27 retention target, months before a renewal conversation.',
+    formula: "health band = Attention AND Pipedrive Customer Type = 'Paid Subscription'",
+    lowerBetter: true,
+    compute: () => { const j = engPeople(); if (!j.rows.length) return null; return j.rows.filter(r => r.band === 'Attention' && r.isPaid).length; },
+  },
+  health_match_rate: {
+    label: 'Health records matched to Pipedrive',
+    src: 'Calculated · email join',
+    desc: 'What share of the health export matched a person in Pipedrive by email address. A low match rate means the person-level breakdowns (customer type, tenure, training) are only describing part of the picture.',
+    formula: 'matched people ÷ people in the health export × 100',
+    compute: () => engPeople().matchPct,
+  },
+  training_effect: {
+    label: 'Training effect on engagement',
+    src: 'Pipedrive training date joined to health band movement',
+    desc: 'The difference in <b>band improvement rate</b> between people who have been trained and those who have not. <b>Read with care:</b> people who attend training are not a random group — they may already be keener, or may have been targeted <i>because</i> they were struggling. That is why this compares week-on-week <b>movement</b> rather than who looks healthier overall, but it still is not proof of cause.',
+    formula: '(% of trained people who improved) − (% of untrained people who improved), in percentage points',
+    compute: () => {
+      const j = engPeople();
+      if (!j.trainedKey) return null;                                  // no training field in Pipedrive yet
+      const usable = j.rows.filter(r => r.matchedPipedrive && r.move != null);
+      const t = usable.filter(r => r.trained), u = usable.filter(r => !r.trained);
+      if (t.length < 5 || u.length < 5) return null;                   // too few to compare honestly
+      return (pct(t.filter(r => r.move > 0).length, t.length) || 0) - (pct(u.filter(r => r.move > 0).length, u.length) || 0);
+    },
+  },
+  trial_attention_rate: {
+    label: 'Trials not engaging',
+    src: 'Power BI health export joined to Pipedrive people (by email)',
+    desc: 'Of the people <b>currently on a trial licence</b>, the share sitting in the Attention band — trials that are quiet right now. These are the ones worth a call <i>while the trial is still running</i>, which is the only window in which anything can be done about it.',
+    formula: "health band = Attention among people whose Customer Type contains 'trial'",
+    lowerBetter: true,
+    compute: () => { const t = engPeople().rows.filter(r => r.isTrial); return t.length ? pct(t.filter(r => r.band === 'Attention').length, t.length) : null; },
+  },
+  trial_conversion: {
+    label: 'Trials that converted',
+    src: 'Pipedrive people (current and previous customer type)',
+    desc: 'Of everyone who has ever held a trial licence, the share now on a paid subscription. Counts the people the health export covers, so it tracks the trial cohort we can also measure engagement for — not every trial ever issued.',
+    formula: "now 'Paid Subscription' ÷ ever held a trial licence × 100",
+    compute: () => { const e = engPeople().rows.filter(r => r.everTrial); return e.length ? pct(e.filter(r => r.trialConverted).length, e.length) : null; },
+  },
+  labs_share: {
+    label: 'Labs share of all product use',
+    src: 'Power BI · usage export (manual)',
+    desc: 'Labs events as a share of all Land iQ product events in the most recent full month. Labs has grown from roughly a tenth of activity to over a third — the clearest evidence of where the product is being used.',
+    formula: 'Labs events ÷ (Labs + Core events) × 100, latest full month',
+    compute: () => {
+      const u = engUsage(); if (!u.length) return null;
+      const byMonth = {};
+      for (const d of u) { const m = d.date.slice(0, 7); byMonth[m] = byMonth[m] || { l: 0, c: 0 }; byMonth[m].l += d.labs; byMonth[m].c += d.core; }
+      const months = Object.keys(byMonth).sort();
+      if (months.length < 2) return null;                              // skip the partial newest month
+      const m = byMonth[months[months.length - 2]];
+      return (m.l + m.c) ? pct(m.l, m.l + m.c) : null;
     },
   },
   licence_margin: {
@@ -3111,6 +3351,336 @@ function saveWebsiteDaily() {
 // ─────────────────────────────────────────
 // ACTIVITY TAB
 // ─────────────────────────────────────────
+// ── ENGAGEMENT HEALTH sub-tab ────────────────────────────────────────────────
+// Customer health bands (weekly, manual from Power BI) joined to Pipedrive people
+// by email, plus Labs/Core product usage. See docs/ENGAGEMENT_TAB_PLAN.md.
+function renderEngagement(sc) {
+  const weeks = engHealthWeeks();
+  const snap = engHealthLatest();
+  const usage = engUsage();
+  const J = engPeople();
+  const BAND_COL = { Attention: '#e05252', Monitor: '#e6a817', Good: '#2a7a4b' };
+
+  // Admin-only import panel (also the empty-state instructions).
+  const importHTML = `
+    <div class="box admin-only" style="background:#f0f7ff;border:1px solid #cfe3f0">
+      <div class="box-title" style="font-size:12px">Update engagement data <span style="font-size:10px;font-weight:400;color:var(--tl)">paste straight from the Power BI export in Excel · admin only</span></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px">
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px">Customer health (weekly)</div>
+          <div style="font-size:11px;color:var(--tl);margin-bottom:6px">Columns: Person - Email · Organisation · Customer Health Score · CHS (Last Week). Include the header row.</div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+            <span style="font-size:11px;color:var(--tm)">Week ending</span>
+            <input type="date" id="eng-health-week" value="${new Date().toISOString().slice(0,10)}" style="font-size:12px;padding:3px 6px;border:1px solid var(--bd);border-radius:5px">
+          </div>
+          <textarea id="eng-health-paste" placeholder="Person - Email&#9;Organisation&#9;Customer Health Score&#9;CHS (Last Week)" style="width:100%;min-height:80px;font-family:'DM Mono',monospace;font-size:11px;padding:6px;border:1px solid var(--bd);border-radius:6px"></textarea>
+          <button onclick="engImportHealth()" style="margin-top:6px;font-size:11px;padding:4px 12px;border-radius:6px;border:none;background:var(--acc);color:#fff;cursor:pointer">Import health week</button>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px">Product usage (daily)</div>
+          <div style="font-size:11px;color:var(--tl);margin-bottom:6px">Columns: Year · Month · Day · Labs Events · Land iQ Events · Land iQ Events (excl. Site Search). Trailing Total / filter rows are ignored.</div>
+          <textarea id="eng-usage-paste" placeholder="timestamp - Year&#9;timestamp - Month&#9;timestamp - Day&#9;Labs Events&#9;Land iQ Events&#9;Land iQ Events (excl. Site Search)" style="width:100%;min-height:80px;font-family:'DM Mono',monospace;font-size:11px;padding:6px;border:1px solid var(--bd);border-radius:6px"></textarea>
+          <button onclick="engImportUsage()" style="margin-top:6px;font-size:11px;padding:4px 12px;border-radius:6px;border:none;background:var(--acc);color:#fff;cursor:pointer">Import usage days</button>
+        </div>
+      </div>
+      ${weeks.length ? `<div style="margin-top:10px;font-size:11px;color:var(--tl)">Weeks on record: ${weeks.map(w => `${w.week} <span onclick="engDeleteWeek('${w.week}')" title="Remove this week" style="cursor:pointer;color:#e05252">✕</span>`).join(' · ')}</div>` : ''}
+    </div>`;
+
+  if (!snap && !usage.length) {
+    sc.innerHTML = `<div class="no-data" style="margin-bottom:14px">No engagement data yet. Paste the two Power BI exports below to begin — each health import is stored as a dated week, so a record builds over time.</div>${importHTML}`;
+    return;
+  }
+
+  // ── Health section ────────────────────────────────────────────────────────
+  let healthHTML = '';
+  if (snap) {
+    const rows = snap.rows;
+    const attNow = mVal('attention_rate'), attPrev = METRICS.attention_rate.computePrev();
+    const improved = mVal('health_improved'), declined = mVal('health_declined');
+    // NOTE: snapshot rows are {e,o,now,prev} — organisation is `o`, band is `now`.
+    const held = rows.filter(r => engBandIdx(r.now) >= 0 && engBandIdx(r.now) === engBandIdx(r.prev)).length;
+    const orgStats = engOrgStats();
+    const orgsAll = orgStats.map(o => o.o);
+    const orgsNeeding = orgStats.filter(o => o.rate > 50 && o.n >= 3).length;
+    // Trend direction: attention rate FALLING is good.
+    const attDelta = (attNow != null && attPrev != null) ? attNow - attPrev : null;
+    const attArrow = attDelta == null ? '' : (attDelta < 0
+      ? `<div class="card-change up">▼ ${Math.abs(attDelta).toFixed(1)} pts — improving</div>`
+      : attDelta > 0 ? `<div class="card-change dn">▲ ${attDelta.toFixed(1)} pts — worsening</div>`
+      : `<div class="card-sub">no change</div>`);
+
+    healthHTML = `
+      <div class="callout" style="background:#fdf6e9;border:1px solid #f0d9a8;margin-bottom:14px">
+        <div class="callout-text" style="font-size:12px">
+          <b>Read the direction, not the level.</b> The health bands come from the Land iQ semantic model and are currently set strictly —
+          ${rows.filter(r => r.now === 'Good').length} of ${rows.length} people score Good. That makes the <i>level</i> hard to act on,
+          but the <b>week-to-week movement</b> is meaningful. Thresholds are due to be relaxed at the source; this page will follow automatically.
+        </div>
+      </div>
+      <div class="cards">
+        <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Attention rate${mInfo('attention_rate')}</div>
+          <div class="card-value">${attNow != null ? fmtPct(attNow) : '—'}</div>${attArrow}
+          <div class="card-sub">${rows.filter(r => r.now === 'Attention').length} of ${rows.length} people · lower is better</div></div>
+        <div class="card"><div class="card-label">People scored</div><div class="card-value">${fmtNum(rows.length)}</div>
+          <div class="card-sub">across ${orgsAll.length} organisations · week ending ${snap.week}</div></div>
+        <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Band movement${mInfo('health_improved')}</div>
+          <div class="card-value" style="color:var(--gr)">${fmtNum(improved)}</div>
+          <div class="card-sub">improved · ${fmtNum(held)} held · <span style="color:${declined ? '#e05252' : 'inherit'}">${fmtNum(declined)} slipped</span></div></div>
+        <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Paying customers needing attention${mInfo('paid_in_attention')}</div>
+          <div class="card-value" style="color:${mVal('paid_in_attention') ? '#c25a00' : 'inherit'}">${mVal('paid_in_attention') != null ? fmtNum(mVal('paid_in_attention')) : '—'}</div>
+          <div class="card-sub">renewal risk · earliest warning for the FY27 retention target</div></div>
+      </div>
+
+      <div class="box">
+        <div class="box-title">Where people sit, this week against last</div>
+        <div class="chart-wrap" style="height:200px"><canvas id="eng-bands"></canvas></div>
+      </div>
+
+      <div class="box">
+        <div class="box-title">Attention rate by organisation <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">worst first · the call list</span></div>
+        <p style="font-size:12px;color:var(--tm);margin:0 0 10px">Organisations with fewer than 3 scored people are shown in grey — one quiet person can put a small organisation at the top, which is rarely the real story.</p>
+        <div class="tbl-scroll"><table>
+          <thead><tr><th>Organisation</th><th style="text-align:right">People</th><th style="text-align:right">In Attention</th><th style="text-align:right">Attention rate</th></tr></thead>
+          <tbody>${orgStats.map(o => `<tr style="${o.n < 3 ? 'opacity:.5' : ''}">
+            <td>${o.o}</td>
+            <td style="text-align:right">${o.n}</td>
+            <td style="text-align:right">${o.att}</td>
+            <td style="text-align:right;font-weight:600;color:${o.rate >= 75 ? '#e05252' : o.rate >= 50 ? '#e6a817' : '#2a7a4b'}">${fmtPct(o.rate)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>`;
+
+    // ── Person-level section (needs the Pipedrive join) ─────────────────────
+    const seg = (label, rs) => { const n = rs.length; return { label, n, att: rs.filter(r => r.band === 'Attention').length, rate: n ? pct(rs.filter(r => r.band === 'Attention').length, n) : null }; };
+    const matched = J.rows.filter(r => r.matchedPipedrive);
+    const segs = [
+      seg('Paying customers', matched.filter(r => r.isPaid)),
+      seg('Trial users', matched.filter(r => r.isTrial)),
+      seg('Other / internal', matched.filter(r => !r.isPaid && !r.isTrial)),
+    ].filter(s => s.n > 0);
+    const ten = [
+      seg('Under 30 days', matched.filter(r => r.tenureDays != null && r.tenureDays < 30)),
+      seg('30 to 90 days', matched.filter(r => r.tenureDays != null && r.tenureDays >= 30 && r.tenureDays < 90)),
+      seg('90 to 180 days', matched.filter(r => r.tenureDays != null && r.tenureDays >= 90 && r.tenureDays < 180)),
+      seg('Over 180 days', matched.filter(r => r.tenureDays != null && r.tenureDays >= 180)),
+    ].filter(s => s.n > 0);
+    const segTable = (title, arr, note) => `
+      <div class="box" style="margin-bottom:0">
+        <div class="box-title" style="font-size:13px">${title}</div>
+        ${note ? `<p style="font-size:11px;color:var(--tl);margin:0 0 8px">${note}</p>` : ''}
+        ${arr.length ? `<table style="width:100%;border-collapse:collapse">
+          <thead><tr style="border-bottom:1.5px solid var(--bor)"><th style="text-align:left;padding:3px 6px;font-size:10px;color:var(--tl);text-transform:uppercase">Group</th><th style="text-align:right;padding:3px 6px;font-size:10px;color:var(--tl);text-transform:uppercase">People</th><th style="text-align:right;padding:3px 6px;font-size:10px;color:var(--tl);text-transform:uppercase">Attention rate</th></tr></thead>
+          <tbody>${arr.map(s => `<tr style="border-bottom:1px solid var(--bg2)"><td style="padding:6px">${s.label}</td><td style="padding:6px;text-align:right">${s.n}</td><td style="padding:6px;text-align:right;font-weight:600;color:${s.rate >= 75 ? '#e05252' : s.rate >= 50 ? '#e6a817' : '#2a7a4b'}">${fmtPct(s.rate)}</td></tr>`).join('')}</tbody>
+        </table>` : '<div class="no-data">No matched people yet.</div>'}
+      </div>`;
+
+    const trainedNote = !J.trainedKey
+      ? `<div class="callout warn"><div class="callout-text" style="font-size:12px"><b>Not measurable yet.</b> Add a date field in Pipedrive recording when each person was trained (for example <b>“Last Trained”</b>). The nightly sync picks up new Pipedrive fields automatically, so nothing here needs changing — this card will start working on the next sync, and becomes meaningful once a few weeks of health snapshots have built up.</div></div>`
+      : (() => {
+          const eff = mVal('training_effect');
+          const usable = matched.filter(r => r.move != null);
+          const t = usable.filter(r => r.trained), u = usable.filter(r => !r.trained);
+          if (eff == null) return `<div class="no-data">Found the training field <b>${J.trainedKey}</b>, but only ${t.length} trained and ${u.length} untrained people have a usable band movement — too few to compare honestly (5 of each needed).</div>`;
+          return `<div class="cards" style="margin-bottom:0">
+            <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Training effect${mInfo('training_effect')}</div>
+              <div class="card-value" style="color:${eff > 0 ? 'var(--gr)' : eff < 0 ? '#e05252' : 'inherit'}">${eff > 0 ? '+' : ''}${eff.toFixed(1)} pts</div>
+              <div class="card-sub">improvement rate gap, trained vs untrained</div></div>
+            <div class="card"><div class="card-label">Trained people</div><div class="card-value">${t.length}</div>
+              <div class="card-sub">${pct(t.filter(r => r.move > 0).length, t.length) != null ? fmtPct(pct(t.filter(r => r.move > 0).length, t.length)) : '—'} improved this week</div></div>
+            <div class="card"><div class="card-label">Not yet trained</div><div class="card-value">${u.length}</div>
+              <div class="card-sub">${pct(u.filter(r => r.move > 0).length, u.length) != null ? fmtPct(pct(u.filter(r => r.move > 0).length, u.length)) : '—'} improved this week</div></div>
+          </div>`;
+        })();
+
+    healthHTML += `
+      <div class="box">
+        <div class="box-title">Who is disengaged <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">health export joined to Pipedrive by email</span></div>
+        <p style="font-size:12px;color:var(--tm);margin:0 0 12px">
+          ${J.matchPct != null
+            ? `<b>${fmtPct(J.matchPct)}</b> of the ${J.total} people in the health export matched a Pipedrive record (${J.matched} of ${J.total})${J.matchPct < 80 ? ' — the breakdowns below therefore describe only part of the picture' : ''}. ${mInfo('health_match_rate')}`
+            : 'Import Pipedrive people to break this down by customer type and tenure.'}
+        </p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px">
+          ${segTable('By customer type', segs, 'Are the people paying for Land iQ any more engaged than trial users?')}
+          ${segTable('By time since access granted', ten, 'How long after getting access do people go quiet?')}
+        </div>
+      </div>
+
+      ${(() => {
+        const trials = matched.filter(r => r.isTrial);
+        const ever = matched.filter(r => r.everTrial);
+        if (!ever.length) return '';
+        const grp = (label, rs, note) => ({ label, n: rs.length, att: rs.filter(r => r.band === 'Attention').length, rate: rs.length ? pct(rs.filter(r => r.band === 'Attention').length, rs.length) : null, trained: rs.filter(r => r.trainedEarly).length, note });
+        const groups = [
+          grp('Still on trial', ever.filter(r => r.isTrial), 'the only group you can still influence'),
+          grp('Converted to paid', ever.filter(r => r.trialConverted), ''),
+          grp('Lapsed — access removed', ever.filter(r => r.trialLapsed), 'no longer has access, so a quiet score is expected'),
+        ].filter(g => g.n > 0);
+        const tRate = mVal('trial_attention_rate'), cRate = mVal('trial_conversion');
+        return `
+      <div class="box">
+        <div class="box-title">Trial success <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">${ever.length} people have held a trial licence</span></div>
+        <p style="font-size:12px;color:var(--tm);margin:0 0 12px">
+          Trials are the clearest test of whether Land iQ lands: a fixed window, a clear outcome. This joins each trial user's Pipedrive record
+          to their engagement score, so a quiet trial can be spotted <b>while there is still time to do something about it</b>.
+        </p>
+        <div class="cards" style="margin-bottom:14px">
+          <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Trials not engaging${mInfo('trial_attention_rate')}</div>
+            <div class="card-value" style="color:${tRate != null && tRate >= 50 ? '#c25a00' : 'inherit'}">${tRate != null ? fmtPct(tRate) : '—'}</div>
+            <div class="card-sub">${trials.filter(r => r.band === 'Attention').length} of ${trials.length} current trials · lower is better</div></div>
+          <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Trials that converted${mInfo('trial_conversion')}</div>
+            <div class="card-value">${cRate != null ? fmtPct(cRate) : '—'}</div>
+            <div class="card-sub">${ever.filter(r => r.trialConverted).length} of ${ever.length} who ever trialled</div></div>
+          <div class="card"><div class="card-label">Trained in their first 30 days</div>
+            <div class="card-value">${J.trainedKey ? fmtNum(ever.filter(r => r.trainedEarly).length) : '—'}</div>
+            <div class="card-sub">${J.trainedKey ? 'of ' + ever.length + ' trial users' : 'needs the Pipedrive training date field'}</div></div>
+        </div>
+        <div class="tbl-scroll"><table>
+          <thead><tr><th>Where they are now</th><th style="text-align:right">People</th><th style="text-align:right">In Attention</th><th style="text-align:right">Attention rate</th>${J.trainedKey ? '<th style="text-align:right">Trained early</th>' : ''}</tr></thead>
+          <tbody>${groups.map(g => `<tr>
+            <td>${g.label}${g.note ? `<div style="font-size:10px;color:var(--tl)">${g.note}</div>` : ''}</td>
+            <td style="text-align:right">${g.n}</td>
+            <td style="text-align:right">${g.att}</td>
+            <td style="text-align:right;font-weight:600;color:${g.rate >= 75 ? '#e05252' : g.rate >= 50 ? '#e6a817' : '#2a7a4b'}">${fmtPct(g.rate)}</td>
+            ${J.trainedKey ? `<td style="text-align:right">${g.trained}</td>` : ''}
+          </tr>`).join('')}</tbody>
+        </table></div>
+        <div style="font-size:10.5px;color:var(--tl);margin-top:8px">
+          ${J.trainedKey
+            ? 'Trained early means a training date within 30 days of access being granted — trial lengths vary, so a fixed early window is more honest than assuming one.'
+            : 'Once a training date field exists in Pipedrive, this table gains a column showing how many in each group were trained early — the closest available test of whether training during a trial changes the outcome.'}
+        </div>
+      </div>`;
+      })()}
+
+      <div class="box">
+        <div class="box-title">Does training move the needle?</div>
+        <p style="font-size:12px;color:var(--tm);margin:0 0 12px">
+          Compares <b>band movement</b> for trained and untrained people over the same week — not who looks healthier overall.
+          People who get trained are not a random group (they may be the keenest, or the ones targeted <i>because</i> they were struggling),
+          so treat this as a signal to investigate rather than proof that training caused the change.
+        </p>
+        ${trainedNote}
+      </div>`;
+
+    // Trend across recorded weeks
+    healthHTML += `
+      <div class="box">
+        <div class="box-title">Attention rate over time</div>
+        ${weeks.length > 1
+          ? '<div class="chart-wrap" style="height:200px"><canvas id="eng-trend"></canvas></div>'
+          : `<div class="no-data">Building the record — ${weeks.length} week${weeks.length === 1 ? '' : 's'} stored so far. This chart appears once a second week is imported, and grows every week from then on.</div>`}
+      </div>`;
+
+    // Movers, admin only (individual emails at client organisations)
+    const movers = rows.filter(r => engBandIdx(r.now) >= 0 && engBandIdx(r.prev) >= 0 && engBandIdx(r.now) !== engBandIdx(r.prev));
+    healthHTML += `
+      <div class="box">
+        <div class="box-title">People who changed band this week</div>
+        <div class="admin-only">
+          ${movers.length ? `<div class="tbl-scroll"><table>
+            <thead><tr><th>Person</th><th>Organisation</th><th>Was</th><th>Now</th></tr></thead>
+            <tbody>${movers.map(m => `<tr>
+              <td style="font-size:11px">${m.e}</td><td>${m.o}</td>
+              <td><span style="color:${BAND_COL[m.prev]}">${m.prev}</span></td>
+              <td><span style="color:${BAND_COL[m.now]};font-weight:600">${m.now}</span></td>
+            </tr>`).join('')}</tbody></table></div>` : '<div class="no-data">Nobody changed band this week.</div>'}
+        </div>
+        ${!_isAdmin ? `<div class="no-data">${movers.length} people changed band this week. Individual names are visible to admins only.</div>` : ''}
+      </div>`;
+  }
+
+  // ── Usage section ─────────────────────────────────────────────────────────
+  let usageHTML = '';
+  if (usage.length) {
+    const last = usage[usage.length - 1];
+    const byMonth = {};
+    for (const d of usage) { const m = d.date.slice(0, 7); byMonth[m] = byMonth[m] || { l: 0, c: 0, ex: 0 }; byMonth[m].l += d.labs; byMonth[m].c += d.core; byMonth[m].ex += d.coreExSs; }
+    const months = Object.keys(byMonth).sort();
+    const share = mVal('labs_share');
+    const lastFull = months.length > 1 ? months[months.length - 2] : months[0];
+    const lf = byMonth[lastFull];
+    const exShare = lf && lf.c ? pct(lf.ex, lf.c) : null;
+    usageHTML = `
+      <div class="cards">
+        <div class="card"><div class="card-label" style="display:flex;align-items:center;gap:0">Labs share of product use${mInfo('labs_share')}</div>
+          <div class="card-value">${share != null ? fmtPct(share) : '—'}</div>
+          <div class="card-sub">${lastFull} · was ${byMonth[months[0]] ? fmtPct(pct(byMonth[months[0]].l, byMonth[months[0]].l + byMonth[months[0]].c)) : '—'} in ${months[0]}</div></div>
+        <div class="card"><div class="card-label">Events in ${lastFull}</div>
+          <div class="card-value">${fmtNum(Math.round((lf ? lf.l + lf.c : 0)))}</div>
+          <div class="card-sub">${fmtNum(Math.round(lf ? lf.l : 0))} Labs · ${fmtNum(Math.round(lf ? lf.c : 0))} Core</div></div>
+        <div class="card"><div class="card-label">Analytical share of Core</div>
+          <div class="card-value">${exShare != null ? fmtPct(exShare) : '—'}</div>
+          <div class="card-sub">Core work excluding Site Search</div></div>
+        <div class="card"><div class="card-label">Days on record</div>
+          <div class="card-value">${fmtNum(usage.length)}</div>
+          <div class="card-sub">${usage[0].date} → ${last.date}</div></div>
+      </div>
+      <div class="box">
+        <div class="box-title">Daily use, Labs against Core <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">7-day averages · daily counts are too noisy to read alone</span></div>
+        <div class="chart-wrap" style="height:240px"><canvas id="eng-daily"></canvas></div>
+      </div>
+      <div class="box">
+        <div class="box-title">Labs share of all product use, by month</div>
+        <div class="chart-wrap" style="height:200px"><canvas id="eng-share"></canvas></div>
+      </div>`;
+  }
+
+  sc.innerHTML = healthHTML + usageHTML + importHTML;
+
+  // ── Charts ────────────────────────────────────────────────────────────────
+  if (snap) {
+    const rows = snap.rows;
+    makeChart('eng-bands', {
+      type: 'bar',
+      data: { labels: ENG_BANDS, datasets: [
+        { label: 'Last week', data: ENG_BANDS.map(b => rows.filter(r => r.prev === b).length), backgroundColor: '#c9d6e0', borderRadius: 3 },
+        { label: 'This week', data: ENG_BANDS.map(b => rows.filter(r => r.now === b).length), backgroundColor: ENG_BANDS.map(b => BAND_COL[b]), borderRadius: 3 },
+      ] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, boxHeight: 10 } } },
+        scales: { x: { grid: { display: false }, ticks: axStyle }, y: { beginAtZero: true, grid: gridStyle, ticks: axStyle, title: { display: true, text: 'people', ...axStyle } } } },
+    });
+    if (weeks.length > 1) {
+      makeChart('eng-trend', {
+        type: 'line',
+        data: { labels: weeks.map(w => w.week), datasets: [{
+          label: 'Attention rate (lower is better)',
+          data: weeks.map(w => (w.rows && w.rows.length) ? Math.round(pct(w.rows.filter(r => r.now === 'Attention').length, w.rows.length) * 10) / 10 : null),
+          borderColor: '#e05252', backgroundColor: 'rgba(224,82,82,.07)', borderWidth: 2.5, fill: true, tension: .3, pointRadius: 3,
+        }] },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, boxHeight: 10 } } },
+          scales: { x: { grid: { display: false }, ticks: axStyle }, y: { beginAtZero: true, max: 100, grid: gridStyle, ticks: { ...axStyle, callback: v => v + '%' } } } },
+      });
+    }
+  }
+  if (usage.length) {
+    const roll = (arr, n) => arr.map((_, i) => { const s = arr.slice(Math.max(0, i - n + 1), i + 1); return s.length ? Math.round(s.reduce((a, b) => a + b, 0) / s.length) : null; });
+    const labs = usage.map(d => d.labs), core = usage.map(d => d.core);
+    makeChart('eng-daily', {
+      type: 'line',
+      data: { labels: usage.map(d => d.date), datasets: [
+        { label: 'Labs, 7-day average', data: roll(labs, 7), borderColor: '#7b1fa2', backgroundColor: 'rgba(123,31,162,.06)', borderWidth: 2.5, fill: true, tension: .3, pointRadius: 0 },
+        { label: 'Core, 7-day average', data: roll(core, 7), borderColor: '#2e8bc0', backgroundColor: 'rgba(46,139,192,.06)', borderWidth: 2.5, fill: true, tension: .3, pointRadius: 0 },
+      ] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, boxHeight: 10 } } },
+        scales: { x: { grid: { display: false }, ticks: { ...axStyle, maxTicksLimit: 10, maxRotation: 0 } }, y: { beginAtZero: true, grid: gridStyle, ticks: axStyle, title: { display: true, text: 'events per day', ...axStyle } } } },
+    });
+    const byMonth = {};
+    for (const d of usage) { const m = d.date.slice(0, 7); byMonth[m] = byMonth[m] || { l: 0, c: 0 }; byMonth[m].l += d.labs; byMonth[m].c += d.core; }
+    const months = Object.keys(byMonth).sort();
+    makeChart('eng-share', {
+      type: 'bar',
+      data: { labels: months, datasets: [{ label: 'Labs share of all events', data: months.map(m => byMonth[m].l + byMonth[m].c ? Math.round(pct(byMonth[m].l, byMonth[m].l + byMonth[m].c) * 10) / 10 : null), backgroundColor: '#7b1fa2', borderRadius: 3 }] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { grid: { display: false }, ticks: axStyle }, y: { beginAtZero: true, grid: gridStyle, ticks: { ...axStyle, callback: v => v + '%' } } } },
+    });
+  }
+}
+
 function renderActivity(el) {
   el = el || document.getElementById('main-content');
   const sub = (activeSub.activity_sub === 'labs' ? 'giraffe' : activeSub.activity_sub) || 'giraffe';
@@ -3213,9 +3783,9 @@ function renderActivity(el) {
     ])}
 
     <div class="sub-tabs">
-      ${['giraffe','sdk','retention','insights'].map(s =>
+      ${['giraffe','sdk','retention','insights','engagement'].map(s =>
         `<button class="sub-tab${sub===s?' active':''}" onclick="setActivitySub('${s}')">${
-          {giraffe:'Giraffe',sdk:'SDK / Features',retention:'Retention',insights:'Insights'}[s]
+          {giraffe:'Giraffe',sdk:'SDK / Features',retention:'Retention',insights:'Insights',engagement:'Engagement health'}[s]
         }</button>`
       ).join('')}
     </div>
@@ -3237,6 +3807,9 @@ function setActivitySub(sub, rerender = true, data) {
   const sdk     = data?.sdk     || load('activity_sdk');
   const labs    = data?.labs    || load('activity_labs');
   const phLive  = _ph.loaded && !_ph.error;
+
+  // ── ENGAGEMENT HEALTH ───────────────────────────────────────────────────
+  if (sub === 'engagement') { renderEngagement(sc); return; }
 
   // ── GIRAFFE ─────────────────────────────────────────────────────────────
   if (sub === 'giraffe') {
