@@ -88,6 +88,7 @@ const pieces = {
   engISO: extractLine(/const engISO = /),
   engWeekStart: extractBalanced(/function engWeekStart\(/),
   engWeekShift: extractLine(/function engWeekShift\(/),
+  engWeekLabel: extractBalanced(/function engWeekLabel\(/),
   engHealthWeeks: extractLine(/function engHealthWeeks\(\)/),
   engHealthLatest: extractLine(/function engHealthLatest\(\)/),
   engUsage: extractLine(/function engUsage\(\)/),
@@ -118,9 +119,9 @@ function makeSandbox({ deals = [], people = [], ph = { weekly: [] }, ls = {}, ca
   sandbox.load = k => sandbox._cache[sandbox.KEYS[k] || k] || [];
   vm.createContext(sandbox);
   const bundle = ['FY27_DEF', 'fy27', 'fy27Range', 'NON_NEW_BUSINESS_PIPELINES', 'isNewBusinessPipeline', 'numOr', 'pct', 'pdParseDate', 'pdValidDate', 'isTrialType', 'OM_FS', 'omReached', 'omModel',
-    'ENG_BANDS', 'engBandIdx', 'engSplitRows', 'engParseHealth', 'ENG_MONTHS', 'engParseUsage', 'engISO', 'engWeekStart', 'engWeekShift', 'engHealthWeeks', 'engHealthLatest', 'engUsage', 'engOrgStats', 'engTrainedKey', 'engPeople',
+    'ENG_BANDS', 'engBandIdx', 'engSplitRows', 'engParseHealth', 'ENG_MONTHS', 'engParseUsage', 'engISO', 'engWeekStart', 'engWeekShift', 'engWeekLabel', 'engHealthWeeks', 'engHealthLatest', 'engUsage', 'engOrgStats', 'engTrainedKey', 'engPeople',
     'METRICS', 'mVal', 'mTest', 'mDoc'].map(k => pieces[k]).join('\n');
-  vm.runInContext(bundle + '\nthis.__x = { pct, pdParseDate, pdValidDate, isTrialType, omReached, omModel, METRICS, mVal, mTest, mDoc, numOr, isNewBusinessPipeline, engParseHealth, engParseUsage, engPeople, engHealthLatest, engOrgStats, engWeekStart, engWeekShift };', sandbox);
+  vm.runInContext(bundle + '\nthis.__x = { pct, pdParseDate, pdValidDate, isTrialType, omReached, omModel, METRICS, mVal, mTest, mDoc, numOr, isNewBusinessPipeline, engParseHealth, engParseUsage, engPeople, engHealthLatest, engOrgStats, engWeekStart, engWeekShift, engWeekLabel };', sandbox);
   return sandbox.__x;
 }
 
@@ -374,6 +375,11 @@ console.log('\n6c. Engagement — paste parsers, weekly snapshots, person join')
   check('Monday files to itself', w.engWeekStart('2026-07-27') === '2026-07-27');
   check('an unparseable date is rejected rather than filed wrongly', w.engWeekStart('nonsense') === null);
   check('shifting back a week crosses the month boundary correctly', w.engWeekShift('2026-08-03', -7) === '2026-07-27', `got ${w.engWeekShift('2026-08-03', -7)}`);
+  const lbl = w.engWeekLabel('2026-07-27');
+  // Month abbreviation varies by platform ICU (Jul vs July), so assert the facts
+  // that matter: it starts Monday the 27th, ends Sunday the 2nd, and names the year.
+  check('week label spans Monday to Sunday for the user to sanity-check',
+    /Mon\b/.test(lbl) && /\b27 Jul/.test(lbl) && /Sun\b/.test(lbl) && /\b2 Aug/.test(lbl) && /2026/.test(lbl), `got ${lbl}`);
 }
 
 // ── 7. Drift guards — render sites must USE the registry ─────────────────────

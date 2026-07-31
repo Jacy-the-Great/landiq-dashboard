@@ -1376,6 +1376,13 @@ function engWeekStart(dateStr) {
   return engISO(d);
 }
 function engWeekShift(week, days) { const d = new Date(String(week).slice(0, 10) + 'T00:00:00'); if (isNaN(d.getTime())) return null; d.setDate(d.getDate() + days); return engISO(d); }
+// "Mon 27 Jul – Sun 2 Aug 2026" for a week starting Monday `week`.
+function engWeekLabel(week) {
+  if (!week) return '—';
+  const a = new Date(week + 'T00:00:00'), b = new Date(engWeekShift(week, 6) + 'T00:00:00');
+  const f = (d, withYear) => d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', ...(withYear ? { year: 'numeric' } : {}) });
+  return f(a, false) + ' – ' + f(b, true);
+}
 // Weekly health snapshots, oldest first.
 function engHealthWeeks() { return (load('health_weeks') || []).slice().sort((a, b) => (a.week || '') < (b.week || '') ? -1 : 1); }
 function engHealthLatest() { const w = engHealthWeeks(); return w.length ? w[w.length - 1] : null; }
@@ -1489,6 +1496,25 @@ window.engImportUsage = () => {
   toast(`✓ ${rows.length} days imported · ${merged.length} days on record (${merged[0].date} → ${merged[merged.length - 1].date}).`, 8000);
   if (ta) ta.value = '';
   renderActivity();
+};
+// Live preview of which weeks an import will land in, so the dates are visible
+// and editable before anything is stored.
+window.engUpdateWeekPreview = () => {
+  const el = document.getElementById('eng-week-preview');
+  const inp = document.getElementById('eng-health-week');
+  if (!el || !inp) return;
+  const wk = engWeekStart(inp.value);
+  if (!wk) { el.innerHTML = '<span style="color:#e05252">Pick a date.</span>'; return; }
+  const prev = engWeekShift(wk, -7);
+  const existing = (load('health_weeks') || []).map(w => w.week);
+  const prevTaken = existing.includes(prev);
+  const thisTaken = existing.includes(wk);
+  el.innerHTML =
+    `<div><b>This week</b> → ${engWeekLabel(wk)}${thisTaken ? ' <span style="color:#c25a00">· replaces the week already stored</span>' : ''}</div>` +
+    `<div style="margin-top:2px"><b>Last week</b> → ${engWeekLabel(prev)} ` +
+    (prevTaken
+      ? '<span style="color:var(--tl)">· already stored, will be left as it is</span>'
+      : '<span style="color:var(--tl)">· back-filled from the “last week” column</span>') + '</div>';
 };
 window.engDeleteWeek = week => {
   if (!confirm('Remove the health snapshot for week ' + week + '?')) return;
@@ -3396,14 +3422,12 @@ function renderEngagement(sc) {
         <div>
           <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px">Customer health (weekly)</div>
           <div style="font-size:11px;color:var(--tl);margin-bottom:6px">Columns: Person - Email · Organisation · Customer Health Score · CHS (Last Week). Include the header row.</div>
-          <div style="font-size:11px;color:var(--tl);margin-bottom:6px;background:#fff;border:1px solid #cfe3f0;border-radius:5px;padding:5px 7px">
-            This export has no date in it, so tell it which week the data is from — any day in that week will do, it files to the Monday.
-            It also reads the <b>“last week”</b> column, so a single import records <b>two</b> weeks. Importing the same week again just updates it.
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">
+            <span style="font-size:11px;color:var(--tm)">Data was pulled on</span>
+            <input type="date" id="eng-health-week" value="${engISO(new Date())}" oninput="engUpdateWeekPreview()" style="font-size:12px;padding:3px 6px;border:1px solid var(--bd);border-radius:5px">
+            <span style="font-size:10.5px;color:var(--tl)">defaults to today — change it to file the data into a different week</span>
           </div>
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-            <span style="font-size:11px;color:var(--tm)">Data is from</span>
-            <input type="date" id="eng-health-week" value="${engISO(new Date())}" style="font-size:12px;padding:3px 6px;border:1px solid var(--bd);border-radius:5px">
-          </div>
+          <div id="eng-week-preview" style="font-size:11px;color:var(--tm);background:#fff;border:1px solid #cfe3f0;border-radius:5px;padding:6px 8px;margin-bottom:6px"></div>
           <textarea id="eng-health-paste" placeholder="Person - Email&#9;Organisation&#9;Customer Health Score&#9;CHS (Last Week)" style="width:100%;min-height:80px;font-family:'DM Mono',monospace;font-size:11px;padding:6px;border:1px solid var(--bd);border-radius:6px"></textarea>
           <button onclick="engImportHealth()" style="margin-top:6px;font-size:11px;padding:4px 12px;border-radius:6px;border:none;background:var(--acc);color:#fff;cursor:pointer">Import health week</button>
         </div>
@@ -3714,6 +3738,7 @@ function renderEngagement(sc) {
         scales: { x: { grid: { display: false }, ticks: axStyle }, y: { beginAtZero: true, grid: gridStyle, ticks: { ...axStyle, callback: v => v + '%' } } } },
     });
   }
+  engUpdateWeekPreview();   // populate the "this week / last week" preview on load
 }
 
 function renderActivity(el) {
