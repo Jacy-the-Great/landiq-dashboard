@@ -3407,7 +3407,11 @@ function saveWebsiteDaily() {
 // ── ENGAGEMENT HEALTH sub-tab ────────────────────────────────────────────────
 // Customer health bands (weekly, manual from Power BI) joined to Pipedrive people
 // by email, plus Labs/Core product usage. See docs/ENGAGEMENT_TAB_PLAN.md.
-function renderEngagement(sc) {
+// mode: 'people'  → person-level health (bands, segments, trials, training)
+//       'usage'   → organisation rollups, product usage, import panel
+//       'all'     → everything (kept for direct calls/tests)
+// append: compose several sections into one sub-tab without clobbering earlier ones.
+function renderEngagement(sc, mode = 'all', append = false) {
   const weeks = engHealthWeeks();
   const snap = engHealthLatest();
   const usage = engUsage();
@@ -3450,7 +3454,7 @@ function renderEngagement(sc) {
   }
 
   // ── Health section ────────────────────────────────────────────────────────
-  let healthHTML = '';
+  let healthHTML = '', orgHTML = '';
   if (snap) {
     const rows = snap.rows;
     const attNow = mVal('attention_rate'), attPrev = METRICS.attention_rate.computePrev();
@@ -3494,6 +3498,10 @@ function renderEngagement(sc) {
         <div class="chart-wrap" style="height:200px"><canvas id="eng-bands"></canvas></div>
       </div>
 
+      </div>`;
+
+    // Organisation rollup — lives on the "Usage & organisations" sub-tab.
+    orgHTML = `
       <div class="box">
         <div class="box-title">Attention rate by organisation <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:auto">worst first · the call list</span></div>
         <p style="font-size:12px;color:var(--tm);margin:0 0 10px">Organisations with fewer than 3 scored people are shown in grey — one quiet person can put a small organisation at the top, which is rarely the real story.</p>
@@ -3685,7 +3693,10 @@ function renderEngagement(sc) {
       </div>`;
   }
 
-  sc.innerHTML = healthHTML + usageHTML + importHTML;
+  const html = mode === 'people' ? healthHTML
+             : mode === 'usage'  ? (orgHTML + usageHTML + importHTML)
+             : (healthHTML + orgHTML + usageHTML + importHTML);
+  if (append) sc.innerHTML += html; else sc.innerHTML = html;
 
   // ── Charts ────────────────────────────────────────────────────────────────
   if (snap) {
@@ -3743,7 +3754,9 @@ function renderEngagement(sc) {
 
 function renderActivity(el) {
   el = el || document.getElementById('main-content');
-  const sub = (activeSub.activity_sub === 'labs' ? 'giraffe' : activeSub.activity_sub) || 'giraffe';
+  // Old sub-tabs folded into two: People / Usage & organisations.
+  const OLD_ACT_SUBS = { giraffe:'usage', sdk:'usage', labs:'usage', retention:'people', insights:'people', engagement:'people' };
+  const sub = OLD_ACT_SUBS[activeSub.activity_sub] || activeSub.activity_sub || 'people';
 
   const giraffe = load('activity_giraffe');
   const sdk     = load('activity_sdk');
@@ -3843,9 +3856,9 @@ function renderActivity(el) {
     ])}
 
     <div class="sub-tabs">
-      ${['giraffe','sdk','retention','insights','engagement'].map(s =>
+      ${['people','usage'].map(s =>
         `<button class="sub-tab${sub===s?' active':''}" onclick="setActivitySub('${s}')">${
-          {giraffe:'Giraffe',sdk:'SDK / Features',retention:'Retention',insights:'Insights',engagement:'Engagement health'}[s]
+          {people:'People',usage:'Usage & organisations'}[s]
         }</button>`
       ).join('')}
     </div>
@@ -3856,8 +3869,11 @@ function renderActivity(el) {
   setActivitySub(sub, false, { giraffe, sdk, labs });
 }
 
-function setActivitySub(sub, rerender = true, data) {
-  activeSub.activity_sub = sub;
+function setActivitySub(sub, rerender = true, data, append = false, only = null) {
+  // Composite sub-tabs (People / Usage) call this internally with append=true to
+  // stack sections. Those internal calls must NOT claim the active sub-tab, or the
+  // highlighted tab and the next render both end up pointing at a section name.
+  if (!append) activeSub.activity_sub = sub;
   if (rerender) { renderActivity(); return; }
 
   const sc = document.getElementById('activity-sub-content');
@@ -3868,8 +3884,28 @@ function setActivitySub(sub, rerender = true, data) {
   const labs    = data?.labs    || load('activity_labs');
   const phLive  = _ph.loaded && !_ph.error;
 
-  // ── ENGAGEMENT HEALTH ───────────────────────────────────────────────────
-  if (sub === 'engagement') { renderEngagement(sc); return; }
+  if (!append) sc.innerHTML = '';   // blocks below append, so composites can stack them
+
+  // ── TWO RATIONALISED SUB-TABS ───────────────────────────────────────────
+  // PEOPLE: who is using Land iQ and who is slipping (person-level).
+  // USAGE & ORGANISATIONS: what is being used, how much, and by which orgs.
+  // Each composes the existing sections rather than duplicating them.
+  if (sub === 'people') {
+    renderEngagement(sc, 'people', true);          // health bands, disengaged, trials, training, movers
+    setActivitySub('retention', false, data, true); // cohorts, retention decay, segments, needs-attention
+    setActivitySub('insights', false, data, true, 'people');  // segments, needs-attention, quiet payers, power users
+    return;
+  }
+  if (sub === 'usage') {
+    setActivitySub('giraffe', false, data, true);   // active-user trend, daily share of monthly
+    renderEngagement(sc, 'usage', true);            // org rollup, Labs vs Core, import panel
+    setActivitySub('sdk', false, data, true);        // feature use by app/component
+    setActivitySub('insights', false, data, true, 'usage');   // feature adoption — merged into the feature view
+    setActivitySub('labs', false, data, true);      // superseded manual Labs (flagged, hideable)
+    return;
+  }
+  // ── ENGAGEMENT HEALTH (direct call — kept for deep links/tests) ──────────
+  if (sub === 'engagement') { renderEngagement(sc, 'all', append); return; }
 
   // ── GIRAFFE ─────────────────────────────────────────────────────────────
   if (sub === 'giraffe') {
@@ -3915,7 +3951,7 @@ function setActivitySub(sub, rerender = true, data) {
     const chartWrap2 = hasDau ? '<div class="chart-wrap" style="height:200px;margin-top:16px"><canvas id="act-dau-chart"></canvas></div>' : '';
     const chartWrap3 = hasDauMau ? '<div class="chart-wrap" style="height:180px;margin-top:16px"><canvas id="act-daumau-chart"></canvas></div>' : '';
 
-    sc.innerHTML = `
+    sc.innerHTML += `
       <div class="box">
         <div class="box-title">Giraffe: Weekly active users
           <span style="margin-left:8px;font-size:10px;font-weight:400;color:var(--tl)">${hasLive ? 'PostHog · live' : 'manual entry'}</span>
@@ -4085,7 +4121,7 @@ function setActivitySub(sub, rerender = true, data) {
         '<tbody>' + manualRows + '</tbody></table></div>';
     }
 
-    sc.innerHTML = `
+    sc.innerHTML += `
       <div class="box">
         <div class="box-title">SDK &amp; Feature Usage: by app / component
           <span style="margin-left:8px;font-size:10px;font-weight:400;color:var(--tl)">${hasFeat ? 'PostHog · live · last 30 days' : 'manual entry'}</span>
@@ -4172,15 +4208,20 @@ function setActivitySub(sub, rerender = true, data) {
         '<tbody>' + rows + '</tbody></table></div>';
     }
 
-    sc.innerHTML = `
-      <div class="box">
-        <div class="box-title">Land iQ Labs: activity
-          <a class="src-link" href="https://posthog.com" target="_blank" style="margin-left:auto">↗ PostHog</a>
+    sc.innerHTML += `
+      <div class="box" style="border:1.5px solid #e05252">
+        <div class="box-title" style="color:#e05252">⚠ Superseded — old manual Labs log
+          <span style="font-size:11px;font-weight:400;color:#e05252;margin-left:auto">recommended for removal</span>
         </div>
-        <div class="callout info" style="margin-bottom:14px">
-          <div class="callout-text" style="font-size:12px">
-            Labs uses its own PostHog project. If the Supabase batch export covers Labs events, they will appear in the
-            Feature Usage tab once tagged with <code>app: "Labs"</code> or similar. Otherwise, use manual entry here.
+        <div class="callout" style="background:#fdecea;border:1px solid #f5b7b1;margin-bottom:14px">
+          <div class="callout-text" style="font-size:12px;color:#8a2622">
+            <b>This is the old hand-entered Labs table, and it is no longer needed.</b>
+            Labs activity now comes from the Power BI usage export — daily rather than weekly, complete, and self-dating —
+            shown in <b>Daily use, Labs against Core</b> above. Two Labs numbers that do not match is exactly the kind of
+            thing that erodes trust in the dashboard, so this section is kept only so you can check nothing is lost before
+            it goes. <b>To remove it:</b> turn on <b>Review mode</b> in the header and click <b>hide</b> on this box —
+            it will disappear for everyone. Tell me when you are happy and I will delete the code and the entry form.
+            <div style="margin-top:6px;font-size:11px">Note: this section was already unreachable in the app before now — the Activity tab redirected away from it — so nobody has been seeing these numbers.</div>
           </div>
         </div>
         ${labs.length ? '<div class="chart-wrap" style="height:240px"><canvas id="act-labs-chart"></canvas></div>' : '<div class="no-data">No Labs activity data yet. Add entries below.</div>'}
@@ -4291,7 +4332,7 @@ function setActivitySub(sub, rerender = true, data) {
       </tr>`
     ).join('');
 
-    sc.innerHTML = `
+    sc.innerHTML += `
       ${!phLive ? '<div class="callout warn" style="margin-bottom:16px"><div class="callout-text">Retention data requires the PostHog SQL migration. Run <strong>posthog_migrations.sql</strong> in the <a href="https://supabase.com/dashboard/project/ysdonnjezvoyrrizadik/editor" target="_blank" style="color:var(--acc)">Supabase SQL Editor</a> first.</div></div>' : ''}
 
       <div class="cards" style="margin-bottom:18px">
@@ -4336,27 +4377,14 @@ function setActivitySub(sub, rerender = true, data) {
         </div>` : '<div class="no-data">No retention data. Run SQL migration to enable.</div>'}
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-        ${hasRet ? `<div class="box" style="margin-bottom:0">
-          <div class="box-title">Retention decay: latest 6 cohorts</div>
-          <div class="chart-wrap" style="height:240px"><canvas id="act-retention-chart"></canvas></div>
-        </div>` : ''}
-        ${segTotal > 0 ? `<div class="box" style="margin-bottom:0">
-          <div class="box-title">User health segments</div>
-          <div class="chart-wrap" style="height:240px"><canvas id="act-seg-donut"></canvas></div>
-        </div>` : ''}
-      </div>
-
-      ${(_ph.atRisk||[]).length > 0 ? `<div class="box">
-        <div class="box-title">At-risk users: was active 5+ days, quiet 30+ days (top 15)
-          <span style="font-size:11px;font-weight:400;color:var(--tl);margin-left:8px">3+ lifetime active days · not seen in 14d+</span>
-        </div>
-        <div class="tbl-scroll"><table>
-          <thead><tr><th>User ID</th><th style="text-align:right">Active days</th><th style="text-align:right">Last seen</th><th style="text-align:right">Inactive for</th></tr></thead>
-          <tbody>${atRiskRows}</tbody>
-        </table></div>
+      ${hasRet ? `<div class="box">
+        <div class="box-title">Retention decay: latest 6 cohorts</div>
+        <div class="chart-wrap" style="height:240px"><canvas id="act-retention-chart"></canvas></div>
       </div>` : ''}
     `;
+    // MERGED: the "user health segments" donut and the "at-risk top 15" table that
+    // used to sit here are the same data as the versions further down this tab —
+    // one segments chart and one needs-attention list now, not two of each.
 
     if (hasNew) {
       const nuData = _ph.newUsers.slice(-16);
@@ -4396,26 +4424,6 @@ function setActivitySub(sub, rerender = true, data) {
       });
     }
 
-    if (segTotal > 0) {
-      const segColours = { New:'#2e8bc0', Active:'#2a7a4b', 'At-risk':'#c25a00', Dormant:'#8a9fb0' };
-      const segEntries = Object.entries(segMap).filter(([,v])=>v>0);
-      makeChart('act-seg-donut', {
-        type:'doughnut',
-        data:{
-          labels: segEntries.map(([k])=>k),
-          datasets:[{ data: segEntries.map(([,v])=>v), backgroundColor: segEntries.map(([k])=>segColours[k]||'#ccc'), borderWidth:2 }]
-        },
-        options:{ responsive:true, maintainAspectRatio:false,
-          plugins:{ legend:{ position:'right', labels:{
-            font:{ family:'DM Sans', size:11 }, boxWidth:12,
-            generateLabels: chart => chart.data.labels.map((l,i) => ({
-              text: l+': '+fmtNum(chart.data.datasets[0].data[i]),
-              fillStyle: chart.data.datasets[0].backgroundColor[i], hidden:false, index:i
-            }))
-          }}}
-        }
-      });
-    }
 
   // ── INSIGHTS ─────────────────────────────────────────────────────────────
   } else if (sub === 'insights') {
@@ -4461,8 +4469,8 @@ function setActivitySub(sub, rerender = true, data) {
       '</tr>'
     ).join('');
 
-    sc.innerHTML = `
-      ${!hasData ? '<div class="callout warn"><div class="callout-text">Run the SQL migration and click Refresh PostHog to load Insights data.</div></div>' : ''}
+    sc.innerHTML += `
+      ${only === 'usage' ? '' : `${!hasData ? '<div class="callout warn"><div class="callout-text">Run the SQL migration and click Refresh PostHog to load Insights data.</div></div>' : ''}
 
       <div style="margin-bottom:0">
 
@@ -4482,9 +4490,9 @@ function setActivitySub(sub, rerender = true, data) {
             </div>` : '<div class="no-data">No segment data yet.</div>'}
         </div>
 
-      </div>
+      </div>`}
 
-      <div class="box">
+      ${only === 'people' ? '' : `<div class="box">
         <div class="box-title">Feature adoption: % of all users who have tried each feature</div>
         ${adoptionRows ? `
           <div class="chart-wrap" style="height:220px;margin-bottom:16px"><canvas id="act-adoption-chart"></canvas></div>
@@ -4492,9 +4500,9 @@ function setActivitySub(sub, rerender = true, data) {
             <thead><tr><th>Feature</th><th style="text-align:right">Users</th><th style="text-align:right">Adoption</th></tr></thead>
             <tbody>${adoptionRows}</tbody>
           </table></div>` : '<div class="no-data">No adoption data.</div>'}
-      </div>
+      </div>`}
 
-      ${(() => {
+      ${only === 'usage' ? '' : `${(() => {
         // Paying customers gone quiet: the actionable version of "at-risk".
         // Needs email matching (posthog_add_emails.sql + a sync run).
         const ea = {};
@@ -4545,7 +4553,7 @@ function setActivitySub(sub, rerender = true, data) {
           <thead><tr><th>#</th><th>User ID</th><th style="text-align:right">Events</th><th style="text-align:right">Active days</th><th style="text-align:right">Last seen</th></tr></thead>
           <tbody>${powerRows}</tbody>
         </table></div>` : '<div class="no-data">No data.</div>'}
-      </div>
+      </div>`}
     `;
 
     // Segments donut chart
