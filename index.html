@@ -1360,6 +1360,22 @@ function engParseUsage(text) {
   }
   return out.sort((a, b) => a.date < b.date ? -1 : 1);
 }
+// The health export carries no date of its own, so imports are filed against a
+// week. Snap any chosen date to the MONDAY of its week, so importing on a Tuesday
+// and again on a Thursday updates one week instead of creating two near-identical
+// ones. Matches the Monday-start weeks the usage data uses.
+// Format from LOCAL date parts — toISOString() converts to UTC, which in Sydney
+// (UTC+10) rolls a local midnight back to the previous day and files a Tuesday
+// into the wrong week. Same trap as fy27Range; caught by tests §6d.
+const engISO = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+function engWeekStart(dateStr) {
+  const s = String(dateStr || '').slice(0, 10);
+  const d = new Date(s + 'T00:00:00');
+  if (isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + (d.getDay() === 0 ? -6 : 1 - d.getDay()));   // 0=Sun belongs to the week just ended
+  return engISO(d);
+}
+function engWeekShift(week, days) { const d = new Date(String(week).slice(0, 10) + 'T00:00:00'); if (isNaN(d.getTime())) return null; d.setDate(d.getDate() + days); return engISO(d); }
 // Weekly health snapshots, oldest first.
 function engHealthWeeks() { return (load('health_weeks') || []).slice().sort((a, b) => (a.week || '') < (b.week || '') ? -1 : 1); }
 function engHealthLatest() { const w = engHealthWeeks(); return w.length ? w[w.length - 1] : null; }
@@ -1441,12 +1457,23 @@ window.engImportHealth = () => {
   const wk = document.getElementById('eng-health-week');
   const rows = engParseHealth(ta ? ta.value : '');
   if (!rows.length) { toast('✗ No health rows found. Copy the four columns from Excel (including the header) and paste again.', 8000); return; }
-  const week = (wk && wk.value) ? wk.value : new Date().toISOString().slice(0, 10);
+  const week = engWeekStart((wk && wk.value) ? wk.value : engISO(new Date()));
+  const at = new Date().toISOString(), by = (_authEmail || '').split('@')[0];
   const weeks = (load('health_weeks') || []).filter(w => w.week !== week);   // re-import overwrites that week
-  weeks.push({ week, rows, at: new Date().toISOString(), by: (_authEmail || '').split('@')[0] });
+  weeks.push({ week, rows, at, by });
+  // Every export also carries last week's band per person, so one import yields
+  // TWO weeks of record — you get a trend from the very first upload. Only fills a
+  // gap: never overwrites a week imported in full (that one has real movement data).
+  const prevWeek = engWeekShift(week, -7);
+  let derived = 0;
+  if (!weeks.some(w => w.week === prevWeek)) {
+    const prevRows = rows.filter(r => engBandIdx(r.prev) >= 0).map(r => ({ e: r.e, o: r.o, now: r.prev, prev: '' }));
+    if (prevRows.length) { weeks.push({ week: prevWeek, rows: prevRows, at, by, derived: true }); derived = prevRows.length; }
+  }
+  weeks.sort((a, b) => a.week < b.week ? -1 : 1);
   save('health_weeks', weeks);
   const bands = ENG_BANDS.map(b => b + ' ' + rows.filter(r => r.now === b).length).join(' · ');
-  toast(`✓ ${rows.length} people stored for week ${week} (${bands}). ${weeks.length} week${weeks.length === 1 ? '' : 's'} on record.`, 8000);
+  toast(`✓ ${rows.length} people filed under week of ${week} (${bands}).${derived ? ` Also back-filled ${derived} people into the week of ${prevWeek} from the "last week" column.` : ''} ${weeks.length} week${weeks.length === 1 ? '' : 's'} on record.`, 9000);
   if (ta) ta.value = '';
   renderActivity();
 };
@@ -3369,9 +3396,13 @@ function renderEngagement(sc) {
         <div>
           <div style="font-size:12px;font-weight:600;color:var(--navy);margin-bottom:4px">Customer health (weekly)</div>
           <div style="font-size:11px;color:var(--tl);margin-bottom:6px">Columns: Person - Email · Organisation · Customer Health Score · CHS (Last Week). Include the header row.</div>
+          <div style="font-size:11px;color:var(--tl);margin-bottom:6px;background:#fff;border:1px solid #cfe3f0;border-radius:5px;padding:5px 7px">
+            This export has no date in it, so tell it which week the data is from — any day in that week will do, it files to the Monday.
+            It also reads the <b>“last week”</b> column, so a single import records <b>two</b> weeks. Importing the same week again just updates it.
+          </div>
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-            <span style="font-size:11px;color:var(--tm)">Week ending</span>
-            <input type="date" id="eng-health-week" value="${new Date().toISOString().slice(0,10)}" style="font-size:12px;padding:3px 6px;border:1px solid var(--bd);border-radius:5px">
+            <span style="font-size:11px;color:var(--tm)">Data is from</span>
+            <input type="date" id="eng-health-week" value="${engISO(new Date())}" style="font-size:12px;padding:3px 6px;border:1px solid var(--bd);border-radius:5px">
           </div>
           <textarea id="eng-health-paste" placeholder="Person - Email&#9;Organisation&#9;Customer Health Score&#9;CHS (Last Week)" style="width:100%;min-height:80px;font-family:'DM Mono',monospace;font-size:11px;padding:6px;border:1px solid var(--bd);border-radius:6px"></textarea>
           <button onclick="engImportHealth()" style="margin-top:6px;font-size:11px;padding:4px 12px;border-radius:6px;border:none;background:var(--acc);color:#fff;cursor:pointer">Import health week</button>
@@ -3383,7 +3414,10 @@ function renderEngagement(sc) {
           <button onclick="engImportUsage()" style="margin-top:6px;font-size:11px;padding:4px 12px;border-radius:6px;border:none;background:var(--acc);color:#fff;cursor:pointer">Import usage days</button>
         </div>
       </div>
-      ${weeks.length ? `<div style="margin-top:10px;font-size:11px;color:var(--tl)">Weeks on record: ${weeks.map(w => `${w.week} <span onclick="engDeleteWeek('${w.week}')" title="Remove this week" style="cursor:pointer;color:#e05252">✕</span>`).join(' · ')}</div>` : ''}
+      ${weeks.length ? `<div style="margin-top:10px;font-size:11px;color:var(--tl)">
+        Weeks on record: ${weeks.map(w => `<span title="${w.rows ? w.rows.length : 0} people${w.derived ? ' · back-filled from the following week\'s “last week” column — import that week\'s own export to replace it' : ''}">${w.week}${w.derived ? ' <span style="color:var(--tl)">(back-filled)</span>' : ''}</span> <span onclick="engDeleteWeek('${w.week}')" title="Remove this week" style="cursor:pointer;color:#e05252">✕</span>`).join(' · ')}
+        <div style="margin-top:3px">Have older exports? Import each one with its own date — they slot into the right weeks automatically.</div>
+      </div>` : ''}
     </div>`;
 
   if (!snap && !usage.length) {
@@ -3568,8 +3602,9 @@ function renderEngagement(sc) {
       <div class="box">
         <div class="box-title">Attention rate over time</div>
         ${weeks.length > 1
-          ? '<div class="chart-wrap" style="height:200px"><canvas id="eng-trend"></canvas></div>'
-          : `<div class="no-data">Building the record — ${weeks.length} week${weeks.length === 1 ? '' : 's'} stored so far. This chart appears once a second week is imported, and grows every week from then on.</div>`}
+          ? `<div class="chart-wrap" style="height:200px"><canvas id="eng-trend"></canvas></div>
+             <div style="font-size:10.5px;color:var(--tl);margin-top:6px">${weeks.length} weeks on record${weeks.some(w => w.derived) ? ` · weeks marked back-filled were reconstructed from the following week's “last week” column, so they carry no movement of their own` : ''}. A new point appears every time a week is imported.</div>`
+          : `<div class="no-data">Building the record — ${weeks.length} week${weeks.length === 1 ? '' : 's'} stored so far. Import a health export and this chart starts immediately, because each export also back-fills the week before it.</div>`}
       </div>`;
 
     // Movers, admin only (individual emails at client organisations)

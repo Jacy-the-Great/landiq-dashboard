@@ -85,6 +85,9 @@ const pieces = {
   engParseHealth: extractBalanced(/function engParseHealth\(/),
   ENG_MONTHS: extractLine(/const ENG_MONTHS = /),
   engParseUsage: extractBalanced(/function engParseUsage\(/),
+  engISO: extractLine(/const engISO = /),
+  engWeekStart: extractBalanced(/function engWeekStart\(/),
+  engWeekShift: extractLine(/function engWeekShift\(/),
   engHealthWeeks: extractLine(/function engHealthWeeks\(\)/),
   engHealthLatest: extractLine(/function engHealthLatest\(\)/),
   engUsage: extractLine(/function engUsage\(\)/),
@@ -115,9 +118,9 @@ function makeSandbox({ deals = [], people = [], ph = { weekly: [] }, ls = {}, ca
   sandbox.load = k => sandbox._cache[sandbox.KEYS[k] || k] || [];
   vm.createContext(sandbox);
   const bundle = ['FY27_DEF', 'fy27', 'fy27Range', 'NON_NEW_BUSINESS_PIPELINES', 'isNewBusinessPipeline', 'numOr', 'pct', 'pdParseDate', 'pdValidDate', 'isTrialType', 'OM_FS', 'omReached', 'omModel',
-    'ENG_BANDS', 'engBandIdx', 'engSplitRows', 'engParseHealth', 'ENG_MONTHS', 'engParseUsage', 'engHealthWeeks', 'engHealthLatest', 'engUsage', 'engOrgStats', 'engTrainedKey', 'engPeople',
+    'ENG_BANDS', 'engBandIdx', 'engSplitRows', 'engParseHealth', 'ENG_MONTHS', 'engParseUsage', 'engISO', 'engWeekStart', 'engWeekShift', 'engHealthWeeks', 'engHealthLatest', 'engUsage', 'engOrgStats', 'engTrainedKey', 'engPeople',
     'METRICS', 'mVal', 'mTest', 'mDoc'].map(k => pieces[k]).join('\n');
-  vm.runInContext(bundle + '\nthis.__x = { pct, pdParseDate, pdValidDate, isTrialType, omReached, omModel, METRICS, mVal, mTest, mDoc, numOr, isNewBusinessPipeline, engParseHealth, engParseUsage, engPeople, engHealthLatest, engOrgStats };', sandbox);
+  vm.runInContext(bundle + '\nthis.__x = { pct, pdParseDate, pdValidDate, isTrialType, omReached, omModel, METRICS, mVal, mTest, mDoc, numOr, isNewBusinessPipeline, engParseHealth, engParseUsage, engPeople, engHealthLatest, engOrgStats, engWeekStart, engWeekShift };', sandbox);
   return sandbox.__x;
 }
 
@@ -362,6 +365,15 @@ console.log('\n6c. Engagement — paste parsers, weekly snapshots, person join')
   const os2 = makeSandbox({ cache }).engOrgStats();
   check('org stats find every organisation in the snapshot (2 orgs)', os2.length === 2, JSON.stringify(os2.map(x => x.o)));
   check('org stats sort worst-first', os2[0].rate >= os2[os2.length - 1].rate);
+
+  // ── Week filing: the health export carries no date, so imports snap to a week ──
+  const w = makeSandbox();
+  check('a Tuesday files to that week\'s Monday', w.engWeekStart('2026-07-28') === '2026-07-27', `got ${w.engWeekStart('2026-07-28')}`);
+  check('a Thursday in the same week files to the SAME Monday (no duplicate weeks)', w.engWeekStart('2026-07-30') === w.engWeekStart('2026-07-28'));
+  check('Sunday belongs to the week that just ended, not the next one', w.engWeekStart('2026-08-02') === '2026-07-27', `got ${w.engWeekStart('2026-08-02')}`);
+  check('Monday files to itself', w.engWeekStart('2026-07-27') === '2026-07-27');
+  check('an unparseable date is rejected rather than filed wrongly', w.engWeekStart('nonsense') === null);
+  check('shifting back a week crosses the month boundary correctly', w.engWeekShift('2026-08-03', -7) === '2026-07-27', `got ${w.engWeekShift('2026-08-03', -7)}`);
 }
 
 // ── 7. Drift guards — render sites must USE the registry ─────────────────────
