@@ -95,6 +95,11 @@ const pieces = {
   engTrainedKey: extractBalanced(/function engTrainedKey\(/),
   engOrgStats: extractBalanced(/function engOrgStats\(/),
   engPeople: extractBalanced(/function engPeople\(/),
+  kpiWkStart: extractLine(/const kpiWkStart = /),
+  _flagLabelText: extractBalanced(/function _flagLabelText\(/),
+  cardRowKey: extractLine(/const cardRowKey = /),
+  cardItemKey: extractBalanced(/const cardItemKey = /),
+  applyCardOrder: extractBalanced(/function applyCardOrder\(/),
 };
 
 console.log('\n1. Extraction');
@@ -118,10 +123,10 @@ function makeSandbox({ deals = [], people = [], ph = { weekly: [] }, ls = {}, ca
   };
   sandbox.load = k => sandbox._cache[sandbox.KEYS[k] || k] || [];
   vm.createContext(sandbox);
-  const bundle = ['FY27_DEF', 'fy27', 'fy27Range', 'NON_NEW_BUSINESS_PIPELINES', 'isNewBusinessPipeline', 'numOr', 'pct', 'pdParseDate', 'pdValidDate', 'isTrialType', 'OM_FS', 'omReached', 'omModel',
+  const bundle = ['FY27_DEF', 'fy27', 'fy27Range', 'NON_NEW_BUSINESS_PIPELINES', 'isNewBusinessPipeline', 'numOr', 'pct', 'pdParseDate', 'pdValidDate', 'isTrialType', 'kpiWkStart', 'OM_FS', 'omReached', 'omModel',
     'ENG_BANDS', 'engBandIdx', 'engSplitRows', 'engParseHealth', 'ENG_MONTHS', 'engParseUsage', 'engISO', 'engWeekStart', 'engWeekShift', 'engWeekLabel', 'engHealthWeeks', 'engHealthLatest', 'engUsage', 'engOrgStats', 'engTrainedKey', 'engPeople',
     'METRICS', 'mVal', 'mTest', 'mDoc'].map(k => pieces[k]).join('\n');
-  vm.runInContext(bundle + '\nthis.__x = { pct, pdParseDate, pdValidDate, isTrialType, omReached, omModel, METRICS, mVal, mTest, mDoc, numOr, isNewBusinessPipeline, engParseHealth, engParseUsage, engPeople, engHealthLatest, engOrgStats, engWeekStart, engWeekShift, engWeekLabel };', sandbox);
+  vm.runInContext(bundle + '\nthis.__x = { pct, pdParseDate, pdValidDate, isTrialType, kpiWkStart, omReached, omModel, METRICS, mVal, mTest, mDoc, numOr, isNewBusinessPipeline, engParseHealth, engParseUsage, engPeople, engHealthLatest, engOrgStats, engWeekStart, engWeekShift, engWeekLabel };', sandbox);
   return sandbox.__x;
 }
 
@@ -393,6 +398,100 @@ console.log('\n7. Drift guards (no second copies of registry logic in render cod
   check(`render sites consume the registry (mTest×${mTestUses} + mVal×${mValPaid} ≥ 5)`, mTestUses + mValPaid >= 5);
   const mDocUses = (html.match(/mDoc\('/g) || []).length;
   check(`card tooltips are registry-generated (mDoc used ${mDocUses}×, ≥ 5)`, mDocUses >= 5);
+}
+
+// ── 8. New leads generated (Pipedrive Leads Inbox, target 10/week) ───────────
+console.log('\n8. New leads per week (Leads Inbox — a different source from Deals)');
+{
+  const { kpiWkStart, pdParseDate, pdValidDate } = makeSandbox();
+  const wk = s => kpiWkStart(pdParseDate(s)).toISOString().slice(0, 10);
+
+  // Weeks run Monday–Sunday, same as every other weekly figure on the board.
+  check('a Wednesday lead files to that week\'s Monday', wk('2026-07-22 09:30:00') === '2026-07-20');
+  check('a Monday lead files to itself', wk('2026-07-20 00:05:00') === '2026-07-20');
+  check('a Sunday lead belongs to the week that just ended', wk('2026-07-26 23:50:00') === '2026-07-20');
+  check('the next Monday starts a new week', wk('2026-07-27 00:01:00') === '2026-07-27');
+  check('Pipedrive lead add_time format parses', pdValidDate(pdParseDate('2026-07-22 09:30:00')));
+
+  // The KPI counts leads GENERATED. Archiving a lead tidies the inbox; it must not
+  // retro-shrink the week the lead was created in.
+  check('sync fetches archived leads too (archived_status: all)',
+    /archived_status:\s*'all'/.test(readFileSync(join(root, 'scripts/pipedrive-sync.mjs'), 'utf8')));
+  check('lead counting does not filter on Archived', !/Lead - Archived'\]\s*[=!]==/.test(html));
+
+  // Target: 10 NEW LEADS per week, 4-week month like the won/licence targets.
+  check('weekly leads target is 10', /leads:\s*\{\s*week:\s*10\s*,/.test(html));
+  check('monthly leads target is 40 (10/wk x 4)', /leads:\s*\{\s*week:\s*10\s*,\s*month:\s*40\s*,/.test(html));
+
+  // Zero is a real measurement; an empty Leads Inbox is an ABSENT SOURCE.
+  check('empty Leads Inbox renders "no data", not 0', /const hasLeadData = kpiLeadDates\.length > 0/.test(html));
+  check('leads series is null (not 0) when there is no source', /hasLeadData \?[^\n]*kpiLeadDates\.filter[^\n]*: null/.test(html));
+
+  // A missing table must never take the dashboard down with it.
+  check('leads table fetch degrades to [] instead of throwing',
+    /fetchAllRows\('liq_pipedrive_leads'[^\n]*\.catch\(\(\) => \[\]\)/.test(html));
+  check('leads chart is only drawn when the canvas exists', /if \(hasLeadData\) makeChart\('pd-kpi-leads'/.test(html));
+}
+
+// ── 9. Drag-to-reorder metric cards (review mode) ────────────────────────────
+console.log('\n9. Metric card reordering (saved order must survive re-renders)');
+{
+  // Minimal DOM stand-in: just enough of the element API applyCardOrder touches.
+  // Real browser DOM moves an existing child on appendChild — replicate that, or
+  // the test would pass on logic that duplicates cards instead of reordering.
+  const mkCard = (label) => ({
+    _label: label,
+    classList: { contains: c => c === 'card', add() {}, remove() {} },
+    querySelector: () => ({ _label: label, cloneNode() { return this; }, querySelectorAll: () => [], get textContent() { return label; } }),
+  });
+  const mkRow = (labels) => {
+    const row = {
+      children: labels.map(mkCard),
+      classList: { add() {}, contains: () => false },
+      appendChild(c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); this.children.push(c); },
+    };
+    return row;
+  };
+  const mkRoot = (row) => ({ querySelectorAll: sel => (sel === '.cards' ? [row] : []) });
+  const labelsOf = row => row.children.map(c => c._label);
+
+  const sandbox = {
+    console, activeTab: 'pipedrive', _cardOrder: {},
+    Array, Map, Infinity, Object,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext([pieces._flagLabelText, pieces.cardRowKey, pieces.cardItemKey, pieces.applyCardOrder].join('\n') +
+    '\nthis.__y = { applyCardOrder };', sandbox);
+  const { applyCardOrder } = sandbox.__y;
+
+  // Saved order puts leads first, ahead of the deal metrics.
+  sandbox._cardOrder = { 'pipedrive|row0': ['new leads this week', 'deals won this month'] };
+  const row = mkRow(['Deals won (this month)', 'New leads (this week)', 'Avg deal value (this month)']);
+  applyCardOrder(mkRoot(row));
+  check('saved order moves a card to the front',
+    labelsOf(row)[0] === 'New leads (this week)', labelsOf(row).join(' | '));
+  check('no card is lost or duplicated while reordering',
+    row.children.length === 3 && new Set(labelsOf(row)).size === 3, labelsOf(row).join(' | '));
+  check('a card missing from the saved order keeps its place at the end',
+    labelsOf(row)[2] === 'Avg deal value (this month)', labelsOf(row).join(' | '));
+
+  // A stale saved order naming cards that no longer exist must not blank the row.
+  sandbox._cardOrder = { 'pipedrive|row0': ['a metric that was deleted', 'another ghost'] };
+  const row2 = mkRow(['Deals won (this month)', 'New leads (this week)']);
+  applyCardOrder(mkRoot(row2));
+  check('a stale saved order leaves every card visible in its natural order',
+    labelsOf(row2).join('|') === 'Deals won (this month)|New leads (this week)', labelsOf(row2).join(' | '));
+
+  // No saved order for this row = leave it exactly as rendered.
+  sandbox._cardOrder = {};
+  const row3 = mkRow(['One', 'Two', 'Three']);
+  applyCardOrder(mkRoot(row3));
+  check('no saved order leaves the rendered order untouched', labelsOf(row3).join('|') === 'One|Two|Three');
+
+  // Reordering is review-mode-gated at the handler level, but the ORDER itself
+  // must apply for everyone — a viewer should see the board the owner arranged.
+  check('applying a saved order is not gated on review mode', !/function applyCardOrder\([\s\S]{0,200}_reviewMode/.test(html));
+  check('drag handlers ARE gated on review mode', /function enableCardDrag\([\s\S]{0,120}!_reviewMode/.test(html));
 }
 
 finish();

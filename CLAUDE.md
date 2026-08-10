@@ -65,6 +65,12 @@ Line numbers rot — **grep for symbols**, don't trust a line map:
   `"Deal - Title"`, `"Person - Customer Type"`. Populated by the nightly API sync
   (`scripts/pipedrive-sync.mjs`) or a manual CSV import on the Import tab. People
   are run through `pdNormalisePeople()` on load.
+- **Pipedrive Leads Inbox** (`_pd_leads`): table `liq_pipedrive_leads`, rows
+  `{raw:{...}}` with `"Lead - Created"`, `"Lead - Archived"`, `"Lead - Source"`.
+  A **separate endpoint from Deals** — it is the only source for "new leads
+  generated" (target 10/week). Optional everywhere: the table may not exist and
+  `/leads` may be unavailable to the token, so both the sync and the app degrade
+  to "no data" rather than failing. See `pipedrive_leads.sql`.
 - **PostHog** (`_ph.*`): summary tables `ph_weekly` / `ph_daily` / `ph_monthly` /
   `ph_lifecycle` / `ph_feature_daily` / `ph_feature_adoption_tbl`, written nightly
   by `scripts/posthog-sync.mjs`. Loaded into `_ph` at startup.
@@ -89,6 +95,11 @@ Line numbers rot — **grep for symbols**, don't trust a line map:
   `distinct_id` (which includes anonymous browsers/bots). Two flavours:
   `active_users` = showed up, `active_engaged` = did a real product action.
 - Exclude `Contact Register` and `Expression of Interest` from any "trained" count.
+- "New leads generated" counts leads **created** in the period, from the Leads
+  Inbox — **including archived ones**. Archiving tidies the inbox; it must never
+  retro-shrink a past week. Never filter on `Lead - Archived`.
+- An empty Leads Inbox is an **absent source** → "no data", never `0`
+  (`hasLeadData`). A confident zero every week is worse than a blank.
 
 ## Auth & roles
 
@@ -169,6 +180,7 @@ OPTI-MAX targets: `localStorage` key `liq_optimax`. Funnel Insights counts:
 - Project: `ysdonnjezvoyrrizadik` · SQL editor:
   `https://supabase.com/dashboard/project/ysdonnjezvoyrrizadik/editor`
 - Tables: `dashboard_data`, `dashboard_backups`, `liq_pipedrive_deals`,
-  `liq_pipedrive_people`, `ph_weekly`/`ph_daily`/`ph_monthly`/`ph_lifecycle`/`ph_feature_*`.
+  `liq_pipedrive_people`, `liq_pipedrive_leads`,
+  `ph_weekly`/`ph_daily`/`ph_monthly`/`ph_lifecycle`/`ph_feature_*`.
 - `*.sql` files in the repo root are one-off migrations to run in the SQL editor;
-  each says at the top when to run it. Newest: `posthog_active_engaged.sql`.
+  each says at the top when to run it. Newest: `pipedrive_leads.sql`.

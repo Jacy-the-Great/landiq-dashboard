@@ -19,6 +19,44 @@ Format: `## YYYY-MM-DD — Short title` + a few lines. Use absolute dates.
 
 ---
 
+## 2026-08-10 — New leads KPI comes from the Pipedrive **Leads Inbox**, not Deals
+The sales board needs "new leads generated per week" (target **10/week** — ten new
+outreach *leads*, not ten people contacted). Nothing in the app could supply it:
+the nightly sync only pulled `/deals` and `/persons`. Leads live in Pipedrive's
+**Leads Inbox**, a separate endpoint.
+
+- New table `liq_pipedrive_leads` (`pipedrive_leads.sql`, run once in the SQL
+  editor). Same `{raw}` + authenticated-only RLS shape as the other tables.
+- Sync now pulls `/leads` with **`archived_status: 'all'`** — deliberate: a lead
+  created and later archived was still *generated* that week, so tidying the inbox
+  must never retro-shrink a past week's count. Nothing filters on `Lead - Archived`.
+- Both the fetch and the table write are **soft-fail**. `/leads` needs a plan and
+  permission the token may not have, and the table won't exist until the migration
+  is run — neither may take deals + people down with it. Same on the app side:
+  the leads fetch `.catch(() => [])`s, because `fetchAllRows` throws and would
+  otherwise break the whole dashboard load.
+- An empty inbox renders **"no data", not 0** (`hasLeadData`), per the existing
+  zero-is-real rule. A confident `0` every week would have been the worst outcome.
+- The `Lead - Created / Archived / Title / Source / Owner` keys are set
+  **explicitly** from the raw record after the generic `/leadFields` mapping, so a
+  renamed field in Pipedrive can't silently zero the week.
+
+**Unverified until the first sync runs:** written without a Pipedrive token, so the
+`/leads` response shape is from the API contract, not observed. The sync logs the
+last 4 weeks' counts each run — check that log before trusting the number.
+
+## 2026-08-10 — Metric cards drag to reorder in review mode
+Boards are meeting screens, so the numbers you open with need to sit at the front.
+Rather than making every render function order-aware, `applyCardOrder()` reorders
+the rendered `.cards` rows *after* render and `enableCardDrag()` wires the handles
+— so it works on every tab for free. Order persists to `dashboard_data.card_order`
+(+ localStorage), like `hidden_metrics` and `metric_flags`.
+
+Two deliberate asymmetries: **dragging** is review-mode only, but **the saved order
+applies for everyone** — a viewer should see the board the owner arranged. And a
+card whose label isn't in the saved list keeps its natural position rather than
+being hidden, so adding a metric later can't make it vanish behind a stale order.
+
 ## 2026-07-29 — Review-panel first pass implemented
 Implemented the agreed high-ROI fixes (see REVIEW_PANEL_2026-07.md for the full
 package; ✅ items there are now done):

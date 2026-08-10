@@ -234,6 +234,12 @@ body.review-mode .flag-dot.yellow{background:#e6a817;border-color:#e6a817}
 body.review-mode .flag-dot.red{background:#e05252;border-color:#e05252}
 body.review-mode .flag-dot:hover{transform:scale(1.35)}
 /* Hide-metric toggle (review mode): curate what shows in the everyday view */
+/* Drag-to-reorder metric cards — review mode only (see applyCardOrder/enableCardDrag) */
+body.review-mode .cards-draggable .card{cursor:grab}
+body.review-mode .cards-draggable .card:active{cursor:grabbing}
+body.review-mode .cards-draggable .card::before{content:'⠿';position:absolute;top:6px;right:8px;font-size:11px;line-height:1;color:var(--tl);opacity:.55;pointer-events:none}
+body.review-mode .cards-draggable .card{position:relative}
+.card-dragging{opacity:.45;outline:2px dashed var(--acc);outline-offset:2px}
 .hide-toggle{display:none}
 body.review-mode .hide-toggle{display:inline-block;cursor:pointer;font-size:9.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--acc);background:var(--acc2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;margin-left:6px;user-select:none;vertical-align:middle}
 body.review-mode .hide-toggle:hover{border-color:var(--acc)}
@@ -617,8 +623,13 @@ const KEYS = { sales:'sales', trials:'trials', website:'website', website_daily:
 const _cache = {};
 let _pd_deals = [];
 let _pd_people = [];
+// Pipedrive Leads Inbox — a different source from deals (see pipedrive_leads.sql).
+// Stays [] when the table has not been created or the sync has not run yet, which
+// renders the leads KPI as "no data" rather than a wrong number.
+let _pd_leads = [];
 let _pd_deals_imported_at = null;
 let _pd_people_imported_at = null;
+let _pd_leads_imported_at = null;
 let _pdSalesPipeline = '2026 Sales'; // toggle: '2026 Sales' | null (all pipelines)
 
 // PostHog live data cache (populated by loadPostHogLive)
@@ -673,10 +684,13 @@ function lsRead(sbKey) {
 
 async function loadAll() {
   try {
-    const [mainRes, dealsRows, peopleRows] = await Promise.all([
+    const [mainRes, dealsRows, peopleRows, leadsRows] = await Promise.all([
       sb.from('dashboard_data').select('key, value'),
       fetchAllRows('liq_pipedrive_deals', 'raw, imported_at'),
-      fetchAllRows('liq_pipedrive_people', 'raw, imported_at')
+      fetchAllRows('liq_pipedrive_people', 'raw, imported_at'),
+      // Leads are additive and the table may not exist yet, so a failure here must
+      // degrade to "no leads data" — never take the whole dashboard down with it.
+      fetchAllRows('liq_pipedrive_leads', 'raw, imported_at').catch(() => [])
     ]);
     if (mainRes.error) throw mainRes.error;
     mainRes.data.forEach(row => {
@@ -685,11 +699,13 @@ async function loadAll() {
     });
     _pd_deals  = pdNormaliseDeals(dealsRows.map(r => r.raw));
     _pd_people = pdNormalisePeople(peopleRows.map(r => r.raw));
+    _pd_leads  = (leadsRows || []).map(r => r.raw);
     // Use the LATEST imported_at across rows (not an arbitrary row), so the
     // displayed date is the true most-recent write for each table.
     const maxTs = rows => rows.reduce((mx, r) => (r.imported_at && r.imported_at > mx) ? r.imported_at : mx, '') || null;
     if (dealsRows.length)  _pd_deals_imported_at  = maxTs(dealsRows);
     if (peopleRows.length) _pd_people_imported_at = maxTs(peopleRows);
+    if (leadsRows?.length) _pd_leads_imported_at  = maxTs(leadsRows);
 
     // ── Auto-restore: if main table is missing keys, try Supabase backup table first ──
     const missingKeys = Object.values(KEYS).filter(k => !_cache[k] || _cache[k].length === 0);
@@ -918,6 +934,95 @@ function saveHiddenMetrics() {
   localStorage.setItem('liq_hidden_metrics', JSON.stringify(_hiddenMetrics));
   sb.from('dashboard_data').upsert({ key: 'hidden_metrics', value: _hiddenMetrics, updated_at: new Date().toISOString() })
     .then(({ error }) => { if (error) console.warn('hidden save failed:', error.message); });
+}
+
+// ── METRIC ORDER (drag to reorder in review mode) ────────────────────────────
+// Meeting boards want the numbers you open with at the front. Rather than making
+// every render function order-aware, this reorders the rendered .cards rows after
+// the fact and remembers the order — so it works on every tab for free.
+//
+// Keying: tab + which .cards row on that tab + the card's own label. A card whose
+// label is not in the saved list keeps its natural position, so adding a new metric
+// never disappears behind a stale saved order.
+let _cardOrder = {};
+
+const cardRowKey = (idx) => activeTab + '|row' + idx;
+const cardItemKey = (card) => {
+  const lab = card.querySelector('.card-label');
+  return _flagLabelText(lab || card).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 48);
+};
+
+async function loadCardOrder() {
+  try { _cardOrder = JSON.parse(localStorage.getItem('liq_card_order') || '{}'); } catch { _cardOrder = {}; }
+  try {
+    const { data } = await sb.from('dashboard_data').select('value').eq('key', 'card_order').maybeSingle();
+    if (data && data.value && typeof data.value === 'object') {
+      _cardOrder = data.value;
+      localStorage.setItem('liq_card_order', JSON.stringify(_cardOrder));
+    }
+  } catch (e) { /* offline: keep local copy */ }
+}
+
+function saveCardOrder() {
+  localStorage.setItem('liq_card_order', JSON.stringify(_cardOrder));
+  sb.from('dashboard_data').upsert({ key: 'card_order', value: _cardOrder, updated_at: new Date().toISOString() })
+    .then(({ error }) => { if (error) console.warn('card order save failed:', error.message); });
+}
+
+// Reorder a rendered row to match the saved order. Saved-and-present cards come
+// first in their saved sequence; anything unknown keeps its original relative
+// position at the end, so the board degrades gracefully rather than hiding a card.
+function applyCardOrder(root) {
+  if (!root) return;
+  root.querySelectorAll('.cards').forEach((row, idx) => {
+    const want = _cardOrder[cardRowKey(idx)];
+    if (!Array.isArray(want) || !want.length) return;
+    const cards = [...row.children].filter(c => c.classList.contains('card'));
+    if (cards.length < 2) return;
+    const rank = new Map(want.map((k, i) => [k, i]));
+    const sorted = cards
+      .map((c, i) => ({ c, i, r: rank.has(cardItemKey(c)) ? rank.get(cardItemKey(c)) : Infinity }))
+      .sort((a, b) => a.r - b.r || a.i - b.i);
+    sorted.forEach(({ c }) => row.appendChild(c));
+  });
+}
+
+// Review mode only: make the cards draggable and persist the resulting order.
+function enableCardDrag(root) {
+  if (!root || !_reviewMode) return;
+  root.querySelectorAll('.cards').forEach((row, idx) => {
+    const cards = [...row.children].filter(c => c.classList.contains('card'));
+    if (cards.length < 2) return;
+    row.classList.add('cards-draggable');
+    cards.forEach(card => {
+      card.draggable = true;
+      card.addEventListener('dragstart', e => {
+        card.classList.add('card-dragging');
+        // Firefox refuses to start a drag without payload on the dataTransfer.
+        try { e.dataTransfer.setData('text/plain', ''); } catch (_) {}
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      card.addEventListener('dragend', () => {
+        card.classList.remove('card-dragging');
+        const order = [...row.children].filter(c => c.classList.contains('card')).map(cardItemKey);
+        _cardOrder[cardRowKey(idx)] = order;
+        saveCardOrder();
+        toast('Order saved');
+      });
+    });
+    row.addEventListener('dragover', e => {
+      e.preventDefault();
+      const dragging = row.querySelector('.card-dragging');
+      if (!dragging) return;
+      // Insert before the first card whose horizontal midpoint is right of the
+      // cursor; past the last one, append.
+      const after = [...row.children]
+        .filter(c => c.classList.contains('card') && c !== dragging)
+        .find(c => { const b = c.getBoundingClientRect(); return e.clientX < b.left + b.width / 2; });
+      if (after) row.insertBefore(dragging, after);
+      else row.appendChild(dragging);
+    });
+  });
 }
 
 function _flagLabelText(el) {
@@ -1869,6 +1974,9 @@ function renderTab(id) {
   const renderers = { home: renderHome, workstreams: renderWorkstreams, exec: renderExec, pipedrive: renderPipedrive, team: renderTeam, training: renderTraining, marketing: renderMarketing, tracker: renderWeeklyTracker, activity: renderActivity };
   if (renderers[id]) renderers[id](mc);
   injectFlags(mc);
+  // Order first, then wire the handlers, so drag targets match what is on screen.
+  applyCardOrder(mc);
+  enableCardDrag(mc);
 }
 
 function destroyAllCharts() {
@@ -8615,7 +8723,15 @@ function renderPdSales(sc) {
   })();
 
   // ── SALES KPIs (deals 3/wk · 12/mo · 36/qtr; licences 10/wk · 40/mo · 120/qtr; avg deal value $14k) ──
-  const KPI_TGT = { won:{week:3,month:12,quarter:36}, lic:{week:10,month:40,quarter:120}, avgVal:14000 };
+  // Leads target is 10 NEW LEADS per week (not 10 people contacted). Month/quarter
+  // follow the same 4-weeks / 12-weeks convention the won + licence targets use.
+  const KPI_TGT = { won:{week:3,month:12,quarter:36}, lic:{week:10,month:40,quarter:120}, leads:{week:10,month:40,quarter:120}, avgVal:14000 };
+  // Pipedrive Leads Inbox, parsed once: kpiSeries runs for several granularities
+  // and re-parsing per period would be O(periods x leads) for no reason.
+  const kpiLeadDates = _pd_leads.map(l => pdParseDate(l['Lead - Created'])).filter(pdValidDate);
+  // An empty Leads Inbox is "no source", not "zero leads" — the cards must say
+  // "no data" rather than render a confident 0 for every week.
+  const hasLeadData = kpiLeadDates.length > 0;
   const FUNNEL_SHORT = ['Contact','Meeting','Negotiation','Order Form','Signed OFR','Invoice','Payment'];
   const kpiWonDeals = salesDeals.filter(d => d['Deal - Status'] === 'Won' && pdValidDate(pdParseDate(d['Deal - Won time'])));
   // Licences won = sum of licence counts on won deals. Licences are Products on the
@@ -8651,7 +8767,10 @@ function renderPdSales(sc) {
       const won = kpiWonDeals.filter(d => { const t = pdParseDate(d['Deal - Won time']); return t >= p.start && t <= p.end; });
       const lic = won.reduce((s, d) => s + dealQty(d), 0);   // licences = Σ Product quantity over won deals
       const wonVal = won.reduce((s,d)=>s+(parseFloat(d['Deal - Value'])||0),0);
-      return { ...p, won: won.length, lic, avgVal: won.length ? wonVal/won.length : null };
+      // Leads GENERATED in the period, by creation date — deliberately independent
+      // of whether the lead later converted or was archived.
+      const leads = hasLeadData ? kpiLeadDates.filter(t => t >= p.start && t <= p.end).length : null;
+      return { ...p, won: won.length, lic, leads, avgVal: won.length ? wonVal/won.length : null };
     });
   }
   const kMonths = kpiSeries('month', 13), kWeeks = kpiSeries('week', 13);   // 12 completed + current
@@ -8672,7 +8791,7 @@ function renderPdSales(sc) {
   const kpiGran = activeSub.pd_kpi_gran || 'month';
   const kpiN = kpiGran==='week' ? 12 : kpiGran==='quarter' ? 8 : 12;
   const kSeries = kpiSeries(kpiGran, kpiN);
-  const kTgtWon = KPI_TGT.won[kpiGran], kTgtLic = KPI_TGT.lic[kpiGran];
+  const kTgtWon = KPI_TGT.won[kpiGran], kTgtLic = KPI_TGT.lic[kpiGran], kTgtLeads = KPI_TGT.leads[kpiGran];
   const gLabel = { week:'week', month:'month', quarter:'quarter' }[kpiGran];
 
   // Data freshness: the deals CSV is a snapshot, so "this week/month" figures only
@@ -8680,7 +8799,19 @@ function renderPdSales(sc) {
   // a broken connection rather than an honest zero.
   const kpiDataNote = _pd_deals_imported_at ? ' · deals data to ' + fmtDate(_pd_deals_imported_at) : '';
 
+  // How to turn the leads KPI on, shown in place of a number when there is no source.
+  const leadSetupNote = 'run pipedrive_leads.sql, then the Pipedrive sync';
+  const leadSrc = '<span class="src-tag">Pipedrive · Leads Inbox</span><br>Count of leads <b>created</b> in the period, taken from the Leads Inbox — a separate Pipedrive area from Deals. This counts <b>leads generated</b>, i.e. new outreach leads, <b>not</b> the number of people contacted. Archived leads still count in the week they were created, so tidying the inbox never rewrites past weeks.';
+
   const salesKpiBand = kpiBand(
+    kpiCardHTML('New leads (this week)', kCur(kWeeks).leads ?? null, null, KPI_TGT.leads.week, '10/WK',
+      !hasLeadData ? leadSetupNote :
+      `avg ${r1(kAvg(kWeeks,'leads'))}/wk · ${arw(kCur(kWeeks).leads, kPrev(kWeeks).leads)}last week ${kPrev(kWeeks).leads ?? '—'}`,
+      leadSrc + '<br>Current week is Mon–Sun, vs the target of 10 new leads/week.<br><div class="calc-row">count(leads where Created in this week)</div>') +
+    kpiCardHTML('New leads (this month)', kCur(kMonths).leads ?? null, null, KPI_TGT.leads.month, '40/MO',
+      !hasLeadData ? leadSetupNote :
+      `avg ${r1(kAvg(kMonths,'leads'))}/mo · ${arw(kCur(kMonths).leads, kPrev(kMonths).leads)}last month ${kPrev(kMonths).leads ?? '—'}`,
+      leadSrc + '<br>Current calendar month, vs the target of 40/month (10/week × 4).<br><div class="calc-row">count(leads where Created in this month)</div>') +
     kpiCardHTML('Deals won (this month)', kCur(kMonths).won ?? null, null, KPI_TGT.won.month, '12/MO',
       `avg ${r1(kAvg(kMonths,'won'))}/mo · ${arw(kCur(kMonths).won, kPrev(kMonths).won)}last month ${kPrev(kMonths).won ?? '—'}`,
       '<span class="src-tag">Pipedrive · '+pipelineLabel+'</span><br>Deals with <b>Status = Won</b> and Won time in the current calendar month, vs the target of 12/month. Sub shows the trailing average and last month.') +
@@ -8711,11 +8842,15 @@ function renderPdSales(sc) {
 
     <div class="box">
       <div class="box-title">Sales performance over time ${infoBtn('Sales performance over time',
-        '<span class="src-tag">Pipedrive · Deals + People</span><br>Deals won, licences won (paid activations) and average won deal value per period, each against its target. Toggle weeks / months / quarters.')}
+        '<span class="src-tag">Pipedrive · Leads Inbox + Deals + People</span><br>New leads generated, deals won, licences won (paid activations) and average won deal value per period, each against its target. Toggle weeks / months / quarters.')}
         <div class="range-toggle" style="margin-left:auto">
           ${['week','month','quarter'].map(g => `<button class="range-btn${kpiGran===g?' active':''}" onclick="setPdKpiGran('${g}')">${{week:'Weeks',month:'Months',quarter:'Quarters'}[g]}</button>`).join('')}
         </div>
       </div>
+      <div style="margin-bottom:14px"><div style="font-size:11.5px;font-weight:500;color:var(--navy);margin-bottom:6px">New leads generated per ${gLabel} <span style="color:var(--tl);font-weight:400">· target ${kTgtLeads}</span></div>
+        ${hasLeadData
+          ? `<div class="chart-wrap" style="height:190px"><canvas id="pd-kpi-leads"></canvas></div>`
+          : `<div class="card-nodata" style="padding:14px 0">no leads data yet — ${leadSetupNote}</div>`}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
         <div><div style="font-size:11.5px;font-weight:500;color:var(--navy);margin-bottom:6px">Deals won per ${gLabel} <span style="color:var(--tl);font-weight:400">· target ${kTgtWon}</span></div>
           <div class="chart-wrap" style="height:190px"><canvas id="pd-kpi-deals"></canvas></div></div>
@@ -8948,6 +9083,10 @@ function renderPdSales(sc) {
     const barOpts = { responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{ position:'bottom', labels:{ font:{family:'DM Sans',size:11}, boxWidth:12 } } },
       scales:{ x:{ grid:{display:false}, ticks:axStyle }, y:{ grid:gridStyle, ticks:{...axStyle, precision:0}, beginAtZero:true } } };
+    // Guarded: the canvas is only in the DOM when there is leads data to draw.
+    if (hasLeadData) makeChart('pd-kpi-leads', { type:'bar', data:{ labels:kLabels, datasets:[
+      { type:'bar', label:'New leads', data:kSeries.map(p=>p.leads), backgroundColor:'#c25a00', borderRadius:3 },
+      tgtLine(kTgtLeads, 'Target '+kTgtLeads) ]}, options:barOpts });
     makeChart('pd-kpi-deals', { type:'bar', data:{ labels:kLabels, datasets:[
       { type:'bar', label:'Deals won', data:kSeries.map(p=>p.won), backgroundColor:'#2e8bc0', borderRadius:3 },
       tgtLine(kTgtWon, 'Target '+kTgtWon) ]}, options:barOpts });
@@ -10916,6 +11055,7 @@ async function init() {
   await loadAll();
   await loadMetricFlags();
   await loadHiddenMetrics();
+  await loadCardOrder();
   updateDbStatusPill();
   buildNav();
   startFlagObserver();

@@ -43,7 +43,10 @@ function fail(msg) { console.error('✗ ' + msg); process.exit(1); }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ── Pipedrive GET with retry on rate-limit / transient errors ────────────────
-async function pd(path, params = {}) {
+// `soft: true` returns null instead of killing the run when an endpoint is
+// unavailable — used for /leads, which needs a Pipedrive plan/permission the
+// token may not have. A missing Leads Inbox must not stop deals + people syncing.
+async function pd(path, params = {}, { soft = false } = {}) {
   const qs = new URLSearchParams({ ...params, api_token: TOKEN });
   const url = `${BASE}${path}?${qs}`;
   for (let attempt = 0; attempt < 6; attempt++) {
@@ -51,12 +54,15 @@ async function pd(path, params = {}) {
     try {
       res = await fetch(url);
     } catch (e) {
+      if (soft) return null;
       await sleep(1000 * (attempt + 1)); continue;         // network blip
     }
     if (res.status === 429 || res.status >= 500) {         // throttled / server error
+      if (soft) return null;
       const wait = Number(res.headers.get('retry-after') || 0) * 1000 || 2000 * (attempt + 1);
       await sleep(wait); continue;
     }
+    if (!res.ok && soft) return null;
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       fail(`Pipedrive ${res.status} on ${path}: ${body.slice(0, 200)}` +
@@ -76,6 +82,22 @@ async function pdAll(path, params = {}) {
     const r = await pd(path, { ...params, start, limit: 500 });
     const batch = r.data || [];
     out.push(...batch);
+    const more = r.additional_data?.pagination;
+    if (more?.more_items_in_collection) start = more.next_start ?? start + 500;
+    else return out;
+  }
+}
+
+// Same as pdAll, but returns null (rather than exiting) if the endpoint is not
+// available to this token. Stops at the first failed page so a partial count is
+// never mistaken for a complete one.
+async function pdAllOptional(path, params = {}) {
+  const out = [];
+  let start = 0;
+  for (;;) {
+    const r = await pd(path, { ...params, start, limit: 500 }, { soft: true });
+    if (!r) return null;
+    out.push(...(r.data || []));
     const more = r.additional_data?.pagination;
     if (more?.more_items_in_collection) start = more.next_start ?? start + 500;
     else return out;
@@ -151,12 +173,22 @@ function buildMapper(fields, prefix, lookups) {
 }
 
 // ── Replace a whole Supabase table (same delete-all + batch-insert as the app) ─
-async function replaceTable(table, rows) {
+// `optional: true` warns and returns null instead of killing the run when the
+// table does not exist yet — so a repo that has not run pipedrive_leads.sql
+// still gets its deals and people synced.
+async function replaceTable(table, rows, { optional = false } = {}) {
+  const softFail = async (msg) => {
+    if (!optional) fail(msg);
+    console.warn(`   ⚠ skipping ${table}: ${msg}`);
+    console.warn(`   → run pipedrive_leads.sql in the Supabase SQL editor to enable it`);
+    return null;
+  };
+
   const del = await fetch(`${SB_URL}/rest/v1/${table}?imported_at=gte.1970-01-01T00:00:00Z`, {
     method: 'DELETE',
     headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, Prefer: 'return=minimal' },
   });
-  if (!del.ok) fail(`Could not clear ${table}: ${del.status} ${await del.text().catch(() => '')}`);
+  if (!del.ok) return softFail(`could not clear it: ${del.status} ${await del.text().catch(() => '')}`);
 
   const BATCH = 200;
   let stored = 0;
@@ -167,7 +199,7 @@ async function replaceTable(table, rows) {
       headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
       body: JSON.stringify(batch),
     });
-    if (!ins.ok) fail(`Insert into ${table} failed at row ${i}: ${ins.status} ${await ins.text().catch(() => '')}`);
+    if (!ins.ok) return softFail(`insert failed at row ${i}: ${ins.status} ${await ins.text().catch(() => '')}`);
     stored += batch.length;
   }
 
@@ -198,16 +230,45 @@ const lookups = {
 };
 console.log(`✓ schema: ${dealFields.length} deal fields, ${personFields.length} person fields, ${stagesRaw.length} stages`);
 
-const [dealsRaw, personsRaw] = await Promise.all([
+// Leads live in Pipedrive's **Leads Inbox** — a different endpoint from /deals,
+// and the source for the "new leads generated per week" sales KPI. archived_status
+// 'all' is deliberate: a lead that was created and later archived was still
+// generated that week, so archiving must not retro-shrink a past week's count.
+const [dealsRaw, personsRaw, leadsRaw] = await Promise.all([
   pdAll('/deals', { status: 'all_not_deleted' }),
   pdAll('/persons'),
+  pdAllOptional('/leads', { archived_status: 'all' }),
 ]);
-console.log(`✓ fetched ${dealsRaw.length} deals, ${personsRaw.length} people`);
+console.log(`✓ fetched ${dealsRaw.length} deals, ${personsRaw.length} people` +
+  (leadsRaw ? `, ${leadsRaw.length} leads` : ', leads unavailable'));
 
 const dealMap = buildMapper(dealFields, 'Deal', lookups);
 const personMap = buildMapper(personFields, 'Person', lookups);
 const deals = dealsRaw.map(dealMap);
 const people = personsRaw.map(personMap);
+
+// ── Leads Inbox → "Lead - *" rows ───────────────────────────────────────────
+// Mapped generically from /leadFields (so custom lead fields survive), but the
+// four keys the dashboard actually counts on are then set EXPLICITLY from the
+// raw record. The KPI must not depend on a field happening to be named
+// "Add time" in this account — a renamed field would silently zero the week.
+let leads = [];
+if (leadsRaw?.length) {
+  const leadFields = await pdAllOptional('/leadFields');
+  const leadMap = leadFields?.length ? buildMapper(leadFields, 'Lead', lookups) : () => ({});
+  leads = leadsRaw.map(rec => {
+    const row = leadMap(rec);
+    row['Lead - ID']       = String(rec.id ?? '');
+    row['Lead - Created']  = rec.add_time || '';
+    row['Lead - Archived'] = rec.is_archived ? 'Yes' : 'No';
+    row['Lead - Title']    = rec.title || '';
+    row['Lead - Source']   = rec.source_name || '';
+    row['Lead - Owner']    = lookups.users[rec.owner_id] || '';
+    return row;
+  });
+  const noDate = leads.filter(l => !l['Lead - Created']).length;
+  if (noDate) console.warn(`   ⚠ ${noDate} leads have no creation date — they cannot be counted in any week`);
+}
 
 // Aliases: fill the column names the dashboard expects from the API's actual
 // field names, so metrics that read the old CSV column keys keep working.
@@ -272,7 +333,25 @@ if (!SKIP_DETAIL) {
 console.log('· writing to Supabase…');
 const dc = await replaceTable('liq_pipedrive_deals', deals);
 const pc = await replaceTable('liq_pipedrive_people', people);
-console.log(`✓ done — ${dc} deals, ${pc} people in Supabase`);
+const lc = leads.length ? await replaceTable('liq_pipedrive_leads', leads, { optional: true }) : null;
+console.log(`✓ done — ${dc} deals, ${pc} people${lc != null ? `, ${lc} leads` : ''} in Supabase`);
+
+// Sanity check for the "new leads per week" KPI: print the last 4 completed weeks
+// so a sync that silently stops producing leads is obvious in the log.
+if (leads.length) {
+  const monday = (d) => { const x = new Date(d); const dow = (x.getDay() + 6) % 7; x.setHours(0,0,0,0); x.setDate(x.getDate() - dow); return x.toISOString().slice(0, 10); };
+  const byWeek = {};
+  for (const l of leads) {
+    const t = l['Lead - Created'];
+    if (!t) continue;
+    const d = new Date(t);
+    if (isNaN(d)) continue;
+    const k = monday(d);
+    byWeek[k] = (byWeek[k] || 0) + 1;
+  }
+  const recent = Object.entries(byWeek).sort((a, b) => a[0] < b[0] ? 1 : -1).slice(0, 4);
+  console.log(`  leads per week (most recent first, target 10): ${recent.map(([w, n]) => `${w}=${n}`).join('  ') || 'none dated'}`);
+}
 
 // ── Sanity summary: the funnel the dashboard will now draw ───────────────────
 // Printed every run so a bad sync is obvious in the log rather than silently
