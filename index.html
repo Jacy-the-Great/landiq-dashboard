@@ -8723,8 +8723,9 @@ function renderPdSales(sc) {
   })();
 
   // ── SALES KPIs (deals 3/wk · 12/mo · 36/qtr; licences 10/wk · 40/mo · 120/qtr; avg deal value $14k) ──
-  // Leads target is 10 NEW LEADS per week (not 10 people contacted). Month/quarter
-  // follow the same 4-weeks / 12-weeks convention the won + licence targets use.
+  // Leads target is 10 COLD OUTREACH LEADS per week (not 10 people contacted).
+  // Month/quarter follow the same 4-weeks / 12-weeks convention the won + licence
+  // targets use.
   const KPI_TGT = { won:{week:3,month:12,quarter:36}, lic:{week:10,month:40,quarter:120}, leads:{week:10,month:40,quarter:120}, avgVal:14000 };
   // Pipedrive Leads Inbox, parsed once: kpiSeries runs for several granularities
   // and re-parsing per period would be O(periods x leads) for no reason.
@@ -8732,6 +8733,11 @@ function renderPdSales(sc) {
   // An empty Leads Inbox is "no source", not "zero leads" — the cards must say
   // "no data" rather than render a confident 0 for every week.
   const hasLeadData = kpiLeadDates.length > 0;
+  // SCOPE: as of 2026-08, the team uses the Leads Inbox for COLD OUTREACH only —
+  // an EOI form submission auto-creates a Deal directly and never touches the
+  // Inbox. So this is deliberately a cold-outreach-only count, not "all new leads"
+  // — do not broaden it to include Deal creation without checking with Jacy first
+  // (see docs/DECISIONS.md 2026-08-10 and the entry logged after this change).
   const FUNNEL_SHORT = ['Contact','Meeting','Negotiation','Order Form','Signed OFR','Invoice','Payment'];
   const kpiWonDeals = salesDeals.filter(d => d['Deal - Status'] === 'Won' && pdValidDate(pdParseDate(d['Deal - Won time'])));
   // Licences won = sum of licence counts on won deals. Licences are Products on the
@@ -8769,7 +8775,7 @@ function renderPdSales(sc) {
       const wonVal = won.reduce((s,d)=>s+(parseFloat(d['Deal - Value'])||0),0);
       // Leads GENERATED in the period, by creation date — deliberately independent
       // of whether the lead later converted or was archived.
-      const leads = hasLeadData ? kpiLeadDates.filter(t => t >= p.start && t <= p.end).length : null;
+      const leads = hasLeadData ? kpiLeadDates.filter(t => t >= p.start && t <= p.end).length : null;   // cold outreach leads
       return { ...p, won: won.length, lic, leads, avgVal: won.length ? wonVal/won.length : null };
     });
   }
@@ -8801,14 +8807,14 @@ function renderPdSales(sc) {
 
   // How to turn the leads KPI on, shown in place of a number when there is no source.
   const leadSetupNote = 'run pipedrive_leads.sql, then the Pipedrive sync';
-  const leadSrc = '<span class="src-tag">Pipedrive · Leads Inbox</span><br>Count of leads <b>created</b> in the period, taken from the Leads Inbox — a separate Pipedrive area from Deals. This counts <b>leads generated</b>, i.e. new outreach leads, <b>not</b> the number of people contacted. Archived leads still count in the week they were created, so tidying the inbox never rewrites past weeks.';
+  const leadSrc = '<span class="src-tag">Pipedrive · Leads Inbox</span><br>Count of leads <b>created</b> in the period, taken from the Leads Inbox. As of Aug 2026 the team logs <b>cold outreach</b> here specifically — an EOI form submission auto-creates a Deal directly and never passes through the Inbox, so this number does <b>not</b> include EOI or other inbound leads. This is outreach <b>leads generated</b>, <b>not</b> the number of people contacted. Archived leads still count in the week they were created, so tidying the inbox never rewrites past weeks.';
 
   const salesKpiBand = kpiBand(
-    kpiCardHTML('New leads (this week)', kCur(kWeeks).leads ?? null, null, KPI_TGT.leads.week, '10/WK',
+    kpiCardHTML('Cold outreach leads (this week)', kCur(kWeeks).leads ?? null, null, KPI_TGT.leads.week, '10/WK',
       !hasLeadData ? leadSetupNote :
       `avg ${r1(kAvg(kWeeks,'leads'))}/wk · ${arw(kCur(kWeeks).leads, kPrev(kWeeks).leads)}last week ${kPrev(kWeeks).leads ?? '—'}`,
-      leadSrc + '<br>Current week is Mon–Sun, vs the target of 10 new leads/week.<br><div class="calc-row">count(leads where Created in this week)</div>') +
-    kpiCardHTML('New leads (this month)', kCur(kMonths).leads ?? null, null, KPI_TGT.leads.month, '40/MO',
+      leadSrc + '<br>Current week is Mon–Sun, vs the target of 10 cold outreach leads/week.<br><div class="calc-row">count(leads where Created in this week)</div>') +
+    kpiCardHTML('Cold outreach leads (this month)', kCur(kMonths).leads ?? null, null, KPI_TGT.leads.month, '40/MO',
       !hasLeadData ? leadSetupNote :
       `avg ${r1(kAvg(kMonths,'leads'))}/mo · ${arw(kCur(kMonths).leads, kPrev(kMonths).leads)}last month ${kPrev(kMonths).leads ?? '—'}`,
       leadSrc + '<br>Current calendar month, vs the target of 40/month (10/week × 4).<br><div class="calc-row">count(leads where Created in this month)</div>') +
@@ -8842,12 +8848,12 @@ function renderPdSales(sc) {
 
     <div class="box">
       <div class="box-title">Sales performance over time ${infoBtn('Sales performance over time',
-        '<span class="src-tag">Pipedrive · Leads Inbox + Deals + People</span><br>New leads generated, deals won, licences won (paid activations) and average won deal value per period, each against its target. Toggle weeks / months / quarters.')}
+        '<span class="src-tag">Pipedrive · Leads Inbox + Deals + People</span><br>Cold outreach leads logged, deals won, licences won (paid activations) and average won deal value per period, each against its target. Toggle weeks / months / quarters.')}
         <div class="range-toggle" style="margin-left:auto">
           ${['week','month','quarter'].map(g => `<button class="range-btn${kpiGran===g?' active':''}" onclick="setPdKpiGran('${g}')">${{week:'Weeks',month:'Months',quarter:'Quarters'}[g]}</button>`).join('')}
         </div>
       </div>
-      <div style="margin-bottom:14px"><div style="font-size:11.5px;font-weight:500;color:var(--navy);margin-bottom:6px">New leads generated per ${gLabel} <span style="color:var(--tl);font-weight:400">· target ${kTgtLeads}</span></div>
+      <div style="margin-bottom:14px"><div style="font-size:11.5px;font-weight:500;color:var(--navy);margin-bottom:6px">Cold outreach leads per ${gLabel} <span style="color:var(--tl);font-weight:400">· target ${kTgtLeads}</span></div>
         ${hasLeadData
           ? `<div class="chart-wrap" style="height:190px"><canvas id="pd-kpi-leads"></canvas></div>`
           : `<div class="card-nodata" style="padding:14px 0">no leads data yet — ${leadSetupNote}</div>`}</div>
@@ -9085,7 +9091,7 @@ function renderPdSales(sc) {
       scales:{ x:{ grid:{display:false}, ticks:axStyle }, y:{ grid:gridStyle, ticks:{...axStyle, precision:0}, beginAtZero:true } } };
     // Guarded: the canvas is only in the DOM when there is leads data to draw.
     if (hasLeadData) makeChart('pd-kpi-leads', { type:'bar', data:{ labels:kLabels, datasets:[
-      { type:'bar', label:'New leads', data:kSeries.map(p=>p.leads), backgroundColor:'#c25a00', borderRadius:3 },
+      { type:'bar', label:'Cold outreach leads', data:kSeries.map(p=>p.leads), backgroundColor:'#c25a00', borderRadius:3 },
       tgtLine(kTgtLeads, 'Target '+kTgtLeads) ]}, options:barOpts });
     makeChart('pd-kpi-deals', { type:'bar', data:{ labels:kLabels, datasets:[
       { type:'bar', label:'Deals won', data:kSeries.map(p=>p.won), backgroundColor:'#2e8bc0', borderRadius:3 },

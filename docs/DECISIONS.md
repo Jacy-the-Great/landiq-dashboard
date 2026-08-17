@@ -19,11 +19,12 @@ Format: `## YYYY-MM-DD — Short title` + a few lines. Use absolute dates.
 
 ---
 
-## 2026-08-10 — New leads KPI comes from the Pipedrive **Leads Inbox**, not Deals
-The sales board needs "new leads generated per week" (target **10/week** — ten new
-outreach *leads*, not ten people contacted). Nothing in the app could supply it:
-the nightly sync only pulled `/deals` and `/persons`. Leads live in Pipedrive's
-**Leads Inbox**, a separate endpoint.
+## 2026-08-10 — Cold outreach leads KPI comes from the Pipedrive **Leads Inbox**, not Deals
+The sales board needs "cold outreach leads per week" (target **10/week**, directly
+measured from Leads Inbox records — ten new outreach *leads*, not ten people
+contacted). Nothing in the app could supply it: the nightly sync only pulled
+`/deals` and `/persons`. Leads live in Pipedrive's **Leads Inbox**, a separate
+endpoint.
 
 - New table `liq_pipedrive_leads` (`pipedrive_leads.sql`, run once in the SQL
   editor). Same `{raw}` + authenticated-only RLS shape as the other tables.
@@ -41,9 +42,16 @@ the nightly sync only pulled `/deals` and `/persons`. Leads live in Pipedrive's
   **explicitly** from the raw record after the generic `/leadFields` mapping, so a
   renamed field in Pipedrive can't silently zero the week.
 
-**Unverified until the first sync runs:** written without a Pipedrive token, so the
-`/leads` response shape is from the API contract, not observed. The sync logs the
-last 4 weeks' counts each run — check that log before trusting the number.
+**First live run (2026-08-10):** 516 deals, 3354 people, **26 leads** synced clean.
+Weekly counts: `2026-08-10=16  2026-08-03=4  2026-05-25=2  2026-05-18=1` — mostly
+zero before that. Confirmed with Jacy this is expected, not a bug: **the Leads
+Inbox is scoped to cold outreach specifically, and the team only recently started
+using it.** An EOI form submission auto-creates a Deal directly and never touches
+the Inbox, so this number is deliberately narrower than "all new leads" — do not
+broaden it to include Deal creation (e.g. the pre-existing Workstreams `new_leads`
+metric, which counts ALL deals created in any pipeline) without checking with Jacy
+first. Labelled "Cold outreach leads" everywhere in the UI, not "New leads", to
+keep that scope visible.
 
 ## 2026-08-10 — Metric cards drag to reorder in review mode
 Boards are meeting screens, so the numbers you open with need to sit at the front.

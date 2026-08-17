@@ -67,10 +67,14 @@ Line numbers rot — **grep for symbols**, don't trust a line map:
   are run through `pdNormalisePeople()` on load.
 - **Pipedrive Leads Inbox** (`_pd_leads`): table `liq_pipedrive_leads`, rows
   `{raw:{...}}` with `"Lead - Created"`, `"Lead - Archived"`, `"Lead - Source"`.
-  A **separate endpoint from Deals** — it is the only source for "new leads
-  generated" (target 10/week). Optional everywhere: the table may not exist and
-  `/leads` may be unavailable to the token, so both the sync and the app degrade
-  to "no data" rather than failing. See `pipedrive_leads.sql`.
+  A **separate endpoint from Deals** — it is the only source for "cold outreach
+  leads" (target 10/week). As of Aug 2026 the team logs cold outreach here
+  specifically; an EOI form submission auto-creates a Deal directly and never
+  touches the Inbox, so this is deliberately narrower than "all new leads" — see
+  docs/DECISIONS.md 2026-08-10 before broadening its scope. Optional everywhere:
+  the table may not exist and `/leads` may be unavailable to the token, so both
+  the sync and the app degrade to "no data" rather than failing. See
+  `pipedrive_leads.sql`.
 - **PostHog** (`_ph.*`): summary tables `ph_weekly` / `ph_daily` / `ph_monthly` /
   `ph_lifecycle` / `ph_feature_daily` / `ph_feature_adoption_tbl`, written nightly
   by `scripts/posthog-sync.mjs`. Loaded into `_ph` at startup.
@@ -95,9 +99,11 @@ Line numbers rot — **grep for symbols**, don't trust a line map:
   `distinct_id` (which includes anonymous browsers/bots). Two flavours:
   `active_users` = showed up, `active_engaged` = did a real product action.
 - Exclude `Contact Register` and `Expression of Interest` from any "trained" count.
-- "New leads generated" counts leads **created** in the period, from the Leads
+- "Cold outreach leads" counts leads **created** in the period, from the Leads
   Inbox — **including archived ones**. Archiving tidies the inbox; it must never
-  retro-shrink a past week. Never filter on `Lead - Archived`.
+  retro-shrink a past week. Never filter on `Lead - Archived`. Scoped to cold
+  outreach only — EOI/other inbound leads bypass the Inbox entirely (auto-create
+  a Deal), so this is not a total inbound-lead count.
 - An empty Leads Inbox is an **absent source** → "no data", never `0`
   (`hasLeadData`). A confident zero every week is worse than a blank.
 

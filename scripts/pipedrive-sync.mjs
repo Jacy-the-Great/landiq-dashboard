@@ -231,7 +231,7 @@ const lookups = {
 console.log(`✓ schema: ${dealFields.length} deal fields, ${personFields.length} person fields, ${stagesRaw.length} stages`);
 
 // Leads live in Pipedrive's **Leads Inbox** — a different endpoint from /deals,
-// and the source for the "new leads generated per week" sales KPI. archived_status
+// and the source for the "cold outreach leads per week" sales KPI. archived_status
 // 'all' is deliberate: a lead that was created and later archived was still
 // generated that week, so archiving must not retro-shrink a past week's count.
 const [dealsRaw, personsRaw, leadsRaw] = await Promise.all([
@@ -336,7 +336,7 @@ const pc = await replaceTable('liq_pipedrive_people', people);
 const lc = leads.length ? await replaceTable('liq_pipedrive_leads', leads, { optional: true }) : null;
 console.log(`✓ done — ${dc} deals, ${pc} people${lc != null ? `, ${lc} leads` : ''} in Supabase`);
 
-// Sanity check for the "new leads per week" KPI: print the last 4 completed weeks
+// Sanity check for the "cold outreach leads per week" KPI: print the last 4 completed weeks
 // so a sync that silently stops producing leads is obvious in the log.
 if (leads.length) {
   const monday = (d) => { const x = new Date(d); const dow = (x.getDay() + 6) % 7; x.setHours(0,0,0,0); x.setDate(x.getDate() - dow); return x.toISOString().slice(0, 10); };

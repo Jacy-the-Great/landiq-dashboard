@@ -400,8 +400,8 @@ console.log('\n7. Drift guards (no second copies of registry logic in render cod
   check(`card tooltips are registry-generated (mDoc used ${mDocUses}×, ≥ 5)`, mDocUses >= 5);
 }
 
-// ── 8. New leads generated (Pipedrive Leads Inbox, target 10/week) ───────────
-console.log('\n8. New leads per week (Leads Inbox — a different source from Deals)');
+// ── 8. Cold outreach leads (Pipedrive Leads Inbox, target 10/week) ───────────
+console.log('\n8. Cold outreach leads per week (Leads Inbox — a different source from Deals)');
 {
   const { kpiWkStart, pdParseDate, pdValidDate } = makeSandbox();
   const wk = s => kpiWkStart(pdParseDate(s)).toISOString().slice(0, 10);
@@ -465,11 +465,11 @@ console.log('\n9. Metric card reordering (saved order must survive re-renders)')
   const { applyCardOrder } = sandbox.__y;
 
   // Saved order puts leads first, ahead of the deal metrics.
-  sandbox._cardOrder = { 'pipedrive|row0': ['new leads this week', 'deals won this month'] };
-  const row = mkRow(['Deals won (this month)', 'New leads (this week)', 'Avg deal value (this month)']);
+  sandbox._cardOrder = { 'pipedrive|row0': ['cold outreach leads this week', 'deals won this month'] };
+  const row = mkRow(['Deals won (this month)', 'Cold outreach leads (this week)', 'Avg deal value (this month)']);
   applyCardOrder(mkRoot(row));
   check('saved order moves a card to the front',
-    labelsOf(row)[0] === 'New leads (this week)', labelsOf(row).join(' | '));
+    labelsOf(row)[0] === 'Cold outreach leads (this week)', labelsOf(row).join(' | '));
   check('no card is lost or duplicated while reordering',
     row.children.length === 3 && new Set(labelsOf(row)).size === 3, labelsOf(row).join(' | '));
   check('a card missing from the saved order keeps its place at the end',
@@ -477,10 +477,10 @@ console.log('\n9. Metric card reordering (saved order must survive re-renders)')
 
   // A stale saved order naming cards that no longer exist must not blank the row.
   sandbox._cardOrder = { 'pipedrive|row0': ['a metric that was deleted', 'another ghost'] };
-  const row2 = mkRow(['Deals won (this month)', 'New leads (this week)']);
+  const row2 = mkRow(['Deals won (this month)', 'Cold outreach leads (this week)']);
   applyCardOrder(mkRoot(row2));
   check('a stale saved order leaves every card visible in its natural order',
-    labelsOf(row2).join('|') === 'Deals won (this month)|New leads (this week)', labelsOf(row2).join(' | '));
+    labelsOf(row2).join('|') === 'Deals won (this month)|Cold outreach leads (this week)', labelsOf(row2).join(' | '));
 
   // No saved order for this row = leave it exactly as rendered.
   sandbox._cardOrder = {};
